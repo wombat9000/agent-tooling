@@ -20,4 +20,16 @@ npx skills add \
 
 Do not use `owner/repo@VERSION` as version-selection syntax: the skills CLI uses `@` to select a skill.
 
-Create annotated release tags only from the intended committed and validated revision. Never move or overwrite a published release tag; publish a new version instead. Commit, tag, push, or publish a release only when the user authorizes the action. This guidance does not authorize a release.
+### Automatic release tagging
+
+When the user asks to push changes to skills, treat that request as authorization to publish a repository-wide release tag too, unless the user explicitly requests no release. A commit-only request does not authorize pushing or releasing.
+
+1. Check local and remote tags and identify skill changes since the latest release.
+2. Choose the next version using this document's versioning rules.
+3. Validate the changes and confirm the intended release commit.
+4. Create an annotated tag at that commit, then push the branch and tag.
+5. Report the pushed commit and release tag. If either push fails, report the partial result rather than claiming the release succeeded.
+
+Skip tagging for repository-documentation-only changes. Changes to skill instructions and bundled supporting documents count as skill changes, not repository-documentation-only changes.
+
+Never move or overwrite a published release tag; publish a new version instead. Outside the authorization described above, commit, tag, push, or publish a release only when the user authorizes the action.
