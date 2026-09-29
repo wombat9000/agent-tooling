@@ -6,6 +6,7 @@ Tools for AI agents.
 
 Reusable agent skills live under `skills/`. Each skill has an entry-point document and may include supporting guidance.
 
+- [adr](<skills/adr/SKILL.md>): evidence-grounded guidance for consulting, drafting, reviewing, and superseding architecture decision records. Includes a [Nygard template](<skills/adr/assets/adr-template.md>).
 - [test-audit](<skills/test-audit/SKILL.md>): language-neutral guidance for writing valuable tests, auditing existing coverage, and reviewing a subsystem's complete test surface. Includes a [campaign procedure](<skills/test-audit/CAMPAIGN.md>).
 
 Load the skill's entry-point document in your agent's supported skill mechanism. These files do not register themselves with a particular agent runtime.
