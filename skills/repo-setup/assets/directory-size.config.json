@@ -1,0 +1,7 @@
+{
+  "warn": 20,
+  "error": 30,
+  "roots": ["."],
+  "exclude": [],
+  "exceptions": []
+}
