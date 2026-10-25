@@ -6,9 +6,11 @@ Reusable skills for AI coding agents. Install a skill in the project where you w
 
 Reusable agent skills live under `skills/`. Each skill has an entry-point document and may include supporting guidance.
 
+- [repo-setup](<skills/repo-setup/SKILL.md>): opt-in repository guardrails. Bundles a dependency-free directory-size check with warning and error thresholds, scoped exclusions, and documented exceptions. Previews existing violations and asks separately before CI integration.
 - [adr](<skills/adr/SKILL.md>): evidence-grounded guidance for consulting, drafting, reviewing, and superseding architecture decision records. Includes a [Nygard template](<skills/adr/assets/adr-template.md>).
 - [test-audit](<skills/test-audit/SKILL.md>): language-neutral guidance for writing valuable tests, auditing existing coverage, and reviewing a subsystem's complete test surface. Includes a [campaign procedure](<skills/test-audit/CAMPAIGN.md>).
 - [node-dependency-management](<skills/node-dependency-management/SKILL.md>): npm and pnpm dependency selection, installation, upgrades, and removal. Requires verified vendor maintenance or at least 1,000 GitHub stars, substantive activity within the previous year, and a short risk-based review.
+- [renovate](<skills/renovate/SKILL.md>): ecosystem-neutral dependency maintenance through bounded, parent-first upgrade batches. Supports assessment-only reports, reassesses resolution exceptions, and requires validation evidence.
 
 ## Install skills
 
@@ -68,10 +70,12 @@ If your agent is not supported by the CLI, use its documented skill-loading mech
 
 After installation, check that your agent discovers the skill. Reload its session if its documentation requires it. Invocation syntax varies by agent; you can explicitly request the skill in your prompt:
 
+- “Use the repo-setup skill to preview a directory-size check. Warn above 20 files and error above 30. Ask before installing it or changing CI.”
 - “Use the adr skill to draft a proposed ADR for our database choice. Ask about missing rationale before writing.”
 - “Use the adr skill to check whether this change conflicts with existing decisions.”
 - “Use the test-audit skill to review the authentication tests. Report findings without editing files.”
 - “Use the node-dependency-management skill to evaluate a package before adding it. Do not install packages that fail its eligibility gates without my explicit approval.”
+- “Use the renovate skill to assess dependency drift in this project. Do not edit files. Recommend one coherent upgrade batch and its validation plan.”
 
 Provide the task scope and say whether you want a review or file changes. Skills supply instructions; they do not grant extra tool permissions or authorize commits and releases.
 
