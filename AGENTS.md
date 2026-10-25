@@ -1,5 +1,9 @@
 # Repository guidance
 
+## Package-manager examples
+
+Use `pnpm dlx` as the primary example for one-off CLI commands in this repository's setup documentation. Keep `npx` documented as the npm alternative. When applying skills to another repository, follow that repository's declared package manager and conventions; do not switch package managers to match these examples. For tools already installed in a pnpm project, use `pnpm exec` or the project's existing scripts instead of `pnpm dlx`.
+
 ## Skill versioning and releases
 
 Use repository-wide releases for now. All skills share Git tags in the form `vMAJOR.MINOR.PATCH`, starting with `v0.1.0`. Do not introduce per-skill release tags or independent version fields unless the maintainer requests a change in policy.
@@ -13,7 +17,7 @@ Choose version increments according to the impact of changes:
 Git tags identify repository commits. Consumers select a release through its GitHub tree URL and select an individual skill with `--skill`. For example, after publishing `v0.1.0`:
 
 ```bash
-npx skills add \
+pnpm dlx skills add \
   https://github.com/wombat9000/agent-tooling/tree/v0.1.0 \
   --skill test-audit
 ```
