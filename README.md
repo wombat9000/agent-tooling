@@ -11,6 +11,7 @@ Reusable agent skills live under `skills/`. Each skill has an entry-point docume
 - [test-audit](<skills/test-audit/SKILL.md>): language-neutral guidance for writing valuable tests, auditing existing coverage, and reviewing a subsystem's complete test surface. Includes a [campaign procedure](<skills/test-audit/CAMPAIGN.md>).
 - [node-dependency-management](<skills/node-dependency-management/SKILL.md>): npm and pnpm dependency selection, installation, upgrades, and removal. Requires verified vendor maintenance or at least 1,000 GitHub stars, substantive activity within the previous year, and a short risk-based review.
 - [renovate](<skills/renovate/SKILL.md>): ecosystem-neutral dependency maintenance through bounded, parent-first upgrade batches. Supports assessment-only reports, reassesses resolution exceptions, and requires validation evidence.
+- [writing-code](<skills/writing-code/SKILL.md>): shared principles for readable, direct code, with [Kotlin conventions](<skills/writing-code/reference/kotlin.md>) and [module-design guidance](<skills/writing-code/reference/module-design.md>) read only when applicable. Keeps construction guidance separate from implementation and review workflows.
 
 ## Install skills
 
@@ -84,6 +85,7 @@ After installation, check that your agent discovers the skill. Reload its sessio
 - “Use the test-audit skill to review the authentication tests. Report findings without editing files.”
 - “Use the node-dependency-management skill to evaluate a package before adding it. Do not install packages that fail its eligibility gates without my explicit approval.”
 - “Use the renovate skill to assess dependency drift in this project. Do not edit files. Recommend one coherent upgrade batch and its validation plan.”
+- “Use the writing-code skill to implement this change. Read its Kotlin reference for Kotlin work and its module-design reference when choosing responsibility boundaries.”
 
 Provide the task scope and say whether you want a review or file changes. Skills supply instructions; they do not grant extra tool permissions or authorize commits and releases.
 
