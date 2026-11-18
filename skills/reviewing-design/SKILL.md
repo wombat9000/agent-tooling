@@ -24,13 +24,12 @@ by a change from pre-existing problems. Stay within the requested review scope.
 ## Investigate actual friction
 
 Before recommending restructuring, identify who calls the code, what they must
-know, and the specific reading or change difficulty. Use the questions that fit
-the code, not a checklist that must produce a finding for every item:
+know, and the specific reading or change difficulty. For orchestration code, identify the decisions it owns and the dependency-specific mechanics it handles. Inspect inside the operation, not only its callers: can the workflow be followed without deciphering transport, storage or encoding details? Compare keeping those responsibilities together with the smallest useful separation, using the construction guidance.
+
+Use the questions that fit the code, not a checklist that must produce a finding for every item:
 
 - Can the domain's construction and transition paths preserve its invariants,
   or must callers reconstruct rules and remember preparatory steps?
-- Does orchestration express meaningful operations, or must the reader also
-  decipher parsing, validation, or execution details to follow the workflow?
 - Does understanding or changing one operation require navigating unrelated
   responsibilities or many thin layers? What knowledge crosses those boundaries?
 - For a concrete change relevant to the requirements or observed maintenance,
@@ -52,6 +51,8 @@ Recommend a change only when the concrete benefit outweighs its cost. Keeping a
 cohesive single file and consolidating fragmented code are valid outcomes, too.
 
 ## Report evidence and tradeoffs
+
+Include a brief boundary assessment naming the operations inspected and the code evidence for keeping responsibilities together or separating them. State when relevant boundaries could not be assessed; an absence of findings is not evidence that they were inspected.
 
 For each recommendation, provide:
 
