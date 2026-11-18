@@ -11,7 +11,10 @@ Reusable agent skills live under `skills/`. Each skill has an entry-point docume
 - [test-audit](<skills/test-audit/SKILL.md>): language-neutral guidance for writing valuable tests, auditing existing coverage, and reviewing a subsystem's complete test surface. Includes a [campaign procedure](<skills/test-audit/CAMPAIGN.md>).
 - [node-dependency-management](<skills/node-dependency-management/SKILL.md>): npm and pnpm dependency selection, installation, upgrades, and removal. Requires verified vendor maintenance or at least 1,000 GitHub stars, substantive activity within the previous year, and a short risk-based review.
 - [renovate](<skills/renovate/SKILL.md>): ecosystem-neutral dependency maintenance through bounded, parent-first upgrade batches. Supports assessment-only reports, reassesses resolution exceptions, and requires validation evidence.
-- [writing-code](<skills/writing-code/SKILL.md>): shared principles for readable, direct code, with [Kotlin conventions](<skills/writing-code/reference/kotlin.md>) and [module-design guidance](<skills/writing-code/reference/module-design.md>) read only when applicable. Keeps construction guidance separate from implementation and review workflows.
+- [writing-code](<skills/writing-code/SKILL.md>): shared principles for readable, direct code, with [Kotlin conventions](<skills/writing-code/reference/kotlin.md>), [domain modelling](<skills/writing-code/reference/domain-modelling.md>) and [module-design guidance](<skills/writing-code/reference/module-design.md>) read only when applicable. Keeps construction guidance separate from implementation and review workflows.
+- [implementing-changes](<skills/implementing-changes/SKILL.md>): carries a change through implementation, verification, independent review and resolution. Uses `writing-code`, `reviewing-changes` and `reviewing-design`; scales review to the change and provides a self-review fallback when delegation is unavailable.
+- [reviewing-changes](<skills/reviewing-changes/SKILL.md>): read-only correctness, test-quality and design assessment. Uses `writing-code` and `reviewing-design`; returns evidence-backed findings for the implementer to resolve.
+- [reviewing-design](<skills/reviewing-design/SKILL.md>): read-only assessment of responsibility boundaries, caller obligations and locality against `writing-code`. Requires concrete costs and justified alternatives rather than a preferred architecture.
 
 ## Install skills
 
@@ -53,6 +56,18 @@ pnpm dlx skills add wombat9000/agent-tooling --skill test-audit --agent codex
 
 Omit `--agent` to choose interactively. See the CLI's [supported agents](https://github.com/vercel-labs/skills#supported-agents) for other identifiers. Remote commands install only content already pushed to GitHub.
 
+### Install the implementation workflow
+
+Install the workflow and its companion skills together in the same scope so their relative links resolve:
+
+```bash
+pnpm dlx skills add \
+  https://github.com/wombat9000/agent-tooling/tree/v0.7.0 \
+  --skill implementing-changes reviewing-changes reviewing-design writing-code
+```
+
+For review without implementation, install `reviewing-changes`, `reviewing-design` and `writing-code`. For design assessment alone, install `reviewing-design` and `writing-code`. `writing-code` can be used independently. All four are available from `v0.7.0`; selecting one skill does not install its companions automatically. Preserve each skill's full directory, including references, and use the same release for the companion set.
+
 ### Select a release
 
 The shorthand commands above use the repository's default branch. For a specific release, use its GitHub tree URL and select the skill separately:
@@ -86,6 +101,9 @@ After installation, check that your agent discovers the skill. Reload its sessio
 - “Use the node-dependency-management skill to evaluate a package before adding it. Do not install packages that fail its eligibility gates without my explicit approval.”
 - “Use the renovate skill to assess dependency drift in this project. Do not edit files. Recommend one coherent upgrade batch and its validation plan.”
 - “Use the writing-code skill to implement this change. Read its Kotlin reference for Kotlin work and its module-design reference when choosing responsibility boundaries.”
+- “Use implementing-changes to implement this change, verify it, obtain a read-only review and resolve warranted findings. Do not commit or push.”
+- “Use reviewing-changes to assess this implementation against its requirements. Report correctness, test-quality and design findings without editing files.”
+- “Use reviewing-design to assess the responsibility boundaries in this module. Report concrete friction and the smallest useful alternatives without editing files.”
 
 Provide the task scope and say whether you want a review or file changes. Skills supply instructions; they do not grant extra tool permissions or authorize commits and releases.
 

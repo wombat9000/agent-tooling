@@ -1,6 +1,6 @@
 ---
 name: writing-code
-description: "Guides readable, direct code, with references for Kotlin conventions and module interfaces, responsibility boundaries, and information hiding. Use when writing or reviewing code, including Kotlin work and module-design decisions."
+description: "Guides readable, direct code, with references for Kotlin conventions, domain modelling, and module design. Use when writing or reviewing code, including domain values, invariants, responsibility boundaries, and interfaces."
 ---
 
 # Writing Code
@@ -12,6 +12,8 @@ owns code guidance, not implementation, review, or evaluation workflows.
 
 - For Kotlin code, read [Kotlin conventions](reference/kotlin.md) before writing
   or reviewing it.
+- When modelling or reviewing domain values, invariants, or state transitions,
+  read [domain modelling](reference/domain-modelling.md).
 - When choosing or reviewing responsibility boundaries, interfaces, or file
   organization, read [module design](reference/module-design.md).
 - Read only the references relevant to the task; do not load every reference by
@@ -25,25 +27,6 @@ owns code guidance, not implementation, review, or evaluation workflows.
   form is longer. Use names from the problem domain.
 - Prefer names that make a value's meaning clear without requiring the reader to
   trace its origin.
-
-## Values and domain operations
-
-- Model domain changes as operations that return new state rather than mutate
-  existing objects or collections. Use mutable stores or caches only when a
-  concrete requirement makes immutable transitions unsuitable; needing to track
-  changing values is not sufficient justification.
-- Represent domain values with their own types when they have meaningful validity
-  rules or behavior. Enforce intrinsic rules at construction. When validity depends
-  on several values together, let the domain object that owns their relationship
-  enforce those rules and preserve them through its operations. Parsers should
-  construct valid domain objects, not be the sole guardians of domain validity.
-  Avoid wrappers that add no domain meaning.
-- Parse external input into domain values and operations before executing domain
-  behavior. Domain objects should not interpret input tokens or format protocol
-  output.
-- Express domain actions, questions, and relationships as named operations on the
-  type that owns the relevant knowledge. Prefer these over making callers reconstruct
-  their meaning from fields or calculations. Leave self-explanatory checks inline.
 
 ## Validation
 

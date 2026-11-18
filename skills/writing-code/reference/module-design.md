@@ -35,10 +35,8 @@ interface rather than requiring each caller to reconstruct it.
   callers to remember validation or a sequence of preparatory calls.
 - Return meaningful results rather than exposing intermediate structures that
   callers must interpret using knowledge of the implementation.
-- Let orchestration code express the workflow in meaningful operations. Keep the
-  detailed rules for each operation behind its boundary, rather than mixing
-  coordination with parsing, validation, or execution mechanics. Extract coherent
-  responsibilities, not arbitrary groups of statements.
+- Keep protocol handling in entry points such as HTTP handlers, CLI commands and message consumers. When an entry point coordinates reads, decisions and writes, put that sequence and its failure behavior behind an application operation.
+- Express application workflows through domain and persistence operations. Keep storage mechanics—such as query construction, row mapping and generated-key handling—out of the decision-making sequence, so readers can follow business behavior without understanding the storage representation. Keep the transaction boundary around the complete application operation.
 - Internal helpers are useful when they make the implementation clearer; they
   need not become additional caller-facing concepts.
 - A good name does not make a pass-through layer valuable. Imagine removing the
@@ -55,8 +53,9 @@ choosing a boundary.
 - Keep details together when understanding or changing one routinely requires
   understanding or changing the others. Avoid scattering one operation across
   many tiny files or layers.
-- Separate responsibilities when each has a meaningful purpose and can be
-  understood or changed without knowing the other's implementation.
+- Identify responsibilities by the knowledge, dependencies and reasons to change they involve, not just their shared business purpose. Separate responsibilities that can be understood or changed independently, even when they contribute to one operation and the combined code is short.
+- A boundary can be justified with one caller and one implementation. Use focused concrete functions or classes; interfaces and additional abstraction layers are not prerequisites.
+- A useful split hides distinct decisions behind meaningful operations. Fragmentation makes readers follow the same knowledge across more places without hiding it.
 - Some duplication is cheaper than coupling unrelated responsibilities through a
   generic helper. Share knowledge that must stay consistent, not merely similar syntax.
 - Preserve useful existing boundaries. Do not split or merge code solely to
@@ -64,14 +63,9 @@ choosing a boundary.
 
 ## Distinguish file organization from module design
 
-A module can span several files while retaining one interface. A file can contain
-several closely related declarations without being poorly organized.
+A module can span several files while retaining one interface. Default to one primary type or responsibility per file, with a filename that identifies it.
 
-Group code around a coherent responsibility. Separate responsibilities that require
-different knowledge or change for different reasons, even when the combined file
-is short. Keep closely collaborating implementation details together when splitting
-would scatter understanding. Choose file boundaries by cohesion and information
-hiding—not line count or one-class-per-file rules.
+Keep supporting types and helpers alongside their owner when they are implementation details or are normally read and changed together.
 
 - Moving code into another file does not by itself create a better abstraction.
 - Avoid widening visibility merely to make a proposed file layout work. Weigh
