@@ -36,7 +36,7 @@ interface rather than requiring each caller to reconstruct it.
 - Return meaningful results rather than exposing intermediate structures that
   callers must interpret using knowledge of the implementation.
 - Keep protocol-specific parsing, encoding and interaction details at system boundaries, both incoming and outgoing. Application operations should express the workflow without constructing or interpreting protocol messages. When an entry point coordinates reads, decisions and writes, put that sequence and its failure behavior behind an application operation.
-- Express application workflows through domain and persistence operations. Keep storage mechanics—such as query construction, row mapping and generated-key handling—out of the decision-making sequence, so readers can follow business behavior without understanding the storage representation. Keep the transaction boundary around the complete application operation.
+- Express application workflows through domain and persistence operations. Keep storage mechanics—such as query construction, row mapping and generated-key handling—out of the decision-making sequence, so readers can follow business behavior without understanding the storage representation.
 - Internal helpers are useful when they make the implementation clearer; they
   need not become additional caller-facing concepts.
 - A good name does not make a pass-through layer valuable. Imagine removing the

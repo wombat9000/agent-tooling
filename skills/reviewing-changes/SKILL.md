@@ -17,7 +17,7 @@ If inputs or evidence are missing, identify the limitation rather than filling i
 
 ## Assess correctness
 
-Trace observable outcomes back to the contract, including boundaries, invalid inputs, failure behavior and state changes. Check regressions in affected callers. Investigate atomicity, concurrency, resource lifetime or security where the operation and requirements make them relevant, not as demands for new features or infrastructure.
+Trace observable outcomes back to the contract, including boundaries, invalid inputs, failure behavior and state changes. Check regressions in affected callers. Investigate concurrency, resource lifetime or security where the operation and requirements make them relevant, not as demands for new features or infrastructure.
 
 For a suspected defect, identify a specific input or execution sequence where required and actual behavior differ. Run permitted non-destructive checks when useful. Distinguish an executed reproduction from a conclusion traced through code and from an unverified hypothesis. Passing the author's tests does not settle correctness.
 
