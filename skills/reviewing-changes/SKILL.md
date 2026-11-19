@@ -27,9 +27,11 @@ Derive expected results from the requirements independently of the implementatio
 
 Recommend a test only when it would catch a specific plausible regression that existing checks miss. A missing test is not proof of a production defect. Report gaps in verification separately from confirmed incorrect behavior; do not ask for more tests just to increase their number.
 
-## Assess design
+## Assess construction guidance and design
 
-Apply `reviewing-design` to the reviewed code, scaled to its scope. Trace how invariants and caller obligations are maintained across actual interfaces, rather than judging names or declarations alone. Use `writing-code` and its applicable references as the standard, not a preferred layer count, file count or framework architecture.
+Inspect the changed code against the applicable `writing-code` guidance and references, including relevant construction and language preferences as well as module boundaries. For a new implementation, assess all code in scope. Report material departures in the existing finding format, with the code location, guidance involved and consequence. Distinguish unjustified departures from defensible tradeoffs, and preferences from hard requirements; do not turn every preference into a mandatory correction.
+
+Apply `reviewing-design` to the reviewed code, scaled to its scope. Trace how invariants and caller obligations are maintained across actual interfaces, rather than judging names or declarations alone. Use the construction guidance as the standard, not a preferred layer count, file count or framework architecture.
 
 Report a design problem only with concrete reading, change or safe-usage costs and a smaller justified alternative. Keep defensible tradeoffs and optional preferences distinct from problems that warrant correction.
 

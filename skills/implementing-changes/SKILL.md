@@ -65,8 +65,12 @@ not the entire implementation by default. Do not repeat resolved findings or loo
 until no further suggestions are possible. If review keeps generating work,
 reconsider the scope or approach and surface the unresolved decision.
 
-Finish when the contract is satisfied and warranted findings are resolved, or
-report the specific blocker. Hand off verification evidence, a brief account of
-review findings and their disposition, remaining limitations and tradeoffs, and
-the actual delivery state. Do not treat this workflow as
-authorization to commit, push, or publish.
+Before handing off, check:
+
+- The requested contract is satisfied, with relevant verification evidence.
+- The changed code has been assessed against applicable construction guidance; material departures are corrected or justified.
+- Warranted review findings are resolved, and remaining limitations or unassessed areas are disclosed.
+
+Use the existing verification and review evidence for these checks; repeat only checks affected by corrections. If a completion condition is unmet, report the specific blocker. The handoff need not print routine checkboxes.
+
+Hand off verification evidence, a brief account of review findings and their disposition, remaining limitations and tradeoffs, and the actual delivery state. Do not treat this workflow as authorization to commit, push, or publish.
