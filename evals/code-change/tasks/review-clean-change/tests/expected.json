@@ -1,0 +1,5 @@
+{
+  "verdicts": ["ready"],
+  "must_find": [],
+  "max_unmatched_severity": "Optional"
+}
