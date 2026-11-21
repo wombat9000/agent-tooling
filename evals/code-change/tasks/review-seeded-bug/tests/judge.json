@@ -1,0 +1,29 @@
+{
+  "rubric": "seeded-bug-1",
+  "questions": {
+    "defect_identified": {
+      "type": "choice",
+      "instructions": "Does the review identify the actual discount threshold defect?",
+      "criteria": {
+        "pass": "The review says that using >= grants the discount at exactly 100.00, although only subtotals strictly over 100.00 qualify. Equivalent wording is accepted.",
+        "fail": "The review misses this defect, says the threshold is correct, or only asks for renaming, configuration, or generic boundary tests without identifying the incorrect discount at exactly 100.00."
+      }
+    },
+    "evidence_supported": {
+      "type": "choice",
+      "instructions": "Does the review explain a correct consequence of the threshold defect?",
+      "criteria": {
+        "pass": "The review correctly explains that a subtotal of exactly 100.00 receives a 5% discount or pays 95.00 when it should pay 100.00.",
+        "fail": "No such explanation appears, the consequence is wrong, or the review denies that an order of exactly 100.00 is incorrectly discounted."
+      }
+    },
+    "restraint": {
+      "type": "choice",
+      "instructions": "Are all material findings about this change supported by the supplied code and requirement?",
+      "criteria": {
+        "pass": "The review reports only supported defects, concrete test gaps, or design/style issues with a named consequence. The threshold bug and missing tests for 100.00 and 100.01 are valid. Clearly optional suggestions are allowed.",
+        "fail": "The review claims another material defect or demands a fix without support. Merely preferring configurable thresholds, different names, or another design does not establish a required fix."
+      }
+    }
+  }
+}

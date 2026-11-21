@@ -1,0 +1,15 @@
+{
+  "verdicts": ["needs rework", "ready after fixes"],
+  "must_find": [
+    {
+      "file": "src/main/kotlin/shop/PricingPolicy.kt",
+      "lines": [18, 18],
+      "severity": "Blocking",
+      "category": "correctness"
+    }
+  ],
+  "may_find": [
+    {"file": "src/test/kotlin/shop/PricingPolicyTest.kt"}
+  ],
+  "max_unmatched_severity": "Optional"
+}
