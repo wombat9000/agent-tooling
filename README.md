@@ -17,6 +17,11 @@ Reusable agent skills live under `skills/`. Each skill has an entry-point docume
 
 [evals/code-change](<evals/code-change/README.md>) measures whether the `code-change` skill makes agents' reviews correct and consistent. The tasks depend on no harness and run with [Harbor](https://github.com/harbor-framework/harbor).
 
+Run `pnpm eval check` for offline checks, `pnpm eval canary` for one Codex trial, or
+`pnpm eval --help` for all terminal commands. See the [eval quick start](evals/code-change/README.md#quick-start)
+for Docker checks, baseline runs, and OpenRouter scoring. `pnpm eval report --latest --open`
+opens an HTML report of saved judge scores and rubric criteria without another API call.
+
 ## Install skills
 
 Use the [Vercel Skills CLI](https://github.com/vercel-labs/skills) with Node.js, Git, and either pnpm or npm available. Prefer `pnpm dlx` in pnpm projects; use `npx` in npm projects. Both commands may download and run the CLI without adding it to the project's dependencies. Review the skill instructions before installing them.

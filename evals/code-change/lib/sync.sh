@@ -4,5 +4,5 @@
 set -eu
 lib="$(cd "$(dirname "$0")" && pwd)"
 for task in "$lib"/../tasks/*/; do
-  cp "$lib/grade_review.py" "$task/tests/grade_review.py"
+  cp "$lib/grade_review.mts" "$task/tests/grade_review.mts"
 done

@@ -1,7 +1,7 @@
-FROM debian:bookworm-slim
+FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates python3 \
+ && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 # Fixture repository: `main` holds the base commit, `feature` the change under review.

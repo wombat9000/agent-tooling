@@ -1,0 +1,10 @@
+/jobs/
+/eval-results/
+/node_modules/
+/.pnpm-store/
+/.idea/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example

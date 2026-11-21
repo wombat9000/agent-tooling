@@ -1,0 +1,21 @@
+{
+  "rubric": "canary-1",
+  "questions": {
+    "duplicated_rule": {
+      "type": "choice",
+      "instructions": "Does the review identify and explain the duplicated SKU validation rule?",
+      "criteria": {
+        "pass": "The review identifies that ProductImport's regex repeats the rule owned by Sku.isWellFormed, and explains that changes can drift or require updates in two places.",
+        "fail": "The review misses the duplication, only mentions a regex, or gives no reason that the duplicated rule matters."
+      }
+    },
+    "weak_test": {
+      "type": "choice",
+      "instructions": "Does the review identify why the import test does not check the required behavior?",
+      "criteria": {
+        "pass": "The review explains that assertNotNull(catalog) does not verify that valid products were added and malformed SKUs skipped. An import that adds nothing can pass this assertion.",
+        "fail": "The review misses this weakness or merely asks for more tests without explaining the ineffective assertion."
+      }
+    }
+  }
+}

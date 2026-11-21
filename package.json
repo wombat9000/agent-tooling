@@ -1,0 +1,10 @@
+{
+  "name": "agent-tooling",
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "eval": "node evals/code-change/cli.mts"
+  }
+}
