@@ -1,12 +1,15 @@
-/** Locate completed Harbor Codex runs and their exported reviews without reading agent logs. */
+/** Locate completed Harbor Codex runs and their exported artifacts without reading agent logs. */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { taskTarget, type RubricTarget } from './judge_review.mts';
 
-/** One trial's exported review, paired with its local eval task. */
+/** One trial's exported artifact (REVIEW.md or production src dir), paired with its local eval task. */
 export interface RunReport {
   trial: string;
   task: string;
+  target: RubricTarget;
   report: string;
+  rewardPath?: string;
 }
 
 /** Select by completion time, excluding unfinished jobs and non-Codex agents. */
@@ -30,6 +33,16 @@ export function latestCodexRun(jobsDirectory: string): string {
   return runs[0].directory;
 }
 
+function productionSourceDir(trialDirectory: string): string | null {
+  for (const candidate of [
+    join(trialDirectory, 'artifacts/workspace/src/main/kotlin'),
+    join(trialDirectory, 'artifacts/src/main/kotlin'),
+  ]) {
+    if (statSync(candidate, { throwIfNoEntry: false })?.isDirectory()) return candidate;
+  }
+  return null;
+}
+
 /**
  * Read all selected trials before any judging call. Missing exports are errors, never skipped.
  * Only known local tasks are accepted; a completed job must have every trial directory.
@@ -47,14 +60,27 @@ export function reportsFromRun(jobDirectory: string, tasksDirectory: string, tas
   for (const trial of trials) {
     const task = trial.name.split('__')[0];
     if (taskFilter && task !== taskFilter) continue;
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(task) || !existsSync(join(tasksDirectory, task, 'task.toml'))) {
+    const taskDir = join(tasksDirectory, task);
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(task) || !existsSync(join(taskDir, 'task.toml'))) {
       throw new Error(`Unknown task in saved run: ${task}`);
     }
-    const report = join(directory, trial.name, 'artifacts/output/REVIEW.md');
-    if (!statSync(report, { throwIfNoEntry: false })?.isFile()) {
-      throw new Error(`No exported review for ${trial.name}. Future runs need --artifact /output/REVIEW.md.`);
+    const target = taskTarget(taskDir);
+    const trialDir = join(directory, trial.name);
+    const rewardCandidate = join(trialDir, 'verifier/reward.json');
+    const rewardPath = statSync(rewardCandidate, { throwIfNoEntry: false })?.isFile() ? rewardCandidate : undefined;
+    if (target === 'production_code') {
+      const sourceDir = productionSourceDir(trialDir);
+      if (!sourceDir) {
+        throw new Error(`No exported production Kotlin sources for ${trial.name}. Task needs artifacts = ["/workspace/src"].`);
+      }
+      reports.push({ trial: trial.name, task, target, report: sourceDir, rewardPath });
+    } else {
+      const report = join(trialDir, 'artifacts/output/REVIEW.md');
+      if (!statSync(report, { throwIfNoEntry: false })?.isFile()) {
+        throw new Error(`No exported review for ${trial.name}. Future runs need --artifact /output/REVIEW.md.`);
+      }
+      reports.push({ trial: trial.name, task, target, report, rewardPath });
     }
-    reports.push({ trial: trial.name, task, report });
   }
   if (!reports.length) throw new Error(`Run has no reports${taskFilter ? ` for ${taskFilter}` : ''}: ${directory}`);
   return reports;

@@ -1,9 +1,9 @@
 # code-change evals
 
-Measures whether the [code-change](../../skills/code-change/SKILL.md) skill makes an agent's
-reviews correct and consistent. The tasks are plain folders: a fixture repository, an
-instruction, and a grader that reads only the report file the agent writes. They depend on no
-harness. [Harbor](https://github.com/harbor-framework/harbor) runs them.
+Measures whether the [code-change](../../skills/code-change/SKILL.md) skill improves an agent's
+code reviews and greenfield implementations. The tasks are plain folders: a fixture or starter
+repository, an instruction, and a deterministic verifier. They depend on no harness.
+[Harbor](https://github.com/harbor-framework/harbor) runs them.
 
 Codex is the only harness used for now. See [Adding a harness](#adding-a-harness).
 
@@ -25,19 +25,21 @@ and your local login file. Log in with `codex login`
 first. An existing `CODEX_AUTH_JSON_PATH` is respected; otherwise the file is found under
 `CODEX_HOME` or `~/.codex`. To use API credentials, pass `--auth api`.
 
-Reports are exported automatically. Harbor runs are stored under `eval-results/harbor/`.
+Artifacts are exported automatically. Harbor runs are stored under `eval-results/harbor/`.
 Score the latest completed Codex run after setting `OPENROUTER_API_KEY` in your shell:
 
 ```bash
-pnpm eval judge --latest                            # All tasks and attempts, d1 Ultra
-pnpm eval judge review-seeded-bug --latest          # Only this task's attempts
-pnpm eval judge --latest --judge jev                # Same reports, Jev
+pnpm eval judge --latest                                      # All tasks and attempts, d1 Ultra
+pnpm eval judge review-seeded-bug --latest                    # Only this task's attempts
+pnpm eval judge implement-mars-rover --latest --scope per-file # Score each production Kotlin file separately
+pnpm eval judge --latest --judge jev                          # Same reports, Jev
 ```
 
-Each judge run creates a standalone `report.html` with task summaries, per-trial scores,
-the exact saved rubric questions and pass/fail criteria, P(pass), confidence, and the original
-review. Terminal output points to the page instead of listing every trial score. Add `--open`
-to open the report after judging.
+Each judge run creates a standalone `report.html` with a Check × Trial matrix (sorted worst-first,
+with hoverable rubric criteria and trial/file breakdowns), task KPI summaries, failure-first check
+tables, P(pass), confidence, and the original review or tabbed, syntax-highlighted Kotlin source.
+Terminal output points to the page instead of listing every trial score. Add `--open` to open the
+report after judging.
 
 To view scores you already have, without another API call:
 
@@ -50,14 +52,14 @@ pnpm eval report --latest --open
 all content is embedded, so the HTML works offline. Scores and rubric text come from the saved
 request/result files, not the task rubric as it exists today.
 
-No report paths are needed for saved runs. The latest run is selected by its completion time;
+No artifact paths are needed for saved runs. The latest run is selected by its completion time;
 unfinished runs and oracle/nop jobs are excluded. Use `--run DIRECTORY` to choose a specific
-saved Harbor run. To score one file manually, use `pnpm eval judge TASK REPORT_PATH`, replacing
-both arguments with a task name and a real exported report file.
+saved Harbor run. To score one review file or exported `src/main/kotlin` directory manually, use
+`pnpm eval judge TASK PATH`.
 
 Judge runs get a unique directory under `eval-results/judges/`. Batch runs contain one
 directory per trial and a `summary.json` with the source run and each trial's status and score.
-Every selected report is checked before API calls begin. Missing reports cause an error;
+Every selected artifact is checked before API calls begin. Missing artifacts cause an error;
 they are not silently skipped. Judging stops at the first API error and leaves later trials
 marked `pending`, with earlier results retained. `eval-results/` and Harbor's
 older `jobs/` directory are ignored by Git; existing results are retained. OpenRouter keys
@@ -66,44 +68,53 @@ are used only for host-side judging and are not passed to Harbor by this wrapper
 Use `--model ID` or `EVAL_MODEL` to change the Codex model. Use `--effort LEVEL` and
 `--service-tier TIER` to override the reasoning effort and service tier. These defaults apply
 equally to skill and baseline runs. Use `--judge MODEL_ID` for another
-OpenRouter judge. `--task NAME`, `--attempts N`, and `--concurrency N` can narrow a full run.
+OpenRouter judge, and `--scope whole|per-file` to control whether `production_code` tasks are
+judged across all production files at once (default `whole`) or one file per request (`per-file`).
+`--task NAME`, `--attempts N`, and `--concurrency N` can narrow a full run.
 Add `--dry-run` to preview Harbor commands without starting them. For judging, it saves the
 request without making an API call. `pnpm eval --help` lists all options.
 
 ## Tasks
 
-| Task | What a good run does |
-|---|---|
-| `canary` | Uses the skill's report format and cites a guideline ID. Passes only if the skill loaded; run it first. |
-| `review-seeded-bug` | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
-| `review-clean-change` | Returns `Verdict: ready` and raises nothing above **Optional**. |
+| Task | Kind | What a good run does |
+|---|---|---|
+| `canary` | Review | Uses the skill's report format and cites a guideline ID. Passes only if the skill loaded; run it first. |
+| `review-seeded-bug` | Review | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
+| `review-clean-change` | Review | Returns `Verdict: ready` and raises nothing above **Optional**. |
+| `implement-mars-rover` | Implementation | Implements `rover.MarsRover.execute(inputFile: Path): String` in Kotlin, passes its own and hidden black-box JUnit 5 contract tests, and keeps production code clean and modular. |
 
-Each task asks the agent to write its review to `/output/REVIEW.md`. Harbor's deterministic
-grader reads that file and checks report structure and finding labels. An optional host-side
-judge uses OpenRouter to assess the review's meaning after the trial.
+Review tasks ask the agent to write `/output/REVIEW.md` and grade report structure and finding
+labels deterministically. Implementation tasks export `/workspace/src` and verify build, agent
+tests, and hidden contract tests with Gradle inside the container. In both cases, an optional
+host-side judge uses OpenRouter to assess qualitative criteria after the trial.
 
 ## Layout
 
 ```
-cli.mts               terminal shortcuts used by pnpm eval
-cli.test.mts          offline tests of defaults, auth, and child commands
-lib/grade_review.mts   shared grader: REVIEW.md + expected.json → /logs/verifier/reward.json
-lib/sync.sh            stages lib/grade_review.mts into each task's tests/ for direct harbor runs (gitignored; pnpm eval does this automatically)
-lib/selfcheck.mts      checks the tasks without Docker: reference solution scores 1, no report 0
-lib/judge_review.mts   scores a saved review with an OpenRouter decision model
-lib/judge_review.test.mts  offline tests of requests, responses, and failure handling
-lib/html_report.mts   standalone HTML from saved rubric questions and judge scores
+cli.mts                    terminal shortcuts used by pnpm eval
+cli.test.mts               offline tests of defaults, auth, and child commands
+lib/grade_review.mts       shared review grader: REVIEW.md + expected.json → /logs/verifier/reward.json
+lib/sync.sh                stages lib/grade_review.mts into review tasks' tests/ for direct harbor runs (gitignored; pnpm eval does this automatically)
+lib/selfcheck.mts          checks review tasks without Docker: reference solution scores 1, no report 0
+lib/judge_review.mts       scores a saved review with an OpenRouter decision model (plus shared rubric/API helpers)
+lib/judge_review.test.mts  offline tests of review judge requests, responses, and failure handling
+lib/judge_code.mts         scores exported production Kotlin code (whole or per-file) with an OpenRouter decision model
+lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, and failure handling
+lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighter for HTML reports
+lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
 tasks/<task>/
-  instruction.md      the prompt; never mentions the skill or the report format
-  task.toml           Harbor configuration; skills go to /skills
-  environment/        Dockerfile, plus base/ and change/, which become the `main` and `feature` branches
-  tests/              test.sh, expected.json, judge.json (plus staged grade_review.mts at run time); uploaded after the agent finishes
-  solution/solve.sh   reference review for Harbor's oracle agent
+  instruction.md           the prompt; never mentions the skill or the report format
+  task.toml                Harbor configuration; skills go to /skills
+  environment/             Dockerfile, plus base/ (and change/ for review tasks)
+  tests/                   test.sh, judge.json, plus expected.json (review) or contract tests (implementation); uploaded after the agent finishes
+  solution/solve.sh        reference review or implementation for Harbor's oracle agent
 ```
 
 ## Scores
 
-`reward.json` holds one score per check, so you can see which one regressed:
+`reward.json` holds one score per deterministic check, so you can see which one regressed.
+
+**Review tasks:**
 
 | Metric | 1 means |
 |---|---|
@@ -116,9 +127,18 @@ tasks/<task>/
 | `guideline` | At least one finding cites a guideline ID (canary only) |
 | `reward` | Every metric above is 1 |
 
-These scores measure report compliance and location/label matching, not whether a finding's
-explanation is correct. Keep them separate from the optional judge scores below, especially
-when comparing reviews with and without the skill's report format.
+**Implementation tasks (`implement-mars-rover`):**
+
+| Metric | 1 means |
+|---|---|
+| `production_code_exists` | At least one `.kt` file exists under `src/main/kotlin/rover/` |
+| `agent_tests_exists` | At least one `.kt` test file exists under `src/test/kotlin/` |
+| `agent_tests_pass` | `./gradlew --offline test` passes on the agent's own tests |
+| `contract_tests_pass` | `./gradlew --offline test` passes with the hidden `VerifierMarsRoverContractTest` injected |
+| `reward` | Every metric above is 1 |
+
+These deterministic scores measure compliance and correctness, not qualitative review reasoning
+or code craft. Keep them separate from the optional host-side judge scores below.
 
 ## Direct Harbor commands
 
@@ -148,22 +168,31 @@ harbor run -p evals/code-change/tasks -a codex -m <model> -k 5 -n 4 --artifact /
 Compare the two runs in step 4 task by task. Record a baseline before changing the skill, then
 rerun after each change.
 
-The three tasks pass the Docker oracle and nop checks. These checks confirm loading the task
-directory and reading `/output` during verification. They do not test live Codex authentication.
+All four tasks pass the Docker oracle and nop checks. These checks confirm loading the task
+directory and running verification in Docker. They do not test live Codex authentication.
 
-## OpenRouter review-quality scoring
+## OpenRouter quality scoring
 
 Run this after Harbor finishes. It uses `OPENROUTER_API_KEY` on the host, independently of the
 Codex credentials used by the evaluated agent. The key is never included in a saved request.
 No SDK or package install is needed. Both models use the
 [OpenRouter Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request).
 
-Each task's hidden `tests/judge.json` defines binary pass/fail questions. The judge receives
-the requirement, numbered base and feature Kotlin files, and the full review. It accepts
-free-form reviews; the deterministic Markdown parser does not filter what the judge sees.
-The canary asks about duplicated SKU validation and the weak test; the seeded task asks about
-the actual threshold defect, its consequence, and unsupported findings; the clean task asks
-about correct behavior and unsupported findings.
+Each task's hidden `tests/judge.json` defines binary pass/fail questions and an optional `target`
+(`"review"` by default, or `"production_code"`):
+
+- **Review tasks (`lib/judge_review.mts`):** The judge receives the requirement, numbered base
+  and feature Kotlin files, and the full review. It accepts free-form reviews; the deterministic
+  Markdown parser does not filter what the judge sees. The canary asks about duplicated SKU
+  validation and the weak test; the seeded task asks about the actual threshold defect, its
+  consequence, and unsupported findings; the clean task asks about correct behavior and
+  unsupported findings.
+- **Implementation tasks (`lib/judge_code.mts`):** The judge receives the requirement and the
+  exported production Kotlin files (`src/main/kotlin/**/*.kt`, excluding test files). With
+  `--scope whole` (default), all production files are judged in one request. With
+  `--scope per-file`, each production file is judged separately against the same rubric, and
+  results report both mean `pass_rate` and strict `all_files_pass_rate` (fraction of checks
+  passing across every file).
 
 The normal terminal workflow is `pnpm eval judge --latest`, described above. For direct use
 of the single-report script, after setting `OPENROUTER_API_KEY` in your shell, set `REVIEW_PATH`

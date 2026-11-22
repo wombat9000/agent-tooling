@@ -32,7 +32,11 @@ const agent = args[args.indexOf('-a') + 1];
 if (agent === 'oracle' || agent === 'nop') {
   const job = path.join(args[args.indexOf('-o') + 1], args[args.indexOf('--job-name') + 1]);
   fs.mkdirSync(job, { recursive: true });
-  const trials = process.env.TEST_SMOKE_TRIALS ? Number(process.env.TEST_SMOKE_TRIALS) : 3;
+  const targetPath = args[args.indexOf('-p') + 1];
+  const defaultTrials = fs.existsSync(path.join(targetPath, 'task.toml'))
+    ? 1
+    : fs.readdirSync(targetPath).filter((entry) => fs.existsSync(path.join(targetPath, entry, 'task.toml'))).length;
+  const trials = process.env.TEST_SMOKE_TRIALS ? Number(process.env.TEST_SMOKE_TRIALS) : defaultTrials;
   const reward = process.env.TEST_SMOKE_REWARD ? Number(process.env.TEST_SMOKE_REWARD) : agent === 'oracle' ? 1 : 0;
   fs.writeFileSync(path.join(job, 'result.json'), JSON.stringify({ n_total_trials: trials,
     stats: { n_completed_trials: trials, n_errored_trials: 0, evals: { test: { metrics: [{ reward }] } } } }));
