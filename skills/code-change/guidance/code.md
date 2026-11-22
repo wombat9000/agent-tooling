@@ -6,9 +6,10 @@ finding. **Default**: preferred; a departure is at most Optional.
 ## Readability and names
 
 - **C1 (Rule)** Write readable, direct code rather than clever code. Make domain
-  relationships explicit instead of leaving the reader to infer them from a
-  calculation, even when the explicit form is longer. Code is read far more often
-  than it is written.
+  relationships and state transitions explicit (for example, with an exhaustive
+  `when`/`switch` or direct mapping) instead of deriving them from enum order,
+  array positions, or arithmetic tricks, even when the explicit form is longer.
+  Code is read far more often than it is written.
 - **C2 (Rule)** Name things with terms from the problem domain, so that a value's
   meaning is clear without tracing where it came from.
 
@@ -23,8 +24,9 @@ finding. **Default**: preferred; a departure is at most Optional.
   if (isWellFormedSku(code)) …
   ```
 - **C4 (Default)** Prefer ordinary string operations and explicit checks over
-  regular expressions when they express the rule clearly. Use a regular expression
-  only when it materially simplifies the code, and give it a descriptive name.
+  regular expressions when they express the rule clearly. Use a regular
+  expression only when it materially simplifies the code, and give it a
+  descriptive name rather than embedding an unnamed regex inline.
 
 ## Functions, classes and dependencies
 

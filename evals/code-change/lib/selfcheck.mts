@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { grade, type ExpectedReview } from './grade_review.mts';
+import { parseRubric } from './judge_review.mts';
 
 const LIB = fileURLToPath(new URL('.', import.meta.url));
 const TASKS = join(LIB, '../tasks');
@@ -36,6 +37,7 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
     const dir = join(TASKS, task);
     assert.ok(existsSync(join(dir, 'tests/test.sh')), `${task}: missing tests/test.sh`);
     assert.ok(existsSync(join(dir, 'tests/judge.json')), `${task}: missing tests/judge.json`);
+    assert.ok(Object.keys(parseRubric(dir, '').questions).length > 0, `${task}: invalid tests/judge.json`);
     assert.ok(existsSync(join(dir, 'solution/solve.sh')), `${task}: missing solution/solve.sh`);
     if (existsSync(join(dir, 'tests/expected.json'))) {
       assert.equal(grade(referenceReport(task), expected(task)).reward, 1, task);
