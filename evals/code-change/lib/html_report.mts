@@ -270,21 +270,205 @@ function lowestFileForCheck(trial: Trial, checkId: string): { file: string; prob
   return worst;
 }
 
-function rubricTabsHtml(
-  activeGroups: string[],
-  stats: Array<{ group: string; passed: number; scored: number }>,
+interface CheckRowStats {
+  id: string;
+  group: string;
+  present: Array<{ index: number; trial: Trial; check: Check | undefined }>;
+  scored: number;
+  passed: number;
+  passRate: number;
+  meanProb: number | null;
+}
+
+interface GroupTrialRollup {
+  index: number;
+  trial: Trial;
+  passed: number;
+  total: number;
+  meanProb: number;
+  worst: { id: string; prob: number; choice: string };
+}
+
+interface GroupStats {
+  slug: string;
+  label: string;
+  rows: CheckRowStats[];
+  scored: number;
+  passed: number;
+  passRate: number;
+  hasFail: boolean;
+  meanProb: number | null;
+  minCheckMeanProb: number | null;
+  defaultExpanded: boolean;
+  trialRollups: Array<GroupTrialRollup | null>;
+}
+
+function isCleanCheck(row: CheckRowStats): boolean {
+  return row.scored > 0 && row.passed === row.scored && (row.meanProb ?? 0) >= 0.9;
+}
+
+function renderCheckLabelHtml(id: string, question: Question | undefined, groupLabel?: string): string {
+  const base = question
+    ? `<span class="tip-wrap"><span class="tip-trigger" tabindex="0">${escape(labelForCheck(id))}</span><div class="tip-card" role="tooltip"><div class="tip-q">${escape(question.instructions)}</div><div class="tip-crit tip-pass"><strong>Pass when</strong><p>${escape(question.criteria.pass)}</p></div><div class="tip-crit tip-fail"><strong>Fail when</strong><p>${escape(question.criteria.fail)}</p></div></div></span>`
+    : `<span>${escape(labelForCheck(id))}</span>`;
+  return groupLabel ? `${base}<span class="group-tag">${escape(groupLabel)}</span>` : base;
+}
+
+function renderCheckCellsHtml(row: CheckRowStats): string {
+  return row.present.map(({ index, trial, check }) => {
+    if (!check) return `<td class="matrix-cell"><span class="heat-pill neutral">—</span></td>`;
+    const cls = check.choice === 'pass' ? 'pass' : 'fail';
+    const pFail = Math.max(0, Math.min(1, 1 - check.pass_probability));
+    const worst = check.files_total !== undefined ? lowestFileForCheck(trial, row.id) : null;
+    const filesLine = check.files_total !== undefined
+      ? `<div class="cell-pop-row"><span>Files passed</span><strong>${check.files_passed}/${check.files_total}</strong></div>`
+      : '';
+    const worstLine = worst
+      ? `<div class="cell-pop-row cell-pop-file"><span>Lowest</span><strong>${escape(worst.file)} (${percent(worst.prob)})</strong></div>`
+      : '';
+    const pop = `<div class="cell-pop" role="tooltip"><div class="cell-pop-row"><span>Verdict</span><strong>${escape(check.choice)}</strong></div><div class="cell-pop-row"><span>P(pass)</span><strong>${percent(check.pass_probability)}</strong></div><div class="cell-pop-row"><span>P(fail)</span><strong>${percent(pFail)}</strong></div><div class="cell-pop-row"><span>Confidence</span><strong>${percent(check.confidence)}</strong></div>${filesLine}${worstLine}</div>`;
+    const ariaLabel = `${labelForCheck(row.id)}, ${shortTrialLabel(trial.trial, index)}: ${check.choice} ${wholePercent(check.pass_probability)}`;
+    return `<td class="matrix-cell"><span class="cell-wrap"><a class="heat-pill ${cls} trial-jump" style="${probPillStyle(check.pass_probability)}" href="#trial-${index}" data-jump="trial-${index}" aria-label="${escape(ariaLabel)}">${wholePercent(check.pass_probability)}</a>${pop}</span></td>`;
+  }).join('');
+}
+
+function renderCheckRowHtml(
+  row: CheckRowStats,
+  question: Question | undefined,
+  options: { rowClass?: string; attrs?: string; groupLabel?: string } = {},
 ): string {
-  const tabButton = (filter: string, label: string, rows: typeof stats, active: boolean) => {
-    const passed = rows.reduce((sum, row) => sum + row.passed, 0);
+  const ratioClass = row.scored > 0 && row.passed === row.scored ? 'pass' : row.scored > 0 ? 'fail' : 'neutral';
+  const clsAttr = options.rowClass ? ` class="${options.rowClass}"` : '';
+  const extraAttrs = options.attrs ? ` ${options.attrs}` : '';
+  return `<tr${clsAttr}${extraAttrs}>
+      <td class="check-label-cell">${renderCheckLabelHtml(row.id, question, options.groupLabel)}</td>
+      <td class="numeric"><span class="badge ${ratioClass}">${row.passed}/${row.scored}</span></td>
+      <td>${probBarHtml(row.meanProb, row.scored > 0 ? (row.passed === row.scored ? 'pass' : 'fail') : undefined)}</td>
+      ${renderCheckCellsHtml(row)}
+    </tr>`;
+}
+
+function buildGroupStats(activeGroups: string[], stats: CheckRowStats[], trials: Trial[]): GroupStats[] {
+  const groups = activeGroups.map((slug): GroupStats => {
+    const rows = stats.filter((row) => row.group === slug);
     const scored = rows.reduce((sum, row) => sum + row.scored, 0);
-    const cls = scored > 0 && passed === scored ? 'pass' : scored > 0 ? 'fail' : 'neutral';
-    return `<button type="button" class="rubric-tab${active ? ' active' : ''}" role="tab" aria-selected="${active ? 'true' : 'false'}" data-rubric-filter="${escape(filter)}"><span>${escape(label)}</span><span class="tab-pill ${cls}">${passed}/${scored}</span></button>`;
-  };
-  const tabs = [
-    tabButton('all', 'All', stats, true),
-    ...activeGroups.map((slug) => tabButton(slug, labelForRubric(slug), stats.filter((row) => row.group === slug), false)),
-  ];
-  return `<div class="rubric-tabs" role="tablist" aria-label="Filter matrix by rubric">${tabs.join('')}</div>`;
+    const passed = rows.reduce((sum, row) => sum + row.passed, 0);
+    const passRate = scored > 0 ? passed / scored : 1;
+    const hasFail = scored > 0 && passed < scored;
+    let probSum = 0;
+    let probCount = 0;
+    for (const row of rows) {
+      for (const entry of row.present) {
+        if (entry.check) {
+          probSum += entry.check.pass_probability;
+          probCount += 1;
+        }
+      }
+    }
+    const meanProb = probCount > 0 ? probSum / probCount : null;
+    const checkMeans = rows.map((row) => row.meanProb).filter((p): p is number => p !== null);
+    const minCheckMeanProb = checkMeans.length ? Math.min(...checkMeans) : null;
+    const trialRollups = trials.map((trial, index): GroupTrialRollup | null => {
+      const scoredChecks = rows
+        .map((row) => ({ id: row.id, check: row.present[index]?.check }))
+        .filter((item): item is { id: string; check: Check } => item.check !== undefined);
+      if (!scoredChecks.length) return null;
+      const tPassed = scoredChecks.filter((item) => item.check.choice === 'pass').length;
+      const tMean = scoredChecks.reduce((sum, item) => sum + item.check.pass_probability, 0) / scoredChecks.length;
+      let worstItem = scoredChecks[0];
+      for (const item of scoredChecks.slice(1)) {
+        const itemFail = item.check.choice !== 'pass';
+        const worstFail = worstItem.check.choice !== 'pass';
+        if (item.check.pass_probability < worstItem.check.pass_probability
+          || (item.check.pass_probability === worstItem.check.pass_probability && itemFail && !worstFail)) {
+          worstItem = item;
+        }
+      }
+      return {
+        index,
+        trial,
+        passed: tPassed,
+        total: scoredChecks.length,
+        meanProb: tMean,
+        worst: { id: worstItem.id, prob: worstItem.check.pass_probability, choice: worstItem.check.choice },
+      };
+    });
+    return {
+      slug,
+      label: labelForRubric(slug),
+      rows,
+      scored,
+      passed,
+      passRate,
+      hasFail,
+      meanProb,
+      minCheckMeanProb,
+      defaultExpanded: hasFail,
+      trialRollups,
+    };
+  });
+  groups.sort((a, b) =>
+    Number(b.hasFail) - Number(a.hasFail)
+    || a.passRate - b.passRate
+    || (a.minCheckMeanProb ?? 1) - (b.minCheckMeanProb ?? 1)
+    || (a.meanProb ?? 1) - (b.meanProb ?? 1),
+  );
+  return groups;
+}
+
+function renderGroupedRowsHtml(groups: GroupStats[], questionsById: Map<string, Question>): string {
+  return groups.map((group) => {
+    const expanded = group.defaultExpanded;
+    const ratioClass = group.scored > 0 && group.passed === group.scored ? 'pass' : group.scored > 0 ? 'fail' : 'neutral';
+    const cells = group.trialRollups.map((rollup) => {
+      if (!rollup) return `<td class="matrix-cell"><span class="heat-pill neutral">—</span></td>`;
+      const cls = rollup.passed === rollup.total ? 'pass' : 'fail';
+      const pop = `<div class="cell-pop" role="tooltip"><div class="cell-pop-row"><span>Passed</span><strong>${rollup.passed}/${rollup.total}</strong></div><div class="cell-pop-row"><span>Mean P(pass)</span><strong>${percent(rollup.meanProb)}</strong></div><div class="cell-pop-row cell-pop-check"><span>Lowest</span><strong>${escape(labelForCheck(rollup.worst.id))} (${percent(rollup.worst.prob)})</strong></div></div>`;
+      const ariaLabel = `${group.label}, ${shortTrialLabel(rollup.trial.trial, rollup.index)}: ${rollup.passed}/${rollup.total} passed, lowest ${labelForCheck(rollup.worst.id)} ${wholePercent(rollup.worst.prob)}`;
+      return `<td class="matrix-cell"><span class="cell-wrap"><a class="heat-pill ${cls} trial-jump" style="${probPillStyle(rollup.worst.prob)}" href="#trial-${rollup.index}" data-jump="trial-${rollup.index}" aria-label="${escape(ariaLabel)}">${wholePercent(rollup.worst.prob)}</a>${pop}</span></td>`;
+    }).join('');
+    const minProb = group.rows.length > 1 && group.minCheckMeanProb !== null ? group.minCheckMeanProb : undefined;
+    const groupRow = `<tr class="matrix-group-row${expanded ? ' expanded' : ''}" data-group-row="${escape(group.slug)}">
+      <td class="group-label-cell"><button type="button" class="group-toggle" aria-expanded="${expanded ? 'true' : 'false'}" data-group-toggle="${escape(group.slug)}"><span class="group-caret" aria-hidden="true">${expanded ? '▾' : '▸'}</span><span class="group-name">${escape(group.label)}</span><span class="group-count">${group.rows.length}</span></button></td>
+      <td class="numeric"><span class="badge ${ratioClass}">${group.passed}/${group.scored}</span></td>
+      <td>${probBarHtml(group.meanProb, group.scored > 0 ? (group.passed === group.scored ? 'pass' : 'fail') : undefined, minProb)}</td>
+      ${cells}
+    </tr>`;
+    const childRows = group.rows.map((row) =>
+      renderCheckRowHtml(row, questionsById.get(row.id), {
+        rowClass: 'matrix-child-row',
+        attrs: `data-group-child="${escape(group.slug)}"${expanded ? '' : ' hidden'}`,
+      }),
+    ).join('');
+    return groupRow + childRows;
+  }).join('');
+}
+
+function renderFlatRowsHtml(
+  stats: CheckRowStats[],
+  questionsById: Map<string, Question>,
+  showGroupTag: boolean,
+  colSpan: number,
+): string {
+  const attentionRows = stats.filter((row) => !isCleanCheck(row));
+  const cleanRows = stats.filter((row) => isCleanCheck(row));
+  const shouldFold = attentionRows.length > 0 && cleanRows.length >= 2;
+  const renderRow = (row: CheckRowStats, attrs?: string) =>
+    renderCheckRowHtml(row, questionsById.get(row.id), {
+      rowClass: 'matrix-flat-row',
+      attrs,
+      groupLabel: showGroupTag && row.group ? labelForRubric(row.group) : undefined,
+    });
+  if (!shouldFold) {
+    return stats.map((row) => renderRow(row)).join('');
+  }
+  const cleanPassed = cleanRows.reduce((sum, row) => sum + row.passed, 0);
+  const cleanScored = cleanRows.reduce((sum, row) => sum + row.scored, 0);
+  const foldLabel = `▸ ${cleanRows.length} checks passing cleanly (≥ 90%, ${cleanPassed}/${cleanScored})`;
+  const foldRow = `<tr class="matrix-fold-row"><td colspan="${colSpan}"><button type="button" class="fold-toggle" aria-expanded="false" data-clean-fold data-count="${cleanRows.length}" data-passed="${cleanPassed}" data-scored="${cleanScored}">${escape(foldLabel)}</button></td></tr>`;
+  return attentionRows.map((row) => renderRow(row)).join('')
+    + foldRow
+    + cleanRows.map((row) => renderRow(row, 'data-clean-tail hidden')).join('');
 }
 
 function checkMatrixHtml(trials: Trial[]): string {
@@ -322,9 +506,9 @@ function checkMatrixHtml(trials: Trial[]): string {
     }
   }
   const activeGroups = groupOrder.filter((slug) => checkIds.some((id) => checkGroup.get(id) === slug));
-  const showTabs = activeGroups.length >= 2;
+  const isMultiGroup = activeGroups.length >= 2;
 
-  const stats = checkIds.map((id) => {
+  const stats: CheckRowStats[] = checkIds.map((id) => {
     const present = trials.map((trial, index) => ({ index, trial, check: trial.result?.quality?.checks?.[id] }));
     const scored = present.filter((entry) => entry.check !== undefined);
     const passed = scored.filter((entry) => entry.check!.choice === 'pass').length;
@@ -337,43 +521,24 @@ function checkMatrixHtml(trials: Trial[]): string {
   });
   stats.sort((a, b) => a.passRate - b.passRate || (a.meanProb ?? 1) - (b.meanProb ?? 1));
 
-  const tabsHtml = showTabs ? rubricTabsHtml(activeGroups, stats) : '';
-
   const trialHeaders = trials.map((trial, index) =>
     `<th scope="col" class="matrix-col" title="${escape(trial.trial)}"><a class="trial-jump" href="#trial-${index}" data-jump="trial-${index}">${escape(shortTrialLabel(trial.trial, index))}</a></th>`,
   ).join('');
 
-  const rows = stats.map((row) => {
-    const question = questionsById.get(row.id);
-    const labelHtml = question
-      ? `<span class="tip-wrap"><span class="tip-trigger" tabindex="0">${escape(labelForCheck(row.id))}</span><div class="tip-card" role="tooltip"><div class="tip-q">${escape(question.instructions)}</div><div class="tip-crit tip-pass"><strong>Pass when</strong><p>${escape(question.criteria.pass)}</p></div><div class="tip-crit tip-fail"><strong>Fail when</strong><p>${escape(question.criteria.fail)}</p></div></div></span>`
-      : escape(labelForCheck(row.id));
+  const colSpan = 3 + trials.length;
+  const wrapClass = trials.length > 10 ? 'matrix-wrap wide' : 'matrix-wrap';
 
-    const cells = row.present.map(({ index, trial, check }) => {
-      if (!check) return `<td class="matrix-cell"><span class="pill neutral">—</span></td>`;
-      const cls = check.choice === 'pass' ? 'pass' : 'fail';
-      const pFail = Math.max(0, Math.min(1, 1 - check.pass_probability));
-      const worst = check.files_total !== undefined ? lowestFileForCheck(trial, row.id) : null;
-      const filesLine = check.files_total !== undefined
-        ? `<div class="cell-pop-row"><span>Files passed</span><strong>${check.files_passed}/${check.files_total}</strong></div>`
-        : '';
-      const worstLine = worst
-        ? `<div class="cell-pop-row cell-pop-file"><span>Lowest</span><strong>${escape(worst.file)} (${percent(worst.prob)})</strong></div>`
-        : '';
-      const pop = `<div class="cell-pop" role="tooltip"><div class="cell-pop-row"><span>P(pass)</span><strong>${percent(check.pass_probability)}</strong></div><div class="cell-pop-row"><span>P(fail)</span><strong>${percent(pFail)}</strong></div><div class="cell-pop-row"><span>Confidence</span><strong>${percent(check.confidence)}</strong></div>${filesLine}${worstLine}</div>`;
-      return `<td class="matrix-cell"><span class="cell-wrap"><a class="pill ${cls} trial-jump" style="${probPillStyle(check.pass_probability)}" href="#trial-${index}" data-jump="trial-${index}">${escape(check.choice)} ${wholePercent(check.pass_probability)}</a>${pop}</span></td>`;
-    }).join('');
-    const ratioClass = row.scored > 0 && row.passed === row.scored ? 'pass' : row.scored > 0 ? 'fail' : 'neutral';
-    const groupAttr = showTabs ? ` data-rubric-group="${escape(row.group)}"` : '';
-    return `<tr${groupAttr}>
-      <td class="check-label-cell">${labelHtml}</td>
-      <td class="numeric"><span class="badge ${ratioClass}">${row.passed}/${row.scored}</span></td>
-      <td>${probBarHtml(row.meanProb, row.scored > 0 ? (row.passed === row.scored ? 'pass' : 'fail') : undefined)}</td>
-      ${cells}
-    </tr>`;
-  }).join('');
+  if (isMultiGroup) {
+    const groups = buildGroupStats(activeGroups, stats, trials);
+    const allExpanded = groups.every((group) => group.defaultExpanded);
+    const controlsHtml = `<div class="matrix-controls"><div class="view-switch" role="tablist" aria-label="Matrix layout"><button type="button" class="view-btn active" role="tab" aria-selected="true" data-matrix-mode="grouped">Grouped</button><button type="button" class="view-btn" role="tab" aria-selected="false" data-matrix-mode="flat">Worst first</button></div><button type="button" class="mini-btn" data-matrix-expand-all>${allExpanded ? 'Collapse all' : 'Expand all'}</button></div>`;
+    const groupedBody = `<tbody data-matrix-view="grouped">${renderGroupedRowsHtml(groups, questionsById)}</tbody>`;
+    const flatBody = `<tbody data-matrix-view="flat" hidden>${renderFlatRowsHtml(stats, questionsById, true, colSpan)}</tbody>`;
+    return `<section class="panel"><div class="matrix-bar"><h2>Check × Trial matrix</h2>${controlsHtml}</div><div class="${wrapClass}"><table class="matrix-table"><thead><tr><th scope="col">Check</th><th scope="col">Passed</th><th scope="col">Mean P(pass)</th>${trialHeaders}</tr></thead>${groupedBody}${flatBody}</table></div><p class="note">Grouped by rubric, sorted by worst check first. Rubric cells show the lowest check P(pass) in that group; red border marks a fail. Click a rubric row to expand, hover any check or cell for details, or click a cell to jump to that trial.</p></section>`;
+  }
 
-  return `<section class="panel"><h2>Check × Trial matrix</h2>${tabsHtml}<div class="matrix-wrap"><table class="matrix-table"><thead><tr><th scope="col">Check</th><th scope="col">Passed</th><th scope="col">Mean P(pass)</th>${trialHeaders}</tr></thead><tbody>${rows}</tbody></table></div><p class="note">Sorted by lowest pass rate first. Hover any check for rubric criteria or any cell for probabilities; click a cell to jump to that trial.</p></section>`;
+  const flatBody = `<tbody>${renderFlatRowsHtml(stats, questionsById, false, colSpan)}</tbody>`;
+  return `<section class="panel"><div class="matrix-bar"><h2>Check × Trial matrix</h2></div><div class="${wrapClass}"><table class="matrix-table"><thead><tr><th scope="col">Check</th><th scope="col">Passed</th><th scope="col">Mean P(pass)</th>${trialHeaders}</tr></thead>${flatBody}</table></div><p class="note">Sorted by lowest pass rate first; red border marks a fail. Hover any check for rubric criteria or any cell for probabilities; click a cell to jump to that trial.</p></section>`;
 }
 
 function checkRowHtml(id: string, question: Question, check: Check | undefined, showFilesCol: boolean): string {
@@ -586,14 +751,37 @@ button:hover{background:#edf2ff;border-color:var(--blue)}
 .trial-meta strong{color:var(--ink);font-weight:600;overflow-wrap:anywhere}
 .section-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:6px 0 8px}
 .section-bar h3{margin:0}
-.rubric-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
-.rubric-tab{min-height:32px;padding:5px 11px;font-size:.8125rem;font-weight:600;border:1px solid var(--line);border-radius:7px;background:#f8fafc;color:var(--ink);display:inline-flex;align-items:center}
-.rubric-tab:hover{background:#edf2ff;border-color:var(--blue)}
-.rubric-tab.active{background:var(--blue);color:white;border-color:var(--blue)}
-.rubric-tab.active .tab-pill.neutral{background:rgba(255,255,255,.22);color:white}
+.matrix-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 12px}
+.matrix-bar h2{margin:0}
+.matrix-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.view-switch{display:inline-flex;background:#f1f5f9;border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px}
+.view-btn{min-height:28px;padding:3px 10px;font-size:.8rem;font-weight:600;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+.view-btn:hover{background:rgba(49,88,207,.08);color:var(--ink)}
+.view-btn.active{background:white;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.08)}
 .matrix-wrap{overflow:visible}
-.matrix-table td,.matrix-table th{vertical-align:middle}
+.matrix-wrap.wide{overflow-x:auto}
+.matrix-wrap.wide th:first-child,.matrix-wrap.wide td:first-child{position:sticky;left:0;z-index:2;background:white}
+.matrix-wrap.wide .matrix-group-row td:first-child{background:#f8fafc}
+.matrix-table td,.matrix-table th{padding:7px 9px;vertical-align:middle}
+.matrix-table th:first-child,.matrix-table td:first-child{padding-left:0}
 .matrix-col,.matrix-cell{text-align:center}
+.matrix-group-row{background:#f8fafc;cursor:pointer}
+.matrix-group-row:hover{background:#f1f5f9}
+.matrix-group-row td{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.matrix-group-row td:first-child{padding-left:8px}
+.group-toggle{display:inline-flex;align-items:center;gap:7px;padding:2px 4px 2px 0;min-height:26px;border:0;background:transparent;color:var(--ink);font-weight:700;font-size:.9rem;text-align:left;cursor:pointer}
+.group-toggle:hover{background:transparent;border:0;color:var(--blue)}
+.group-caret{display:inline-block;width:12px;color:var(--muted);font-size:.82rem}
+.group-count{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:19px;padding:0 6px;border-radius:999px;background:#e2e8f0;color:var(--muted);font-size:.72rem;font-weight:600}
+.matrix-child-row td{padding-top:6px;padding-bottom:6px;background:white}
+.matrix-child-row td:first-child{padding-left:28px;font-weight:500}
+.group-tag{display:inline-block;margin-left:8px;padding:1px 6px;border-radius:4px;background:#f1f5f9;color:var(--muted);font-size:.72rem;font-weight:500;text-transform:none;vertical-align:middle}
+.heat-pill{display:inline-flex;align-items:center;justify-content:center;min-width:48px;padding:3px 7px;border-radius:6px;font-size:.78rem;font-weight:600;line-height:1.3;font-variant-numeric:tabular-nums;text-decoration:none;white-space:nowrap}
+.heat-pill.fail{box-shadow:inset 0 0 0 1.5px rgba(185,28,28,.45);font-weight:700}
+.heat-pill.trial-jump:hover{text-decoration:none;filter:brightness(.95)}
+.matrix-fold-row td{padding:5px 0;border-bottom:1px solid var(--line);background:#f8fafc}
+.fold-toggle{width:100%;min-height:30px;padding:4px 10px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:.8125rem;font-weight:600;text-align:left;cursor:pointer}
+.fold-toggle:hover{background:#eef2ff;color:var(--blue);border:0}
 .check-label-cell,.check-title{font-weight:600;text-transform:capitalize}
 .tip-wrap,.cell-wrap{position:relative;display:inline-flex;align-items:center}
 .tip-trigger{border-bottom:1px dotted #94a3b8;cursor:help;padding-bottom:1px}
@@ -615,8 +803,9 @@ button:hover{background:#edf2ff;border-color:var(--blue)}
 .cell-pop-row{display:flex;justify-content:space-between;gap:14px;font-variant-numeric:tabular-nums}
 .cell-pop-row span{color:#94a3b8}
 .cell-pop-row strong{color:#f8fafc;font-weight:600}
-.cell-pop-file{margin-top:4px;padding-top:4px;border-top:1px solid #334155;white-space:normal}
+.cell-pop-file,.cell-pop-check{margin-top:4px;padding-top:4px;border-top:1px solid #334155;white-space:normal}
 .cell-pop-file strong{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.74rem;text-align:right}
+.cell-pop-check strong{text-transform:capitalize;text-align:right}
 .trial-jump{color:inherit;text-decoration:none}
 .trial-jump:hover{text-decoration:underline}
 .prob-cell{display:flex;align-items:center;gap:8px;min-width:140px}
@@ -668,8 +857,8 @@ button:hover{background:#edf2ff;border-color:var(--blue)}
 .count{font-size:.8125rem;color:var(--muted);margin-left:auto}
 footer{font-size:.8125rem;color:var(--muted);margin-top:28px}
 [hidden]{display:none!important}
-@media(max-width:760px){main{padding:16px 14px 40px}.matrix-wrap{overflow-x:auto}.kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{padding:12px 14px;border-bottom:1px solid var(--line)}.kpi:nth-child(2n){border-right:0}.panel{padding:14px}.criteria{grid-template-columns:1fr;gap:12px}.trial-body{padding:14px}.count{margin-left:0}.trial-meta{flex-direction:column}}
-@media print{body{background:white}main{max-width:none;padding:0}.filters,.rubric-tabs,.mini-btn,.tip-card,.cell-pop{display:none!important}tr[data-rubric-group]{display:table-row!important}.panel,.trial{break-inside:avoid}.code-viewer{background:#f8fafc;color:var(--ink);border:1px solid var(--line)}.tok-kw{color:#6d28d9}.tok-ty{color:#b45309}.tok-fn{color:#1d4ed8}.tok-str{color:#15803d}.tok-num{color:#c2410c}.tok-cm{color:#64748b}.tok-const{color:#0e7490}.tok-ann{color:#be185d}}`;
+@media(max-width:760px){main{padding:16px 14px 40px}.matrix-wrap{overflow-x:auto}.matrix-wrap th:first-child,.matrix-wrap td:first-child{position:sticky;left:0;z-index:2;background:white}.matrix-wrap .matrix-group-row td:first-child{background:#f8fafc}.kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{padding:12px 14px;border-bottom:1px solid var(--line)}.kpi:nth-child(2n){border-right:0}.panel{padding:14px}.criteria{grid-template-columns:1fr;gap:12px}.trial-body{padding:14px}.count{margin-left:0}.trial-meta{flex-direction:column}}
+@media print{body{background:white}main{max-width:none;padding:0}.filters,.matrix-controls,.matrix-fold-row,.mini-btn,.tip-card,.cell-pop{display:none!important}tr[data-group-child],tr[data-clean-tail]{display:table-row!important}.panel,.trial{break-inside:avoid}.code-viewer{background:#f8fafc;color:var(--ink);border:1px solid var(--line)}.tok-kw{color:#6d28d9}.tok-ty{color:#b45309}.tok-fn{color:#1d4ed8}.tok-str{color:#15803d}.tok-num{color:#c2410c}.tok-cm{color:#64748b}.tok-const{color:#0e7490}.tok-ann{color:#be185d}}`;
 
 const SCRIPT = `
 const taskFilter=document.getElementById('task-filter');
@@ -679,19 +868,77 @@ function filter(){let visible=0;for(const trial of trials){trial.hidden=Boolean(
 taskFilter.addEventListener('change',filter);stateFilter.addEventListener('change',filter);
 document.getElementById('expand').addEventListener('click',()=>{for(const trial of trials)if(!trial.hidden)trial.open=true;});
 document.getElementById('collapse').addEventListener('click',()=>{for(const trial of trials)trial.open=false;});
+function setGroupExpanded(slug,expanded){
+  for(const btn of document.querySelectorAll('[data-group-toggle]')){
+    if(btn.dataset.groupToggle!==slug)continue;
+    btn.setAttribute('aria-expanded',expanded?'true':'false');
+    const caret=btn.querySelector&&btn.querySelector('.group-caret');
+    if(caret)caret.textContent=expanded?'▾':'▸';
+  }
+  for(const row of document.querySelectorAll('tr[data-group-row]')){
+    if(row.dataset.groupRow===slug&&row.classList)row.classList.toggle('expanded',expanded);
+  }
+  for(const row of document.querySelectorAll('tr[data-group-child]')){
+    if(row.dataset.groupChild===slug)row.hidden=!expanded;
+  }
+}
+function syncExpandAllBtn(){
+  const toggles=[...document.querySelectorAll('[data-group-toggle]')];
+  if(!toggles.length)return;
+  const anyCollapsed=toggles.some((btn)=>btn.getAttribute('aria-expanded')!=='true');
+  for(const btn of document.querySelectorAll('[data-matrix-expand-all]')){
+    btn.textContent=anyCollapsed?'Expand all':'Collapse all';
+  }
+}
 if(typeof document.addEventListener==='function'){
   document.addEventListener('click',(event)=>{
-    const rtab=event.target&&event.target.closest&&event.target.closest('.rubric-tab');
-    if(rtab){
-      const filterVal=rtab.dataset.rubricFilter;
-      for(const btn of document.querySelectorAll('.rubric-tab')){
-        const active=btn===rtab;
+    const jump=event.target&&event.target.closest&&event.target.closest('[data-jump]');
+    if(jump){
+      const target=document.getElementById(jump.dataset.jump);
+      if(target){target.hidden=false;target.open=true;}
+      return;
+    }
+    const modeBtn=event.target&&event.target.closest&&event.target.closest('[data-matrix-mode]');
+    if(modeBtn){
+      const mode=modeBtn.dataset.matrixMode;
+      for(const btn of document.querySelectorAll('[data-matrix-mode]')){
+        const active=btn===modeBtn;
         btn.classList.toggle('active',active);
         btn.setAttribute('aria-selected',active?'true':'false');
       }
-      for(const row of document.querySelectorAll('tr[data-rubric-group]')){
-        row.hidden=filterVal!=='all'&&row.dataset.rubricGroup!==filterVal;
+      for(const body of document.querySelectorAll('tbody[data-matrix-view]')){
+        body.hidden=body.dataset.matrixView!==mode;
       }
+      for(const btn of document.querySelectorAll('[data-matrix-expand-all]')){
+        btn.hidden=mode!=='grouped';
+      }
+      return;
+    }
+    const expandAll=event.target&&event.target.closest&&event.target.closest('[data-matrix-expand-all]');
+    if(expandAll){
+      const toggles=[...document.querySelectorAll('[data-group-toggle]')];
+      const openAll=toggles.some((btn)=>btn.getAttribute('aria-expanded')!=='true');
+      for(const btn of toggles)setGroupExpanded(btn.dataset.groupToggle,openAll);
+      syncExpandAllBtn();
+      return;
+    }
+    const gToggle=event.target&&event.target.closest&&event.target.closest('[data-group-toggle]');
+    const gRow=!gToggle&&event.target&&event.target.closest&&event.target.closest('tr[data-group-row]');
+    if(gToggle||gRow){
+      const slug=gToggle?gToggle.dataset.groupToggle:gRow.dataset.groupRow;
+      const btn=gToggle||[...document.querySelectorAll('[data-group-toggle]')].find((b)=>b.dataset.groupToggle===slug);
+      const next=btn?btn.getAttribute('aria-expanded')!=='true':true;
+      setGroupExpanded(slug,next);
+      syncExpandAllBtn();
+      return;
+    }
+    const fold=event.target&&event.target.closest&&event.target.closest('[data-clean-fold]');
+    if(fold){
+      const next=fold.getAttribute('aria-expanded')!=='true';
+      fold.setAttribute('aria-expanded',next?'true':'false');
+      for(const row of document.querySelectorAll('tr[data-clean-tail]'))row.hidden=!next;
+      const count=fold.dataset.count;
+      fold.textContent=next?'▾ Hide '+count+' checks passing cleanly':'▸ '+count+' checks passing cleanly (≥ 90%, '+fold.dataset.passed+'/'+fold.dataset.scored+')';
       return;
     }
     const tab=event.target&&event.target.closest&&event.target.closest('.file-tab');
@@ -717,11 +964,6 @@ if(typeof document.addEventListener==='function'){
       for(const box of boxes)box.open=openAll;
       toggle.textContent=openAll?'Hide all criteria':'Show all criteria';
       return;
-    }
-    const jump=event.target&&event.target.closest&&event.target.closest('[data-jump]');
-    if(jump){
-      const target=document.getElementById(jump.dataset.jump);
-      if(target){target.hidden=false;target.open=true;}
     }
   });
 }

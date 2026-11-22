@@ -73,9 +73,11 @@ Verification already run:
 ```
 
 Leave out your opinion of the code's quality, your preferred design, and any
-earlier review findings: they anchor the reviewer. If delegation is unavailable
-or the user prohibited it, review the change yourself and say in the handoff
-that the review was a self-review.
+earlier review findings: they anchor the reviewer. When a delegation trigger
+above applies and your harness provides a subagent tool, delegate rather than
+falling back to self-review for speed. Fall back to self-review only when
+delegation is unavailable in the harness or the user prohibited it, and say in
+the handoff that the review was a self-review.
 
 ## 5. Resolve findings
 

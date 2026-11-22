@@ -61,8 +61,8 @@ test('whole mode sends all production .kt files in one request and loads verifie
   const html = readFileSync(writeHtmlReport(out), 'utf8');
   assert.ok(html.includes('Production files (2)'));
   assert.ok(html.includes('rover/Direction.kt'));
-  assert.ok(html.includes('class="rubric-tabs"'));
-  assert.ok(html.includes('<span>SOLID</span>'));
+  assert.ok(html.includes('class="matrix-controls"'));
+  assert.ok(html.includes('<span class="group-name">SOLID</span>'));
 });
 
 test('per-file mode sends one request per .kt file with the same rubric and aggregates strictly', async (t) => {
