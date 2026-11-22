@@ -13,15 +13,38 @@ finding. **Default**: preferred; a departure is at most Optional.
 - **C2 (Rule)** Name things with terms from the problem domain, so that a value's
   meaning is clear without tracing where it came from.
 
-## Validation
+## Conditions and validation
 
-- **C3 (Default)** Give a non-obvious validation rule a name that says what makes
-  the input valid, and use that name at the point of use instead of an embedded
-  pattern or compound expression. Leave self-explanatory checks inline.
+- **C3 (Rule)** Give compound boolean conditions (`&&`, `||`), boundary or index
+  checks (such as `index < lastIndex` or `value == limit - 1`), and nested
+  conditional expressions (`if`/`else`) an intention-revealing domain name—as a
+  local `val`, property, or focused helper—instead of embedding them directly
+  inside `require` calls, `if` conditions, `when` branches, lambdas, or call
+  arguments (such as `copy(...)`), even when the inline expression is short.
+  Leave a single self-explanatory check (such as `isEmpty()`, `value > 0`, or
+  `subtotal > threshold`) inline in a standalone guard or as the direct return
+  expression of a small named function whose name states the rule.
 
   ```kotlin
   // Instead of: if (code.length == 8 && code.take(3).all(Char::isLetter)) …
   if (isWellFormedSku(code)) …
+
+  // Instead of: require(age >= minimumAge && hasConsent)
+  val isEligible = age >= minimumAge && hasConsent
+  require(isEligible)
+
+  // Instead of:
+  //   when (status) {
+  //       Status.RETRY -> copy(delay = if (attempts >= maxAttempts) maxDelay else delay * 2)
+  //       …
+  //   }
+  when (status) {
+      Status.RETRY -> copy(delay = nextBackoffDelay())
+      …
+  }
+
+  // Instead of: items.map { item -> if (item.active && item.expired) archive(item) else item }
+  items.map(::archiveIfExpired)
   ```
 - **C4 (Default)** Prefer ordinary string operations and explicit checks over
   regular expressions when they express the rule clearly. Use a regular
