@@ -20,8 +20,10 @@ runs for the affected code.
 Read the style guide files that apply (see the table in `SKILL.md`) before
 writing code, and follow them while writing, not only afterwards.
 
-- Make the smallest change that satisfies the requirements. Leave unrelated
-  improvements out and mention them in the handoff instead.
+- Keep scope tight: change only what is needed to satisfy the requirements, and
+  leave unrelated improvements out (mention them in the handoff instead). Do not
+  treat tight scope as a reason to collapse distinct responsibilities into one
+  file or dense function (`M5`, `M8`, `M11`).
 - Write a general solution, not one shaped to pass specific tests. If a test
   looks wrong, report it rather than working around it.
 - When a refactoring is needed, first make the behavior-preserving change and

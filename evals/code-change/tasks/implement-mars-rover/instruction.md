@@ -1,17 +1,16 @@
-# Mars Rover — benchmark v3, phase one
+# Mars Rover
 
-This is a fixed coding-interview task. Implement a Kotlin library that reads a rover
-setup and independent command sequences from a text file and returns their final
-positions as text. No CLI, network, file writes, UI, concurrency, logging, or third-party
-dependencies are needed.
+Implement a Kotlin library that reads a rover setup and independent command
+sequences from a text file and returns their final positions as text. Use only
+the Kotlin/JVM standard library and the configured test dependencies; no CLI,
+UI, network, or file output is needed.
 
 ## Public API
 
 Create this entry point in package `rover`, under `src/main/kotlin/rover/`.
 Do not change its name, parameter type, or return type. The returned string is
 the complete output defined below; do not print it or write an output file.
-No domain types or internal interfaces are prescribed. Choose the internal model
-freely. No source or tests are provided: write both as part of the evaluation.
+No starter source or tests are provided.
 
 ```kotlin
 package rover
@@ -88,8 +87,8 @@ call fail; do not skip invalid lines or return partial results. File-access
 failures, such as a missing or unreadable file, must propagate as
 `java.io.IOException` rather than being treated as malformed rover input.
 
-Do not modify the input file. Neither runs within a file nor independent calls
-may share mutable rover state.
+Do not modify the input file. Independent calls to `execute` must not affect one
+another.
 
 ## Examples
 
@@ -116,11 +115,8 @@ returns `"4 1 EAST"`. A sequence containing `m`, `M R`, or
 
 ## Tests & Verification
 
-Write tests under `src/test/kotlin/rover/` using the configured Kotlin/JUnit 5 stack.
-Cover this contract through its public API, including boundary cases and invalid
-inputs. Tests should create their own temporary input files and clean them up.
-Passing your own tests is necessary but not independent proof of correctness:
-reviewers assess both implementation and test quality against this specification.
-There is no mandated class hierarchy or algorithm.
+Write tests under `src/test/kotlin/rover/` using the configured Kotlin/JUnit 5 stack,
+covering normal behavior, boundary cases, and invalid inputs. Clean up any temporary
+input files created by tests.
 
 Verify with `./gradlew test`.

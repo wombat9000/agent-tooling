@@ -55,7 +55,7 @@ test('whole mode sends all production .kt files in one request and loads verifie
   assert.equal(result.deterministic.reward, 1);
   assert.equal(result.quality?.checks.immutable_state.choice, 'fail');
   assert.equal(result.quality?.checks.direct_readability.choice, 'pass');
-  assert.equal(result.quality?.pass_rate, 5 / 6);
+  assert.equal(result.quality?.pass_rate, 6 / 7);
 
   const html = readFileSync(writeHtmlReport(out), 'utf8');
   assert.ok(html.includes('Production files (2)'));
@@ -85,10 +85,10 @@ test('per-file mode sends one request per .kt file with the same rubric and aggr
   assert.equal(result.status, 'scored');
   assert.equal(result.scope, 'per-file');
   assert.equal(result.file_results?.length, 2);
-  // Direction.kt: 6/6, Rover.kt: 5/6 => mean file pass rate = 11/12
-  assert.ok(Math.abs((result.quality?.pass_rate ?? 0) - 11 / 12) < 1e-9);
-  // Strict aggregation: 5/6 checks passed in every file
-  assert.ok(Math.abs((result.quality?.all_files_pass_rate ?? 0) - 5 / 6) < 1e-9);
+  // Direction.kt: 7/7, Rover.kt: 6/7 => mean file pass rate = 13/14
+  assert.ok(Math.abs((result.quality?.pass_rate ?? 0) - 13 / 14) < 1e-9);
+  // Strict aggregation: 6/7 checks passed in every file
+  assert.ok(Math.abs((result.quality?.all_files_pass_rate ?? 0) - 6 / 7) < 1e-9);
   assert.equal(result.quality?.checks.immutable_state.choice, 'fail');
   assert.equal(result.quality?.checks.immutable_state.files_passed, 1);
   assert.equal(result.quality?.checks.immutable_state.files_total, 2);
@@ -130,4 +130,43 @@ test('per-file mode stops on first API error and dry-run/missing make no API cal
   const missing = await judgeCode({ task: MARS_ROVER, sourceDir: empty, model: 'liquid/d1.2-ultra', out: join(root, 'missing'), scope: 'whole' });
   assert.equal(missing.status, 'missing_report');
   assert.equal(missing.quality, null);
+});
+
+test('shared skill rubrics resolve via extends and reject invalid names or conflicting targets', async (t) => {
+  const { parseRubric, taskTarget } = await import('./judge_review.mts');
+  assert.equal(taskTarget(MARS_ROVER), 'production_code');
+  const resolved = parseRubric(MARS_ROVER, '');
+  assert.equal(resolved.rubric, 'code-change-production-code-v2');
+  assert.equal(resolved.target, 'production_code');
+  assert.equal(Object.keys(resolved.questions).length, 7);
+
+  const root = mkdtempSync(join(tmpdir(), 'code-change-shared-rubric-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const makeTask = (name: string, rubricJson: unknown) => {
+    const dir = join(root, name);
+    mkdirSync(join(dir, 'tests'), { recursive: true });
+    writeFileSync(join(dir, 'tests/judge.json'), JSON.stringify(rubricJson));
+    return dir;
+  };
+
+  const extended = makeTask('extended', {
+    extends: 'production-code',
+    rubric: 'custom-kata-v1',
+    questions: {
+      extra_check: {
+        type: 'choice',
+        instructions: 'Extra check?',
+        criteria: { pass: 'Passes.', fail: 'Fails.' },
+      },
+    },
+  });
+  const parsedExtended = parseRubric(extended, '');
+  assert.equal(parsedExtended.rubric, 'custom-kata-v1');
+  assert.equal(parsedExtended.target, 'production_code');
+  assert.equal(Object.keys(parsedExtended.questions).length, 8);
+  assert.ok(parsedExtended.questions.extra_check);
+
+  assert.throws(() => parseRubric(makeTask('missing', { extends: 'does-not-exist' }), ''), /Unknown shared rubric/);
+  assert.throws(() => parseRubric(makeTask('traversal', { extends: '../evil' }), ''), /Invalid shared rubric name/);
+  assert.throws(() => parseRubric(makeTask('conflict', { extends: 'production-code', target: 'review' }), ''), /conflicts with shared rubric/);
 });

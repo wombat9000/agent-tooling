@@ -37,10 +37,12 @@ See also `C7`: no layers for hypothetical future variation.
   validation or remember a sequence of preparatory calls.
 - **M4 (Default)** Return meaningful results rather than intermediate structures
   that callers must interpret using knowledge of the implementation.
-- **M5 (Rule)** Write workflow code as a sequence of meaningful operations that a
-  reader can follow without deciphering mechanics. Keep storage details (query
-  construction, row mapping) with the storage code, and protocol parsing,
-  encoding and interaction at the system boundaries, both incoming and outgoing.
+- **M5 (Rule)** Write workflow and entry-point code as a sequence of meaningful
+  operations that a reader can follow without deciphering mechanics; delegate
+  low-level boundary and domain mechanics to focused units rather than inlining
+  them. Keep storage details (query construction, row mapping) with the storage
+  code, and protocol parsing, encoding and interaction at the system boundaries,
+  both incoming and outgoing.
 - **M6 (Rule)** Apply the deletion test to a suspected pass-through layer: imagine
   removing it. If callers would have to duplicate meaningful rules, it earns its
   place. If only forwarding disappears, remove it, unless it has another concrete
@@ -70,10 +72,14 @@ history.
 ## Files
 
 - **M11 (Default)** One primary type or responsibility per file, with a filename
-  that names it. Keep supporting types and helpers with their owner when they are
-  implementation details or are read and changed together. Moving code into
-  another file does not by itself create a better abstraction.
-- **M12 (Rule)** Do not widen visibility only to make a file layout or a test work.
+  that names it. When responsibilities are separated (`M8`), give each primary
+  responsibility its own file. Keep tightly coupled supporting types and helpers
+  with their owner when they are implementation details or are read and changed
+  together.
+- **M12 (Rule)** Do not widen visibility into the public API only to make a file
+  layout or a test work. Using module- or package-internal visibility (such as
+  Kotlin `internal`) so separated responsibilities (`M8`, `M11`) can live in their
+  own files is fine; exposing internal types or helpers as public is not.
 
 ## Examples
 
