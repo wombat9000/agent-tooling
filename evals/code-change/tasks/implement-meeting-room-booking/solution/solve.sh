@@ -239,8 +239,12 @@ class BookingController(private val service: BookingService) {
     }
 
     private fun parseTimestamp(value: String): Instant {
-        require(timestampPattern.matches(value) && !value.startsWith("0000")) { "Expected a whole-second UTC timestamp" }
-        return OffsetDateTime.parse(value).toInstant()
+        val hasWholeSecondUtcFormat = timestampPattern.matches(value)
+        require(hasWholeSecondUtcFormat) { "Expected a whole-second UTC timestamp" }
+        val parsed = OffsetDateTime.parse(value)
+        val isSupportedYear = parsed.year in 1..9999
+        require(isSupportedYear) { "Expected a year from 0001 through 9999" }
+        return parsed.toInstant()
     }
 
     private fun Booking.toResponse(): Response = Response(id, roomId, slot.startsAt.toString(), slot.endsAt.toString())
