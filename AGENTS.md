@@ -34,6 +34,6 @@ When the user asks to push changes to skills, treat that request as authorizatio
 4. Create an annotated tag at that commit, then push the branch and tag.
 5. Report the pushed commit and release tag. If either push fails, report the partial result rather than claiming the release succeeded.
 
-Skip tagging for repository-documentation-only changes. Changes to skill instructions and bundled supporting documents count as skill changes, not repository-documentation-only changes.
+Skip tagging for repository-documentation-only changes and repo-internal skills under `.agents/skills/` (marked `metadata.internal: true`). Changes to published skill instructions and bundled supporting documents under `skills/` count as skill changes, not repository-documentation-only changes.
 
 Never move or overwrite a published release tag; publish a new version instead. Outside the authorization described above, commit, tag, push, or publish a release only when the user authorizes the action.
