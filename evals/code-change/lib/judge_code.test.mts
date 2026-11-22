@@ -136,7 +136,7 @@ test('shared skill rubrics resolve via extends and reject invalid names or confl
   const { parseRubric, taskTarget } = await import('./judge_review.mts');
   assert.equal(taskTarget(MARS_ROVER), 'production_code');
   const resolved = parseRubric(MARS_ROVER, '');
-  assert.equal(resolved.rubric, 'code-change-production-code-v2');
+  assert.equal(resolved.rubric, 'code-change-production-code-v3');
   assert.equal(resolved.target, 'production_code');
   assert.equal(Object.keys(resolved.questions).length, 7);
 
