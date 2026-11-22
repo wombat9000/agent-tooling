@@ -248,24 +248,27 @@ test('code reports render Check x Trial matrix, failure-first checks, and dedupl
   // Raw script tags inside highlighted Kotlin strings remain escaped.
   assert.ok(!html.includes('<script>x</script>'));
   assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'));
-  // Without rubric_groups, no rubric filter tabs are shown.
-  assert.ok(!html.includes('class="rubric-tabs"'));
+  // Without rubric_groups, no grouped-matrix controls are shown.
+  assert.ok(!html.includes('class="matrix-controls"'));
+  assert.ok(html.includes('class="heat-pill fail trial-jump"'));
+  assert.ok(html.includes('class="heat-pill pass trial-jump"'));
 });
 
-test('multi-rubric reports render per-rubric matrix tabs and filter rows interactively', (t) => {
+test('multi-rubric reports render collapsible rubric groups, weakest-link cells, and interactive Grouped / Worst-first views', (t) => {
   const f = fixture(t);
-  const trial = putTrial(f.directory, 'one', ['pass', 'fail', 'pass'], {
+  const trial = putTrial(f.directory, 'one', ['pass', 'pass', 'fail', 'pass'], {
     rubric: 'domain-modelling-v1+solid-v1',
     rubric_groups: {
-      'domain-modelling': ['check_0'],
-      solid: ['check_1', 'check_2'],
+      'domain-modelling': ['check_0', 'check_1'],
+      solid: ['check_2', 'check_3'],
     },
     quality: {
-      pass_rate: 2 / 3,
+      pass_rate: 3 / 4,
       checks: {
         check_0: { choice: 'pass', pass_probability: 0.98, confidence: 0.96 },
-        check_1: { choice: 'fail', pass_probability: 0.2, confidence: 0.6 },
-        check_2: { choice: 'pass', pass_probability: 0.67, confidence: 0.34 },
+        check_1: { choice: 'pass', pass_probability: 0.95, confidence: 0.9 },
+        check_2: { choice: 'fail', pass_probability: 0.2, confidence: 0.6 },
+        check_3: { choice: 'pass', pass_probability: 0.67, confidence: 0.34 },
       },
     },
   });
@@ -275,33 +278,85 @@ test('multi-rubric reports render per-rubric matrix tabs and filter rows interac
     reports: [trial],
   }));
   const html = readFileSync(writeHtmlReport(f.directory), 'utf8');
-  assert.ok(html.includes('class="rubric-tabs"'));
-  assert.ok(html.includes('<span>All</span><span class="tab-pill fail">2/3</span>'));
-  assert.ok(html.includes('<span>Domain Modelling</span><span class="tab-pill pass">1/1</span>'));
-  assert.ok(html.includes('<span>SOLID</span><span class="tab-pill fail">1/2</span>'));
-  // Passing cells with different probabilities get distinct gradient colors.
-  const passStyles = [...html.matchAll(/class="pill pass trial-jump" style="([^"]+)"/g)].map((m) => m[1]);
-  assert.equal(passStyles.length, 2);
-  assert.notEqual(passStyles[0], passStyles[1]);
+  assert.ok(html.includes('class="matrix-controls"'));
+  // Failing group (SOLID) is sorted first and auto-expanded; clean group (Domain Modelling) starts collapsed.
+  assert.ok(html.indexOf('data-group-row="solid"') < html.indexOf('data-group-row="domain-modelling"'));
+  assert.ok(html.includes('data-group-toggle="solid"'));
+  assert.ok(html.includes('aria-expanded="true" data-group-toggle="solid"'));
+  assert.ok(html.includes('aria-expanded="false" data-group-toggle="domain-modelling"'));
+  // Group cells show weakest-link probability and lowest check name in popover.
+  assert.ok(html.includes('<span>Lowest</span><strong>check 2 (20.0%)</strong>'));
+  assert.ok(html.includes('<span>Lowest</span><strong>check 1 (95.0%)</strong>'));
+  // Compact heatmap cells omit repeated pass/fail words and vary gradient color by probability.
+  const passStyles = [...html.matchAll(/class="heat-pill pass trial-jump" style="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(passStyles.length >= 4);
+  assert.ok(new Set(passStyles).size >= 3);
+  assert.ok(!html.includes('>pass 98%<'));
+  assert.ok(html.includes('>98%</a>'));
+  assert.ok(html.includes('>20%</a>'));
+  // Clean tail (check_0 and check_1, both >=90% and 1/1) is folded in Worst-first view.
+  assert.ok(html.includes('data-clean-fold'));
+  assert.ok(html.includes('2 checks passing cleanly (≥ 90%, 2/2)'));
 
-  const tabs = [...html.matchAll(/<button type="button" class="rubric-tab([^"]*)" role="tab" aria-selected="([^"]*)" data-rubric-filter="([^"]*)">/g)]
+  const makeBtn = (initialClasses: string[], attrs: Record<string, string>, dataset: Record<string, string>, text = '') => {
+    const classes = new Set(initialClasses);
+    const caret = { textContent: attrs['aria-expanded'] === 'true' ? '▾' : '▸' };
+    const btn = {
+      dataset,
+      classes,
+      attrs,
+      textContent: text,
+      hidden: false,
+      classList: { toggle(cls: string, force: boolean) { if (force) classes.add(cls); else classes.delete(cls); } },
+      getAttribute(k: string) { return attrs[k] ?? null; },
+      setAttribute(k: string, v: string) { attrs[k] = v; },
+      querySelector(sel: string) { return sel === '.group-caret' ? caret : null; },
+      closest(sel: string) {
+        if (sel === '[data-matrix-mode]' && 'matrixMode' in dataset) return btn;
+        if (sel === '[data-matrix-expand-all]' && 'matrixExpandAll' in dataset) return btn;
+        if (sel === '[data-group-toggle]' && 'groupToggle' in dataset) return btn;
+        if (sel === '[data-clean-fold]' && 'cleanFold' in dataset) return btn;
+        return null;
+      },
+      caret,
+    };
+    return btn;
+  };
+
+  const modeBtns = [...html.matchAll(/<button type="button" class="view-btn([^"]*)" role="tab" aria-selected="([^"]*)" data-matrix-mode="([^"]*)">/g)]
+    .map((m) => makeBtn(['view-btn', ...m[1].trim().split(/\s+/).filter(Boolean)], { 'aria-selected': m[2] }, { matrixMode: m[3] }));
+  const expandAllBtn = makeBtn(['mini-btn'], {}, { matrixExpandAll: '' }, 'Expand all');
+  const groupToggles = [...html.matchAll(/<button type="button" class="group-toggle" aria-expanded="([^"]*)" data-group-toggle="([^"]*)">/g)]
+    .map((m) => makeBtn(['group-toggle'], { 'aria-expanded': m[1] }, { groupToggle: m[2] }));
+  const groupRows = [...html.matchAll(/<tr class="matrix-group-row([^"]*)" data-group-row="([^"]*)">/g)]
     .map((m) => {
-      const classes = new Set(['rubric-tab', ...m[1].trim().split(/\s+/).filter(Boolean)]);
-      const attrs: Record<string, string> = { 'aria-selected': m[2] };
-      const btn = {
-        dataset: { rubricFilter: m[3] },
-        classes,
-        attrs,
-        classList: { toggle(cls: string, force: boolean) { if (force) classes.add(cls); else classes.delete(cls); } },
-        setAttribute(k: string, v: string) { attrs[k] = v; },
-        closest(sel: string) { return sel === '.rubric-tab' ? btn : null; },
-      };
-      return btn;
+      const classes = new Set(['matrix-group-row', ...m[1].trim().split(/\s+/).filter(Boolean)]);
+      return { dataset: { groupRow: m[2] }, classes, classList: { toggle(c: string, f: boolean) { if (f) classes.add(c); else classes.delete(c); } } };
     });
-  const rows = [...html.matchAll(/<tr data-rubric-group="([^"]*)">/g)]
-    .map((m) => ({ dataset: { rubricGroup: m[1] }, hidden: false }));
-  assert.equal(tabs.length, 3);
-  assert.equal(rows.length, 3);
+  const childRows = [...html.matchAll(/<tr class="matrix-child-row" data-group-child="([^"]*)"([^>]*)>/g)]
+    .map((m) => ({ dataset: { groupChild: m[1] }, hidden: m[2].includes('hidden') }));
+  const viewBodies = [...html.matchAll(/<tbody data-matrix-view="([^"]*)"([^>]*)>/g)]
+    .map((m) => ({ dataset: { matrixView: m[1] }, hidden: m[2].includes('hidden') }));
+  const foldMatch = html.match(/<button type="button" class="fold-toggle" aria-expanded="([^"]*)" data-clean-fold data-count="([^"]*)" data-passed="([^"]*)" data-scored="([^"]*)">/)!;
+  const foldBtn = makeBtn(
+    ['fold-toggle'],
+    { 'aria-expanded': foldMatch[1] },
+    { cleanFold: '', count: foldMatch[2], passed: foldMatch[3], scored: foldMatch[4] },
+  );
+  const cleanTailRows = [...html.matchAll(/<tr class="matrix-flat-row" data-clean-tail([^>]*)>/g)]
+    .map((m) => ({ hidden: m[1].includes('hidden') }));
+
+  assert.equal(modeBtns.length, 2);
+  assert.equal(groupToggles.length, 2);
+  assert.equal(childRows.length, 4);
+  assert.deepEqual(childRows.map((r) => [r.dataset.groupChild, r.hidden]), [
+    ['solid', false],
+    ['solid', false],
+    ['domain-modelling', true],
+    ['domain-modelling', true],
+  ]);
+  assert.equal(cleanTailRows.length, 2);
+  assert.deepEqual(cleanTailRows.map((r) => r.hidden), [true, true]);
 
   type Control = { value: string; textContent: string; addEventListener: (name: string, handler: () => void) => void };
   const controls = Object.fromEntries(['task-filter', 'state-filter', 'visible-count', 'expand', 'collapse'].map((id) => {
@@ -314,8 +369,13 @@ test('multi-rubric reports render per-rubric matrix tabs and filter rows interac
     document: {
       getElementById: (id: string) => controls[id],
       querySelectorAll: (sel: string) => {
-        if (sel === '.rubric-tab') return tabs;
-        if (sel === 'tr[data-rubric-group]') return rows;
+        if (sel === '[data-matrix-mode]') return modeBtns;
+        if (sel === '[data-matrix-expand-all]') return [expandAllBtn];
+        if (sel === '[data-group-toggle]') return groupToggles;
+        if (sel === 'tr[data-group-row]') return groupRows;
+        if (sel === 'tr[data-group-child]') return childRows;
+        if (sel === 'tbody[data-matrix-view]') return viewBodies;
+        if (sel === 'tr[data-clean-tail]') return cleanTailRows;
         return [];
       },
       addEventListener(name: string, fn: (event: { target: unknown }) => void) {
@@ -325,25 +385,28 @@ test('multi-rubric reports render per-rubric matrix tabs and filter rows interac
   });
   assert.ok(docClick);
 
-  // Click the "SOLID" tab (index 2): only solid rows remain visible.
-  docClick({ target: tabs[2] });
-  assert.deepEqual(tabs.map((b) => b.classes.has('active')), [false, false, true]);
-  assert.deepEqual(tabs.map((b) => b.attrs['aria-selected']), ['false', 'false', 'true']);
-  assert.deepEqual(
-    rows.filter((r) => !r.hidden).map((r) => r.dataset.rubricGroup),
-    ['solid', 'solid'],
-  );
+  // Clicking collapsed Domain Modelling expands its rows and flips button to Collapse all.
+  docClick({ target: groupToggles[1] });
+  assert.equal(groupToggles[1].attrs['aria-expanded'], 'true');
+  assert.equal(groupToggles[1].caret.textContent, '▾');
+  assert.deepEqual(childRows.map((r) => r.hidden), [false, false, false, false]);
+  assert.equal(expandAllBtn.textContent, 'Collapse all');
 
-  // Click "Domain Modelling" (index 1): only domain-modelling row remains visible.
-  docClick({ target: tabs[1] });
-  assert.deepEqual(
-    rows.filter((r) => !r.hidden).map((r) => r.dataset.rubricGroup),
-    ['domain-modelling'],
-  );
+  // Clicking Collapse all collapses every group and flips button back to Expand all.
+  docClick({ target: expandAllBtn });
+  assert.deepEqual(childRows.map((r) => r.hidden), [true, true, true, true]);
+  assert.equal(expandAllBtn.textContent, 'Expand all');
 
-  // Click "All" (index 0): all 3 rows become visible again.
-  docClick({ target: tabs[0] });
-  assert.equal(rows.filter((r) => !r.hidden).length, 3);
+  // Switching to Worst first shows flat tbody and hides Expand all.
+  docClick({ target: modeBtns[1] });
+  assert.deepEqual(viewBodies.map((b) => [b.dataset.matrixView, b.hidden]), [['grouped', true], ['flat', false]]);
+  assert.equal(expandAllBtn.hidden, true);
+
+  // Expanding clean tail reveals the 2 clean rows.
+  docClick({ target: foldBtn });
+  assert.equal(foldBtn.attrs['aria-expanded'], 'true');
+  assert.deepEqual(cleanTailRows.map((r) => r.hidden), [false, false]);
+  assert.equal(foldBtn.textContent, '▾ Hide 2 checks passing cleanly');
 });
 
 
