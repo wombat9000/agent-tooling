@@ -85,7 +85,7 @@ test('full run defaults and baseline overrides produce the intended Harbor argum
   assert.equal(defaults[defaults.indexOf('-n') + 1], '4');
   assert.ok(defaults.includes('reasoning_effort=high'));
   assert.ok(defaults.includes('config={"service_tier":"priority"}'));
-  const child = f.run(['run', '--baseline', '--task', 'review-clean-change', '--model', 'openai/example',
+  const child = f.run(['run', '--baseline', '--task', 'review-seeded-bug', '--model', 'openai/example',
     '--attempts', '2', '--concurrency', '1', '--auth', 'api', '--effort', 'medium', '--service-tier', 'default'], {
     OPENAI_API_KEY: 'fake-agent-key', CODEX_FORCE_AUTH_JSON: '1',
   });
@@ -99,7 +99,7 @@ test('full run defaults and baseline overrides produce the intended Harbor argum
   assert.ok(overridden.args.includes('config={"service_tier":"default"}'));
   assert.equal(overridden.args[overridden.args.indexOf('-k') + 1], '2');
   assert.equal(overridden.args[overridden.args.indexOf('-n') + 1], '1');
-  assert.ok(overridden.args.includes(join(ROOT, 'evals/code-change/tasks/review-clean-change')));
+  assert.ok(overridden.args.includes(join(ROOT, 'evals/code-change/tasks/review-seeded-bug')));
 });
 
 test('dry runs preview commands without starting Harbor, and EVAL_MODEL can set the model', (t) => {
@@ -255,7 +255,7 @@ test('report rebuilds saved judgments without credentials or network access', (t
 test('Harbor commands stage lib/grade_review.mts into target tasks and dry-run leaves tasks untouched', (t) => {
   const f = fixture(t);
   const source = readFileSync(join(ROOT, 'evals/code-change/lib/grade_review.mts'), 'utf8');
-  const tasks = ['canary', 'review-clean-change', 'review-seeded-bug'];
+  const tasks = ['canary', 'review-seeded-bug'];
   const staged = (task: string) => join(ROOT, 'evals/code-change/tasks', task, 'tests/grade_review.mts');
   const clear = () => {
     for (const task of tasks) rmSync(staged(task), { force: true });
@@ -270,7 +270,6 @@ test('Harbor commands stage lib/grade_review.mts into target tasks and dry-run l
   writeFileSync(staged('canary'), '// stale\n');
   assert.equal(f.run(['canary']).status, 0);
   assert.equal(readFileSync(staged('canary'), 'utf8'), source);
-  assert.ok(!existsSync(staged('review-clean-change')));
   assert.ok(!existsSync(staged('review-seeded-bug')));
 
   clear();

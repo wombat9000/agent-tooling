@@ -36,6 +36,9 @@ if [ "$has_prod" -eq 1 ]; then
     grep -Eq '<testsuite .*tests="[1-9][0-9]*"' "$xml" && \
     ! grep -Eq '(skipped|failures|errors)="[1-9]' "$xml"; then
     contract_tests_pass=1
+  elif [ -f "$xml" ]; then
+    echo "--- $xml ---"
+    cat "$xml"
   fi
 fi
 

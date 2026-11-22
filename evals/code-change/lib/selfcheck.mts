@@ -68,13 +68,20 @@ test('lowering the seeded bug severity fails', () => {
   assert.equal(grade(report, expected('review-seeded-bug')).severity, 0);
 });
 
-test('an invented finding above Optional fails on the clean change', () => {
-  const report = referenceReport('review-clean-change') + [
-    '\n### Should fix — Thresholds should be configurable',
+test('an invented finding above Optional fails restraint grading', () => {
+  const cleanExpected = { verdicts: ['ready'], must_find: [], max_unmatched_severity: 'Optional' };
+  const report = [
+    'Verdict: ready',
+    '',
+    '### Should fix — Thresholds should be configurable',
     '- Location: src/main/kotlin/shop/ShippingPolicy.kt:12',
-    '- Category: design', '- Evidence: hypothesis — may change later', '',
+    '- Category: design',
+    '- Evidence: hypothesis — may change later',
+    '',
+    'Checks run: traced diff',
+    'Not assessed: none',
   ].join('\n');
-  const scores = grade(report, expected('review-clean-change'));
+  const scores = grade(report, cleanExpected);
   assert.equal(scores.restraint, 0);
   assert.equal(scores.reward, 0);
 });
@@ -104,8 +111,8 @@ test('Unicode decimal line numbers retain the reference scores', () => {
 });
 
 test('Unicode letters do not end verdict words or guideline IDs', () => {
-  const clean = referenceReport('review-clean-change').replace('Verdict: ready', 'Verdict: readyé');
-  assert.equal(grade(clean, expected('review-clean-change')).verdict, 0);
+  const clean = 'Verdict: readyé\n\nChecks run: traced diff\nNot assessed: none\n';
+  assert.equal(grade(clean, { verdicts: ['ready'], must_find: [] }).verdict, 0);
   const canary = referenceReport('canary').replaceAll('M3', 'éM3').replaceAll('T2', 'T2é');
   assert.equal(grade(canary, expected('canary')).guideline, 0);
 });
@@ -114,11 +121,11 @@ test('CLI writes reward.json and stdout for present and missing reports; bad arg
   const out = mkdtempSync(join(tmpdir(), 'code-change-cli-'));
   try {
     const report = join(out, 'REVIEW.md');
-    writeFileSync(report, referenceReport('review-clean-change'));
+    writeFileSync(report, referenceReport('review-seeded-bug'));
     for (const [path, reward] of [[report, 1], [join(out, 'missing.md'), 0]] as const) {
       const resultPath = join(out, 'nested/reward.json');
       const stdout = execFileSync(process.execPath, [join(LIB, 'grade_review.mts'),
-        '--report', path, '--expected', join(TASKS, 'review-clean-change/tests/expected.json'),
+        '--report', path, '--expected', join(TASKS, 'review-seeded-bug/tests/expected.json'),
         '--out', resultPath], { encoding: 'utf8' });
       const result = JSON.parse(readFileSync(resultPath, 'utf8'));
       assert.equal(result.reward, reward);

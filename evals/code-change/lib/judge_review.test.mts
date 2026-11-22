@@ -82,7 +82,7 @@ test('both models use the Decisions endpoint; scores and raw answers are saved w
 
 test('dry runs need no key, include full free-form reviews, and load every task rubric', async (t) => {
   delete process.env.OPENROUTER_API_KEY;
-  for (const task of ['canary', 'review-clean-change', 'review-seeded-bug']) {
+  for (const task of ['canary', 'review-seeded-bug']) {
     const options = { ...fixture(t, task), dryRun: true };
     const report = 'The >= comparison gives an order of exactly 100.00 the discount; it should use >.';
     writeFileSync(options.report, report);
