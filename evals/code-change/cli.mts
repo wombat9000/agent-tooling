@@ -7,7 +7,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { judgeReview } from './lib/judge_review.mts';
+import { judgeReview, taskTarget } from './lib/judge_review.mts';
+import { judgeCode, type JudgeScope } from './lib/judge_code.mts';
 import { latestCodexRun, reportsFromRun } from './lib/run_reports.mts';
 import { latestJudgment, writeHtmlReport } from './lib/html_report.mts';
 
@@ -24,7 +25,7 @@ Commands:
   smoke                 Run Harbor oracle and nop checks; Docker required
   canary                Run one skill-loading trial with Codex
   run                   Run all tasks with the skill (5 attempts, 4 concurrent)
-  judge [task] [report]  Score saved reviews (default: latest completed Codex run)
+  judge [task] [report]  Score saved reviews or code (default: latest completed Codex run)
   report [DIRECTORY]    Build HTML from saved judge scores; no API call
 
 Run options (canary, run):
@@ -43,6 +44,7 @@ Judge options:
   --latest              Use the latest completed Codex run (default without a report)
   --run DIRECTORY       Use a specific saved Harbor run
   --judge NAME          d1 (default), jev, or a full OpenRouter model ID
+  --scope MODE          whole (default) or per-file (production_code tasks)
   --out DIRECTORY       New output directory (default: a unique saved run)
   --open                Open the HTML report in your browser
 
@@ -78,10 +80,12 @@ function taskDirectories(name?: string): string[] {
     .map((entry) => join(TASKS, entry));
 }
 
-/** Stage the shared grader into each task's tests/ folder before Harbor uploads it. */
+/** Stage the shared review grader into review tasks' tests/ folders before Harbor uploads them. */
 function syncGrader(tasks: string[]): void {
   for (const dir of tasks) {
-    copyFileSync(GRADER, join(dir, 'tests/grade_review.mts'));
+    if (existsSync(join(dir, 'tests/expected.json'))) {
+      copyFileSync(GRADER, join(dir, 'tests/grade_review.mts'));
+    }
   }
 }
 
@@ -166,6 +170,7 @@ async function main(): Promise<number> {
     return run(process.execPath, ['--test',
       'evals/code-change/lib/selfcheck.mts',
       'evals/code-change/lib/judge_review.test.mts',
+      'evals/code-change/lib/judge_code.test.mts',
       'evals/code-change/lib/run_reports.test.mts',
       'evals/code-change/lib/html_report.test.mts',
       'evals/code-change/cli.test.mts',
@@ -189,12 +194,17 @@ async function main(): Promise<number> {
   if (command === 'judge') {
     const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
       ...common, judge: { type: 'string', default: 'd1' }, out: { type: 'string' },
+      scope: { type: 'string', default: 'whole' },
       latest: { type: 'boolean', default: false }, run: { type: 'string' },
       open: { type: 'boolean', default: false },
     } });
-    if (positionals.length > 2) throw new Error('Usage: pnpm eval judge [task] [report] [--latest | --run DIRECTORY] [--judge d1|jev|MODEL]');
+    if (positionals.length > 2) throw new Error('Usage: pnpm eval judge [task] [report] [--latest | --run DIRECTORY] [--judge d1|jev|MODEL] [--scope whole|per-file]');
     if (positionals.some((value) => value.length === 0)) throw new Error('Task and report arguments must not be empty.');
     if (values.run !== undefined && !values.run.trim()) throw new Error('--run must name a saved run directory.');
+    if (values.scope !== 'whole' && values.scope !== 'per-file') {
+      throw new Error('--scope must be whole or per-file');
+    }
+    const scope: JudgeScope = values.scope;
     if ((values.latest && values.run) || (positionals.length === 2 && (values.latest || values.run))) {
       throw new Error('Choose one report source: a report path, --latest, or --run DIRECTORY.');
     }
@@ -202,16 +212,20 @@ async function main(): Promise<number> {
     const directory = task ? taskDirectory(task) : undefined;
     const model = Object.hasOwn(JUDGES, values.judge) ? JUDGES[values.judge] : values.judge;
     if (!model.trim()) throw new Error('--judge must name a model');
+    const modelSlug = `${model.replace(/[^a-zA-Z0-9.-]/g, '-')}${scope === 'per-file' ? '-per-file' : ''}`;
     if (!report) {
       const source = values.run ? resolve(values.run) : latestCodexRun(join(RESULTS, 'harbor'));
       const reports = reportsFromRun(source, TASKS, task);
+      if (scope === 'per-file' && reports.some((entry) => entry.target !== 'production_code')) {
+        throw new Error('--scope per-file applies only to production_code tasks.');
+      }
       if (!values['dry-run'] && !process.env.OPENROUTER_API_KEY?.trim()) throw new Error('Set OPENROUTER_API_KEY before judging.');
       const out = values.out ? resolve(values.out)
-        : join(RESULTS, 'judges', basename(source), `${model.replace(/[^a-zA-Z0-9.-]/g, '-')}-${randomUUID()}`);
+        : join(RESULTS, 'judges', basename(source), `${modelSlug}-${randomUUID()}`);
       mkdirSync(dirname(out), { recursive: true });
       mkdirSync(out);
       const summary = {
-        source_run: source, model,
+        source_run: source, model, scope,
         reports: reports.map((entry) => ({ ...entry, status: 'pending', result_dir: join(out, entry.trial),
           quality_pass_rate: null as number | null, error: null as string | null })),
       };
@@ -221,12 +235,15 @@ async function main(): Promise<number> {
       };
       saveSummary();
       console.log(`Run: ${source}`);
-      console.log(`Judge: ${model}; reports: ${reports.length}`);
+      console.log(`Judge: ${model} (${scope}); reports: ${reports.length}`);
       console.log(`Results: ${out}`);
       for (const entry of summary.reports) {
         try {
-          const result = await judgeReview({ task: taskDirectory(entry.task), report: entry.report,
-            model, out: entry.result_dir, dryRun: values['dry-run'] });
+          const result = entry.target === 'production_code'
+            ? await judgeCode({ task: taskDirectory(entry.task), sourceDir: entry.report,
+                model, out: entry.result_dir, scope, rewardPath: entry.rewardPath, dryRun: values['dry-run'] })
+            : await judgeReview({ task: taskDirectory(entry.task), report: entry.report,
+                model, out: entry.result_dir, dryRun: values['dry-run'] });
           entry.status = result.status;
           entry.quality_pass_rate = result.quality?.pass_rate ?? null;
           entry.error = result.error ?? null;
@@ -243,11 +260,20 @@ async function main(): Promise<number> {
       }
       return showReport(join(out, 'report.html'), values.open);
     }
-    if (!statSync(report, { throwIfNoEntry: false })?.isFile()) throw new Error(`Report file is missing: ${report}. Omit the path to judge this task in the latest run.`);
+    const target = taskTarget(directory!);
+    if (target === 'review' && scope === 'per-file') {
+      throw new Error('--scope per-file applies only to production_code tasks.');
+    }
+    const reportStat = statSync(report, { throwIfNoEntry: false });
+    if (target === 'production_code' ? !(reportStat?.isDirectory() || reportStat?.isFile()) : !reportStat?.isFile()) {
+      throw new Error(`Report file is missing: ${report}. Omit the path to judge this task in the latest run.`);
+    }
     const out = values.out ? resolve(values.out)
-      : join(RESULTS, 'judges', task, `${model.replace(/[^a-zA-Z0-9.-]/g, '-')}-${randomUUID()}`);
-    const result = await judgeReview({ task: directory!, report, model, out, dryRun: values['dry-run'] });
-    console.log(`Judge: ${model}`);
+      : join(RESULTS, 'judges', task, `${modelSlug}-${randomUUID()}`);
+    const result = target === 'production_code'
+      ? await judgeCode({ task: directory!, sourceDir: report, model, out, scope, dryRun: values['dry-run'] })
+      : await judgeReview({ task: directory!, report, model, out, dryRun: values['dry-run'] });
+    console.log(`Judge: ${model} (${scope})`);
     console.log(`Status: ${result.status}`);
     if (result.quality) console.log(`Quality checks passed: ${Object.values(result.quality.checks).filter((v) => v.choice === 'pass').length}/${Object.keys(result.quality.checks).length}`);
     console.log(`Results: ${out}`);
@@ -298,8 +324,9 @@ async function main(): Promise<number> {
     const harborArgs = ['run', '-p', task, '-a', 'codex', '-m', values.model,
       '--ak', `reasoning_effort=${values.effort}`,
       '--ak', `config=${JSON.stringify({ service_tier: values['service-tier'] })}`,
-      '-k', attempts, '-n', concurrency, '--artifact', '/output/REVIEW.md', '-o', join(RESULTS, 'harbor'),
+      '-k', attempts, '-n', concurrency, '-o', join(RESULTS, 'harbor'),
       '--job-name', `${command}-${values.baseline ? 'baseline' : 'skill'}-${randomUUID()}`];
+    if (targets.some((dir) => taskTarget(dir) === 'review')) harborArgs.push('--artifact', '/output/REVIEW.md');
     if (!values.baseline) harborArgs.push('--skill', join(ROOT, 'skills/code-change'));
     const env = codexEnvironment(values.auth, values['dry-run']);
     if (!values['dry-run']) syncGrader(targets);

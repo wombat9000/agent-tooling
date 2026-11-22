@@ -168,3 +168,85 @@ test('saved-page controls filter trials, update counts, and expand only visible 
   controls['state-filter'].handlers.change();
   assert.equal(controls['visible-count'].textContent, '0 of 2 trials');
 });
+
+test('code reports render Check x Trial matrix, failure-first checks, and deduplicated tabbed source viewer', (t) => {
+  const f = fixture(t);
+  const resultDirectory = join(f.directory, 'implement-mars-rover__abc123');
+  mkdirSync(resultDirectory, { recursive: true });
+  const questions = {
+    passing_check: { type: 'choice', instructions: 'Passes?', criteria: { pass: 'Yes', fail: 'No' } },
+    failing_check: { type: 'choice', instructions: 'Fails?', criteria: { pass: 'Clean', fail: 'Messy' } },
+  };
+  const request = {
+    model: 'test/judge',
+    state: {
+      task: 'implement-mars-rover',
+      requirement: 'Spec text',
+      scope: 'per-file',
+      production_files: {
+        'rover/A.kt': '1: package rover\n2: /** doc\n3:  * end */\n4: class RoverA { val s = "${result.x} $y <script>x</script>" }',
+        'rover/B.kt': '1: package rover\n2: enum class Dir { NORTH }',
+      },
+    },
+    questions,
+  };
+  const result = {
+    status: 'scored',
+    target: 'production_code',
+    scope: 'per-file',
+    file_count: 2,
+    requested_model: 'test/judge',
+    returned_model: 'test/judge-snap',
+    rubric: 'r1',
+    deterministic: { reward: 1 },
+    quality: {
+      pass_rate: 0.75,
+      all_files_pass_rate: 0.5,
+      checks: {
+        passing_check: { choice: 'pass', pass_probability: 0.95, confidence: 0.9, files_passed: 2, files_total: 2, min_pass_probability: 0.94 },
+        failing_check: { choice: 'fail', pass_probability: 0.2, confidence: 0.8, files_passed: 1, files_total: 2, min_pass_probability: 0.1 },
+      },
+    },
+    file_results: [
+      { file: 'rover/A.kt', status: 'scored', pass_rate: 1, checks: {
+        passing_check: { choice: 'pass', pass_probability: 0.96, confidence: 0.9 },
+        failing_check: { choice: 'pass', pass_probability: 0.8, confidence: 0.8 },
+      } },
+      { file: 'rover/B.kt', status: 'scored', pass_rate: 0.5, checks: {
+        passing_check: { choice: 'pass', pass_probability: 0.94, confidence: 0.9 },
+        failing_check: { choice: 'fail', pass_probability: 0.1, confidence: 0.8 },
+      } },
+    ],
+  };
+  writeFileSync(join(resultDirectory, 'request.json'), JSON.stringify(request));
+  writeFileSync(join(resultDirectory, 'result.json'), JSON.stringify(result));
+  writeFileSync(join(f.directory, 'summary.json'), JSON.stringify({
+    source_run: '/saved/source',
+    model: 'test/judge',
+    scope: 'per-file',
+    reports: [{ trial: 'implement-mars-rover__abc123', task: 'implement-mars-rover', status: 'scored', result_dir: resultDirectory }],
+  }));
+
+  const html = readFileSync(writeHtmlReport(f.directory), 'utf8');
+  assert.ok(html.includes('Check × Trial matrix'));
+  assert.ok(html.includes('abc123'));
+  // Failing check appears before passing check in both the matrix and the trial check table.
+  assert.ok(html.indexOf('failing check') < html.indexOf('passing check'));
+  assert.ok(html.includes('class="criteria-toggle"'));
+  assert.ok(html.includes('class="file-tab active"'));
+  // Each file's source is embedded once (no duplicate dump in per-file mode) with Kotlin syntax highlighting.
+  assert.equal((html.match(/RoverA/g) ?? []).length, 1);
+  assert.equal((html.match(/NORTH/g) ?? []).length, 1);
+  assert.ok(html.includes('<span class="ln">1</span><span class="cl"><span class="tok-kw">package</span> rover</span>'));
+  assert.ok(html.includes('<span class="tok-cm"> * end */</span>'));
+  assert.ok(html.includes('<span class="tok-const">NORTH</span>'));
+  assert.ok(html.includes('<span class="tok-kw">${</span>result.x<span class="tok-kw">}</span>'));
+  assert.ok(html.includes('<span class="tok-kw">$</span>y'));
+  assert.ok(html.includes('class="tip-card"'));
+  assert.ok(html.includes('class="cell-pop"'));
+  assert.ok(html.includes('rover/B.kt (10.0%)'));
+  // Raw script tags inside highlighted Kotlin strings remain escaped.
+  assert.ok(!html.includes('<script>x</script>'));
+  assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'));
+});
+
