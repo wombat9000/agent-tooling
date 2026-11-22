@@ -47,6 +47,7 @@ export interface JudgeCodeResult {
   requested_model: string;
   returned_model: string | null;
   rubric: string;
+  rubric_groups?: Record<string, string[]>;
   deterministic: Record<string, number>;
   quality: {
     pass_rate: number;
@@ -146,7 +147,7 @@ export async function judgeCode(
     throw new Error(`Invalid judge scope: ${scope}. Choose whole or per-file.`);
   }
   nonempty(options.model, 'model');
-  const { rubric, target, questions } = parseRubric(task, CODE_JUDGE_RULES);
+  const { rubric, target, questions, groups } = parseRubric(task, CODE_JUDGE_RULES);
   if (target !== 'production_code') {
     throw new Error(`Task ${basename(task)} targets ${target}, not production_code`);
   }
@@ -178,6 +179,7 @@ export async function judgeCode(
     requested_model: options.model,
     returned_model: null,
     rubric,
+    ...(groups ? { rubric_groups: groups } : {}),
     deterministic,
     quality: null,
   };

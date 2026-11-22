@@ -1,0 +1,22 @@
+{
+  "rubric": "readability-v1",
+  "target": "production_code",
+  "questions": {
+    "direct_readability": {
+      "type": "choice",
+      "instructions": "Is the supplied production code written directly and readably using domain names and explicit domain relationships?",
+      "criteria": {
+        "pass": "Names reflect the problem domain, control flow is straightforward, and domain relationships or state transitions are stated explicitly (such as with exhaustive `when` branches or direct mappings) rather than via clever enum-order/index arithmetic or cryptic encodings. Any regular expression used is justified and descriptively named.",
+        "fail": "The code derives domain relationships from clever calculations (such as enum `ordinal` or index/modular arithmetic), uses opaque generic or single-letter names for domain concepts, embeds cryptic unnamed regexes where explicit checks are clearer, or uses convoluted control flow."
+      }
+    },
+    "named_domain_expressions": {
+      "type": "choice",
+      "instructions": "Does the supplied production code give non-obvious conditionals, compound checks, and inline boundary or rule expressions clear domain names instead of forcing readers to decipher them inline?",
+      "criteria": {
+        "pass": "Non-obvious validation checks, compound boolean conditions, and inline conditional expressions encoding domain or boundary rules are given intention-revealing names via local `val`s, properties, or small domain functions. Simple, self-explanatory single checks (such as `isEmpty()` or `value > 0`) may remain inline.",
+        "fail": "Compound boolean conditions (such as multi-part range, state, or validity checks) or inline `if`/`else` expressions encoding boundary or domain rules are embedded directly inside `require` calls, `when` branches, or callers without a domain name, forcing the reader to decipher the mechanics to understand the rule."
+      }
+    }
+  }
+}

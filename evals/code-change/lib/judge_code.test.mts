@@ -55,11 +55,14 @@ test('whole mode sends all production .kt files in one request and loads verifie
   assert.equal(result.deterministic.reward, 1);
   assert.equal(result.quality?.checks.immutable_state.choice, 'fail');
   assert.equal(result.quality?.checks.direct_readability.choice, 'pass');
-  assert.equal(result.quality?.pass_rate, 6 / 7);
+  assert.equal(result.quality?.pass_rate, 11 / 12);
+  assert.deepEqual(Object.keys(result.rubric_groups ?? {}), ['domain-modelling', 'readability', 'module-design', 'solid']);
 
   const html = readFileSync(writeHtmlReport(out), 'utf8');
   assert.ok(html.includes('Production files (2)'));
   assert.ok(html.includes('rover/Direction.kt'));
+  assert.ok(html.includes('class="rubric-tabs"'));
+  assert.ok(html.includes('<span>SOLID</span>'));
 });
 
 test('per-file mode sends one request per .kt file with the same rubric and aggregates strictly', async (t) => {
@@ -85,10 +88,10 @@ test('per-file mode sends one request per .kt file with the same rubric and aggr
   assert.equal(result.status, 'scored');
   assert.equal(result.scope, 'per-file');
   assert.equal(result.file_results?.length, 2);
-  // Direction.kt: 7/7, Rover.kt: 6/7 => mean file pass rate = 13/14
-  assert.ok(Math.abs((result.quality?.pass_rate ?? 0) - 13 / 14) < 1e-9);
-  // Strict aggregation: 6/7 checks passed in every file
-  assert.ok(Math.abs((result.quality?.all_files_pass_rate ?? 0) - 6 / 7) < 1e-9);
+  // Direction.kt: 12/12, Rover.kt: 11/12 => mean file pass rate = 23/24
+  assert.ok(Math.abs((result.quality?.pass_rate ?? 0) - 23 / 24) < 1e-9);
+  // Strict aggregation: 11/12 checks passed in every file
+  assert.ok(Math.abs((result.quality?.all_files_pass_rate ?? 0) - 11 / 12) < 1e-9);
   assert.equal(result.quality?.checks.immutable_state.choice, 'fail');
   assert.equal(result.quality?.checks.immutable_state.files_passed, 1);
   assert.equal(result.quality?.checks.immutable_state.files_total, 2);
@@ -132,13 +135,21 @@ test('per-file mode stops on first API error and dry-run/missing make no API cal
   assert.equal(missing.quality, null);
 });
 
-test('shared skill rubrics resolve via extends and reject invalid names or conflicting targets', async (t) => {
+test('shared skill rubrics compose via extends and reject invalid, duplicate, or conflicting configs', async (t) => {
   const { parseRubric, taskTarget } = await import('./judge_review.mts');
   assert.equal(taskTarget(MARS_ROVER), 'production_code');
   const resolved = parseRubric(MARS_ROVER, '');
-  assert.equal(resolved.rubric, 'code-change-production-code-v3');
+  assert.equal(resolved.rubric, 'domain-modelling-v1+readability-v1+module-design-v1+solid-v1');
   assert.equal(resolved.target, 'production_code');
-  assert.equal(Object.keys(resolved.questions).length, 7);
+  assert.equal(Object.keys(resolved.questions).length, 12);
+  assert.ok(resolved.questions.single_responsibility);
+  assert.ok(resolved.questions.dependency_inversion);
+  assert.deepEqual(resolved.groups, {
+    'domain-modelling': ['immutable_state', 'domain_invariants', 'boundary_separation'],
+    readability: ['direct_readability', 'named_domain_expressions'],
+    'module-design': ['modular_organization', 'no_unnecessary_abstraction'],
+    solid: ['single_responsibility', 'open_closed', 'liskov_substitution', 'interface_segregation', 'dependency_inversion'],
+  });
 
   const root = mkdtempSync(join(tmpdir(), 'code-change-shared-rubric-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -149,8 +160,13 @@ test('shared skill rubrics resolve via extends and reject invalid names or confl
     return dir;
   };
 
+  const single = parseRubric(makeTask('single', { extends: 'readability' }), '');
+  assert.equal(single.rubric, 'readability-v1');
+  assert.equal(single.target, 'production_code');
+  assert.equal(Object.keys(single.questions).length, 2);
+
   const extended = makeTask('extended', {
-    extends: 'production-code',
+    extends: ['readability', 'module-design'],
     rubric: 'custom-kata-v1',
     questions: {
       extra_check: {
@@ -163,10 +179,17 @@ test('shared skill rubrics resolve via extends and reject invalid names or confl
   const parsedExtended = parseRubric(extended, '');
   assert.equal(parsedExtended.rubric, 'custom-kata-v1');
   assert.equal(parsedExtended.target, 'production_code');
-  assert.equal(Object.keys(parsedExtended.questions).length, 8);
+  assert.equal(Object.keys(parsedExtended.questions).length, 5);
   assert.ok(parsedExtended.questions.extra_check);
+  assert.deepEqual(parsedExtended.groups, {
+    readability: ['direct_readability', 'named_domain_expressions'],
+    'module-design': ['modular_organization', 'no_unnecessary_abstraction'],
+    task: ['extra_check'],
+  });
 
+  assert.throws(() => parseRubric(makeTask('empty', { extends: [] }), ''), /nonempty string or array/);
+  assert.throws(() => parseRubric(makeTask('duplicate', { extends: ['readability', 'readability'] }), ''), /Duplicate shared rubric/);
   assert.throws(() => parseRubric(makeTask('missing', { extends: 'does-not-exist' }), ''), /Unknown shared rubric/);
   assert.throws(() => parseRubric(makeTask('traversal', { extends: '../evil' }), ''), /Invalid shared rubric name/);
-  assert.throws(() => parseRubric(makeTask('conflict', { extends: 'production-code', target: 'review' }), ''), /conflicts with shared rubric/);
+  assert.throws(() => parseRubric(makeTask('conflict', { extends: ['readability', 'solid'], target: 'review' }), ''), /conflicts with shared rubric/);
 });

@@ -30,6 +30,7 @@ interface SavedResult {
   requested_model: string;
   returned_model: string | null;
   rubric: string;
+  rubric_groups?: Record<string, string[]>;
   deterministic: Record<string, number>;
   quality: { pass_rate: number; all_files_pass_rate?: number; checks: Record<string, Check> } | null;
   file_results?: SavedFileResult[];
@@ -191,6 +192,15 @@ function labelForCheck(id: string): string {
   return id.replaceAll('_', ' ');
 }
 
+function labelForRubric(slug: string): string {
+  const acronyms: Record<string, string> = { solid: 'SOLID' };
+  return slug
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => acronyms[part.toLowerCase()] ?? (part[0].toUpperCase() + part.slice(1)))
+    .join(' ');
+}
+
 function state(trial: Trial): string {
   if (trial.status !== 'scored') return 'unscored';
   return trial.result!.quality!.pass_rate === 1 ? 'passed' : 'attention';
@@ -201,11 +211,49 @@ function clampProb(value: number | null | undefined): number {
   return Math.max(0, Math.min(100, Math.round(value * 100)));
 }
 
+const PROB_STOPS: ReadonlyArray<readonly [number, number, number, number, number]> = [
+  // [p, hue, saturation, textLightness, barLightness]
+  [0.0, 4, 78, 30, 50],
+  [0.5, 36, 86, 28, 50],
+  [0.72, 62, 72, 26, 44],
+  [0.88, 122, 52, 25, 42],
+  [1.0, 154, 56, 22, 36],
+];
+
+function probColors(prob: number): { bg: string; fg: string; bar: string } {
+  const p = Math.max(0, Math.min(1, Number.isFinite(prob) ? prob : 0));
+  let lo = PROB_STOPS[0];
+  let hi = PROB_STOPS[PROB_STOPS.length - 1];
+  for (let i = 0; i < PROB_STOPS.length - 1; i++) {
+    if (p <= PROB_STOPS[i + 1][0]) {
+      lo = PROB_STOPS[i];
+      hi = PROB_STOPS[i + 1];
+      break;
+    }
+  }
+  const span = hi[0] - lo[0];
+  const t = span > 0 ? (p - lo[0]) / span : 0;
+  const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
+  const h = lerp(lo[1], hi[1]);
+  const s = lerp(lo[2], hi[2]);
+  return {
+    bg: `hsl(${h} ${s}% 90%)`,
+    fg: `hsl(${h} ${s}% ${lerp(lo[3], hi[3])}%)`,
+    bar: `hsl(${h} ${s}% ${lerp(lo[4], hi[4])}%)`,
+  };
+}
+
+function probPillStyle(prob: number): string {
+  const { bg, fg } = probColors(prob);
+  return `background:${bg};color:${fg}`;
+}
+
 function probBarHtml(prob: number | null | undefined, choice?: string, minProb?: number): string {
   const pct = clampProb(prob);
   const fillClass = choice === 'pass' ? 'bar-pass' : choice === 'fail' ? 'bar-fail' : 'bar-neutral';
+  const fillBg = typeof prob === 'number' && Number.isFinite(prob) ? `;background:${probColors(prob).bar}` : '';
   const minNote = minProb !== undefined ? `<span class="sub-metric">min ${percent(minProb)}</span>` : '';
-  return `<div class="prob-cell"><div class="bar-track" aria-hidden="true"><div class="bar-fill ${fillClass}" style="width:${pct}%"></div></div><span class="numeric prob-val">${percent(prob)}</span>${minNote}</div>`;
+  return `<div class="prob-cell"><div class="bar-track" aria-hidden="true"><div class="bar-fill ${fillClass}" style="width:${pct}%${fillBg}"></div></div><span class="numeric prob-val">${percent(prob)}</span>${minNote}</div>`;
 }
 
 function lowestFileForCheck(trial: Trial, checkId: string): { file: string; prob: number } | null {
@@ -222,11 +270,40 @@ function lowestFileForCheck(trial: Trial, checkId: string): { file: string; prob
   return worst;
 }
 
+function rubricTabsHtml(
+  activeGroups: string[],
+  stats: Array<{ group: string; passed: number; scored: number }>,
+): string {
+  const tabButton = (filter: string, label: string, rows: typeof stats, active: boolean) => {
+    const passed = rows.reduce((sum, row) => sum + row.passed, 0);
+    const scored = rows.reduce((sum, row) => sum + row.scored, 0);
+    const cls = scored > 0 && passed === scored ? 'pass' : scored > 0 ? 'fail' : 'neutral';
+    return `<button type="button" class="rubric-tab${active ? ' active' : ''}" role="tab" aria-selected="${active ? 'true' : 'false'}" data-rubric-filter="${escape(filter)}"><span>${escape(label)}</span><span class="tab-pill ${cls}">${passed}/${scored}</span></button>`;
+  };
+  const tabs = [
+    tabButton('all', 'All', stats, true),
+    ...activeGroups.map((slug) => tabButton(slug, labelForRubric(slug), stats.filter((row) => row.group === slug), false)),
+  ];
+  return `<div class="rubric-tabs" role="tablist" aria-label="Filter matrix by rubric">${tabs.join('')}</div>`;
+}
+
 function checkMatrixHtml(trials: Trial[]): string {
   const checkIds: string[] = [];
   const questionsById = new Map<string, Question>();
   const seen = new Set<string>();
+  const groupOrder: string[] = [];
+  const checkGroup = new Map<string, string>();
   for (const trial of trials) {
+    const groups = trial.result?.rubric_groups;
+    if (groups && typeof groups === 'object') {
+      for (const [slug, ids] of Object.entries(groups)) {
+        if (!Array.isArray(ids)) continue;
+        if (!groupOrder.includes(slug)) groupOrder.push(slug);
+        for (const id of ids) {
+          if (!checkGroup.has(id)) checkGroup.set(id, slug);
+        }
+      }
+    }
     const keys = Object.keys(trial.result?.quality?.checks ?? trial.request?.questions ?? {});
     for (const key of keys) {
       if (!seen.has(key)) {
@@ -238,6 +315,15 @@ function checkMatrixHtml(trials: Trial[]): string {
     }
   }
   if (!checkIds.length) return '';
+  if (groupOrder.length > 0 && checkIds.some((id) => !checkGroup.has(id))) {
+    if (!groupOrder.includes('other')) groupOrder.push('other');
+    for (const id of checkIds) {
+      if (!checkGroup.has(id)) checkGroup.set(id, 'other');
+    }
+  }
+  const activeGroups = groupOrder.filter((slug) => checkIds.some((id) => checkGroup.get(id) === slug));
+  const showTabs = activeGroups.length >= 2;
+
   const stats = checkIds.map((id) => {
     const present = trials.map((trial, index) => ({ index, trial, check: trial.result?.quality?.checks?.[id] }));
     const scored = present.filter((entry) => entry.check !== undefined);
@@ -246,9 +332,12 @@ function checkMatrixHtml(trials: Trial[]): string {
       ? scored.reduce((sum, entry) => sum + entry.check!.pass_probability, 0) / scored.length
       : null;
     const passRate = scored.length ? passed / scored.length : 1;
-    return { id, present, scored: scored.length, passed, passRate, meanProb };
+    const group = checkGroup.get(id) ?? '';
+    return { id, group, present, scored: scored.length, passed, passRate, meanProb };
   });
   stats.sort((a, b) => a.passRate - b.passRate || (a.meanProb ?? 1) - (b.meanProb ?? 1));
+
+  const tabsHtml = showTabs ? rubricTabsHtml(activeGroups, stats) : '';
 
   const trialHeaders = trials.map((trial, index) =>
     `<th scope="col" class="matrix-col" title="${escape(trial.trial)}"><a class="trial-jump" href="#trial-${index}" data-jump="trial-${index}">${escape(shortTrialLabel(trial.trial, index))}</a></th>`,
@@ -272,10 +361,11 @@ function checkMatrixHtml(trials: Trial[]): string {
         ? `<div class="cell-pop-row cell-pop-file"><span>Lowest</span><strong>${escape(worst.file)} (${percent(worst.prob)})</strong></div>`
         : '';
       const pop = `<div class="cell-pop" role="tooltip"><div class="cell-pop-row"><span>P(pass)</span><strong>${percent(check.pass_probability)}</strong></div><div class="cell-pop-row"><span>P(fail)</span><strong>${percent(pFail)}</strong></div><div class="cell-pop-row"><span>Confidence</span><strong>${percent(check.confidence)}</strong></div>${filesLine}${worstLine}</div>`;
-      return `<td class="matrix-cell"><span class="cell-wrap"><a class="pill ${cls} trial-jump" href="#trial-${index}" data-jump="trial-${index}">${escape(check.choice)} ${wholePercent(check.pass_probability)}</a>${pop}</span></td>`;
+      return `<td class="matrix-cell"><span class="cell-wrap"><a class="pill ${cls} trial-jump" style="${probPillStyle(check.pass_probability)}" href="#trial-${index}" data-jump="trial-${index}">${escape(check.choice)} ${wholePercent(check.pass_probability)}</a>${pop}</span></td>`;
     }).join('');
     const ratioClass = row.scored > 0 && row.passed === row.scored ? 'pass' : row.scored > 0 ? 'fail' : 'neutral';
-    return `<tr>
+    const groupAttr = showTabs ? ` data-rubric-group="${escape(row.group)}"` : '';
+    return `<tr${groupAttr}>
       <td class="check-label-cell">${labelHtml}</td>
       <td class="numeric"><span class="badge ${ratioClass}">${row.passed}/${row.scored}</span></td>
       <td>${probBarHtml(row.meanProb, row.scored > 0 ? (row.passed === row.scored ? 'pass' : 'fail') : undefined)}</td>
@@ -283,7 +373,7 @@ function checkMatrixHtml(trials: Trial[]): string {
     </tr>`;
   }).join('');
 
-  return `<section class="panel"><h2>Check × Trial matrix</h2><div class="matrix-wrap"><table class="matrix-table"><thead><tr><th scope="col">Check</th><th scope="col">Passed</th><th scope="col">Mean P(pass)</th>${trialHeaders}</tr></thead><tbody>${rows}</tbody></table></div><p class="note">Sorted by lowest pass rate first. Hover any check for rubric criteria or any cell for probabilities; click a cell to jump to that trial.</p></section>`;
+  return `<section class="panel"><h2>Check × Trial matrix</h2>${tabsHtml}<div class="matrix-wrap"><table class="matrix-table"><thead><tr><th scope="col">Check</th><th scope="col">Passed</th><th scope="col">Mean P(pass)</th>${trialHeaders}</tr></thead><tbody>${rows}</tbody></table></div><p class="note">Sorted by lowest pass rate first. Hover any check for rubric criteria or any cell for probabilities; click a cell to jump to that trial.</p></section>`;
 }
 
 function checkRowHtml(id: string, question: Question, check: Check | undefined, showFilesCol: boolean): string {
@@ -383,7 +473,7 @@ function productionFilesViewerHtml(trial: Trial, trialIndex: number): string {
       const checks = fr.checks ?? {};
       const pills = Object.entries(checks)
         .sort(([, a], [, b]) => (a.choice === 'fail' ? 0 : 1) - (b.choice === 'fail' ? 0 : 1) || a.pass_probability - b.pass_probability)
-        .map(([id, c]) => `<span class="pill ${c.choice === 'pass' ? 'pass' : 'fail'}">${escape(labelForCheck(id))}: ${escape(c.choice)} ${wholePercent(c.pass_probability)}</span>`)
+        .map(([id, c]) => `<span class="pill ${c.choice === 'pass' ? 'pass' : 'fail'}" style="${probPillStyle(c.pass_probability)}">${escape(labelForCheck(id))}: ${escape(c.choice)} ${wholePercent(c.pass_probability)}</span>`)
         .join('');
       fileChecksHtml = `${fr.error ? `<p class="error">${escape(fr.error)}</p>` : ''}${pills ? `<div class="file-checks-strip">${pills}</div>` : ''}`;
     }
@@ -496,6 +586,11 @@ button:hover{background:#edf2ff;border-color:var(--blue)}
 .trial-meta strong{color:var(--ink);font-weight:600;overflow-wrap:anywhere}
 .section-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:6px 0 8px}
 .section-bar h3{margin:0}
+.rubric-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.rubric-tab{min-height:32px;padding:5px 11px;font-size:.8125rem;font-weight:600;border:1px solid var(--line);border-radius:7px;background:#f8fafc;color:var(--ink);display:inline-flex;align-items:center}
+.rubric-tab:hover{background:#edf2ff;border-color:var(--blue)}
+.rubric-tab.active{background:var(--blue);color:white;border-color:var(--blue)}
+.rubric-tab.active .tab-pill.neutral{background:rgba(255,255,255,.22);color:white}
 .matrix-wrap{overflow:visible}
 .matrix-table td,.matrix-table th{vertical-align:middle}
 .matrix-col,.matrix-cell{text-align:center}
@@ -574,7 +669,7 @@ button:hover{background:#edf2ff;border-color:var(--blue)}
 footer{font-size:.8125rem;color:var(--muted);margin-top:28px}
 [hidden]{display:none!important}
 @media(max-width:760px){main{padding:16px 14px 40px}.matrix-wrap{overflow-x:auto}.kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{padding:12px 14px;border-bottom:1px solid var(--line)}.kpi:nth-child(2n){border-right:0}.panel{padding:14px}.criteria{grid-template-columns:1fr;gap:12px}.trial-body{padding:14px}.count{margin-left:0}.trial-meta{flex-direction:column}}
-@media print{body{background:white}main{max-width:none;padding:0}.filters,.mini-btn,.tip-card,.cell-pop{display:none!important}.panel,.trial{break-inside:avoid}.code-viewer{background:#f8fafc;color:var(--ink);border:1px solid var(--line)}.tok-kw{color:#6d28d9}.tok-ty{color:#b45309}.tok-fn{color:#1d4ed8}.tok-str{color:#15803d}.tok-num{color:#c2410c}.tok-cm{color:#64748b}.tok-const{color:#0e7490}.tok-ann{color:#be185d}}`;
+@media print{body{background:white}main{max-width:none;padding:0}.filters,.rubric-tabs,.mini-btn,.tip-card,.cell-pop{display:none!important}tr[data-rubric-group]{display:table-row!important}.panel,.trial{break-inside:avoid}.code-viewer{background:#f8fafc;color:var(--ink);border:1px solid var(--line)}.tok-kw{color:#6d28d9}.tok-ty{color:#b45309}.tok-fn{color:#1d4ed8}.tok-str{color:#15803d}.tok-num{color:#c2410c}.tok-cm{color:#64748b}.tok-const{color:#0e7490}.tok-ann{color:#be185d}}`;
 
 const SCRIPT = `
 const taskFilter=document.getElementById('task-filter');
@@ -586,6 +681,19 @@ document.getElementById('expand').addEventListener('click',()=>{for(const trial 
 document.getElementById('collapse').addEventListener('click',()=>{for(const trial of trials)trial.open=false;});
 if(typeof document.addEventListener==='function'){
   document.addEventListener('click',(event)=>{
+    const rtab=event.target&&event.target.closest&&event.target.closest('.rubric-tab');
+    if(rtab){
+      const filterVal=rtab.dataset.rubricFilter;
+      for(const btn of document.querySelectorAll('.rubric-tab')){
+        const active=btn===rtab;
+        btn.classList.toggle('active',active);
+        btn.setAttribute('aria-selected',active?'true':'false');
+      }
+      for(const row of document.querySelectorAll('tr[data-rubric-group]')){
+        row.hidden=filterVal!=='all'&&row.dataset.rubricGroup!==filterVal;
+      }
+      return;
+    }
     const tab=event.target&&event.target.closest&&event.target.closest('.file-tab');
     if(tab){
       const group=tab.dataset.tabGroup;
