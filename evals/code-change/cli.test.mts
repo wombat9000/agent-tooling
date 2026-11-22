@@ -247,3 +247,29 @@ test('report rebuilds saved judgments without credentials or network access', (t
   assert.ok(!existsSync(missing));
   assert.equal(f.calls().length, 0);
 });
+
+test('Harbor commands stage lib/grade_review.mts into target tasks and dry-run leaves tasks untouched', (t) => {
+  const f = fixture(t);
+  const source = readFileSync(join(ROOT, 'evals/code-change/lib/grade_review.mts'), 'utf8');
+  const tasks = ['canary', 'review-clean-change', 'review-seeded-bug'];
+  const staged = (task: string) => join(ROOT, 'evals/code-change/tasks', task, 'tests/grade_review.mts');
+  const clear = () => {
+    for (const task of tasks) rmSync(staged(task), { force: true });
+  };
+  clear();
+  t.after(clear);
+
+  assert.equal(f.run(['canary', '--dry-run']).status, 0);
+  assert.equal(f.run(['smoke', '--dry-run']).status, 0);
+  assert.ok(tasks.every((task) => !existsSync(staged(task))));
+
+  writeFileSync(staged('canary'), '// stale\n');
+  assert.equal(f.run(['canary']).status, 0);
+  assert.equal(readFileSync(staged('canary'), 'utf8'), source);
+  assert.ok(!existsSync(staged('review-clean-change')));
+  assert.ok(!existsSync(staged('review-seeded-bug')));
+
+  clear();
+  assert.equal(f.run(['run']).status, 0);
+  for (const task of tasks) assert.equal(readFileSync(staged(task), 'utf8'), source, task);
+});

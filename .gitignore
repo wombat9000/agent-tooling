@@ -1,5 +1,6 @@
 /jobs/
 /eval-results/
+/evals/code-change/tasks/*/tests/grade_review.mts
 /node_modules/
 /.pnpm-store/
 /.idea/

@@ -29,12 +29,11 @@ function referenceReport(task: string): string {
   }
 }
 
-test('each task has a synced grader, a passing reference, and a failing missing report', () => {
+test('each task has a passing reference review and a failing missing report', () => {
   const tasks = readdirSync(TASKS).filter((task) => existsSync(join(TASKS, task, 'task.toml'))).sort();
   assert.ok(tasks.length);
   for (const task of tasks) {
-    assert.equal(readFileSync(join(TASKS, task, 'tests/grade_review.mts'), 'utf8'),
-      readFileSync(join(LIB, 'grade_review.mts'), 'utf8'), `${task}: run lib/sync.sh`);
+    assert.ok(existsSync(join(TASKS, task, 'tests/test.sh')), `${task}: missing tests/test.sh`);
     assert.equal(grade(referenceReport(task), expected(task)).reward, 1, task);
     assert.ok(Object.values(grade(null, expected(task))).every((score) => score === 0), task);
   }

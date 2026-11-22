@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Terminal entry point for code-change evals. Run pnpm eval --help for commands. */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -13,6 +13,7 @@ import { latestJudgment, writeHtmlReport } from './lib/html_report.mts';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TASKS = join(ROOT, 'evals/code-change/tasks');
+const GRADER = join(ROOT, 'evals/code-change/lib/grade_review.mts');
 const RESULTS = join(ROOT, 'eval-results');
 const DEFAULT_MODEL = 'openai/gpt-6.1-terra';
 const JUDGES: Record<string, string> = { jev: 'typesafe/jev-1.14', d1: 'liquid/d1.2-ultra' };
@@ -66,6 +67,22 @@ function taskDirectory(name: string): string {
     throw new Error(`Unknown task ${name}. Choose: ${names.join(', ')}`);
   }
   return join(TASKS, name);
+}
+
+/** Return the selected task directory, or every task directory when no name is given. */
+function taskDirectories(name?: string): string[] {
+  if (name) return [taskDirectory(name)];
+  return readdirSync(TASKS)
+    .filter((entry) => existsSync(join(TASKS, entry, 'task.toml')))
+    .sort()
+    .map((entry) => join(TASKS, entry));
+}
+
+/** Stage the shared grader into each task's tests/ folder before Harbor uploads it. */
+function syncGrader(tasks: string[]): void {
+  for (const dir of tasks) {
+    copyFileSync(GRADER, join(dir, 'tests/grade_review.mts'));
+  }
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): string {
@@ -240,17 +257,18 @@ async function main(): Promise<number> {
   }
   if (command === 'smoke') {
     const { values } = parseArgs({ args, options: { ...common, task: { type: 'string' } } });
-    const task = values.task ? taskDirectory(values.task) : TASKS;
+    const targets = taskDirectories(values.task);
+    const task = values.task ? targets[0] : TASKS;
     const env = { ...process.env };
     delete env.OPENROUTER_API_KEY;
+    if (!values['dry-run']) syncGrader(targets);
     for (const agent of ['oracle', 'nop']) {
       const name = `${agent}-${randomUUID()}`;
       const status = run('harbor', ['run', '-p', task, '-a', agent, '-n', '1',
         '-o', join(RESULTS, 'harbor'), '--job-name', name], env, values['dry-run']);
       if (status !== 0) return status;
       if (!values['dry-run']) {
-        const trials = values.task ? 1 : readdirSync(TASKS).filter((entry) => existsSync(join(TASKS, entry, 'task.toml'))).length;
-        verifySmoke(join(RESULTS, 'harbor', name), trials, agent === 'oracle' ? 1 : 0);
+        verifySmoke(join(RESULTS, 'harbor', name), targets.length, agent === 'oracle' ? 1 : 0);
       }
     }
     return 0;
@@ -272,7 +290,9 @@ async function main(): Promise<number> {
       throw new Error('--effort must be none, minimal, low, medium, high, xhigh, or max');
     }
     if (!values['service-tier'].trim()) throw new Error('--service-tier must name a tier');
-    const task = command === 'canary' ? taskDirectory('canary') : values.task ? taskDirectory(values.task) : TASKS;
+    const taskName = command === 'canary' ? 'canary' : values.task;
+    const targets = taskDirectories(taskName);
+    const task = taskName ? targets[0] : TASKS;
     const attempts = positiveInteger(values.attempts, command === 'canary' ? 1 : 5, '--attempts');
     const concurrency = positiveInteger(values.concurrency, command === 'canary' ? 1 : 4, '--concurrency');
     const harborArgs = ['run', '-p', task, '-a', 'codex', '-m', values.model,
@@ -281,7 +301,9 @@ async function main(): Promise<number> {
       '-k', attempts, '-n', concurrency, '--artifact', '/output/REVIEW.md', '-o', join(RESULTS, 'harbor'),
       '--job-name', `${command}-${values.baseline ? 'baseline' : 'skill'}-${randomUUID()}`];
     if (!values.baseline) harborArgs.push('--skill', join(ROOT, 'skills/code-change'));
-    return run('harbor', harborArgs, codexEnvironment(values.auth, values['dry-run']), values['dry-run']);
+    const env = codexEnvironment(values.auth, values['dry-run']);
+    if (!values['dry-run']) syncGrader(targets);
+    return run('harbor', harborArgs, env, values['dry-run']);
   }
   throw new Error(`Unknown command: ${command}. Run pnpm eval --help.`);
 }

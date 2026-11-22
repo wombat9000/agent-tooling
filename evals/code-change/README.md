@@ -88,7 +88,7 @@ judge uses OpenRouter to assess the review's meaning after the trial.
 cli.mts               terminal shortcuts used by pnpm eval
 cli.test.mts          offline tests of defaults, auth, and child commands
 lib/grade_review.mts   shared grader: REVIEW.md + expected.json → /logs/verifier/reward.json
-lib/sync.sh            copies the grader into each task (Harbor uploads tests/ per task)
+lib/sync.sh            stages lib/grade_review.mts into each task's tests/ for direct harbor runs (gitignored; pnpm eval does this automatically)
 lib/selfcheck.mts      checks the tasks without Docker: reference solution scores 1, no report 0
 lib/judge_review.mts   scores a saved review with an OpenRouter decision model
 lib/judge_review.test.mts  offline tests of requests, responses, and failure handling
@@ -97,7 +97,7 @@ tasks/<task>/
   instruction.md      the prompt; never mentions the skill or the report format
   task.toml           Harbor configuration; skills go to /skills
   environment/        Dockerfile, plus base/ and change/, which become the `main` and `feature` branches
-  tests/              test.sh, expected.json, judge.json and a grader copy; uploaded after the agent finishes
+  tests/              test.sh, expected.json, judge.json (plus staged grade_review.mts at run time); uploaded after the agent finishes
   solution/solve.sh   reference review for Harbor's oracle agent
 ```
 
@@ -128,8 +128,10 @@ Codex login, set `CODEX_AUTH_JSON_PATH="${CODEX_HOME:-$HOME/.codex}/auth.json"`;
 authentication, set `OPENAI_API_KEY` instead.
 
 ```bash
-# 1. Check the tasks without Docker.
+# 1. Check the tasks without Docker, then stage the shared grader into each task's tests/ folder
+#    (pnpm eval does this automatically; direct harbor commands need it first).
 node evals/code-change/lib/selfcheck.mts
+bash evals/code-change/lib/sync.sh
 
 # 2. Check the wiring in Docker: oracle should score 1, nop 0.
 harbor run -p evals/code-change/tasks -a oracle
@@ -219,7 +221,7 @@ pnpm eval check
 4. Write the optional judge questions in `tests/judge.json`. Define `rubric` as a stable ID and
    `questions` as named `choice` questions, each with `instructions` and exactly `pass`/`fail`
    criteria. Update the rubric ID when its meaning changes; saved requests retain the exact text.
-5. Run `bash evals/code-change/lib/sync.sh`, then the offline checks above.
+5. Run `pnpm eval check` (and `pnpm eval smoke --task <task>` once ready; `pnpm eval` stages `lib/grade_review.mts` into `tests/` automatically).
 
 Keep a few tasks you never look at while editing the skill. Wording tuned until specific tasks
 pass makes the skill good at those tasks only.
