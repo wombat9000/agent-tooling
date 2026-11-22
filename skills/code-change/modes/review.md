@@ -42,7 +42,12 @@ implementation would pass. A missing test is not evidence of a defect.
 
 ## 4. Assess style and design
 
-Check the changed code against the Rules and Defaults in the guide files you read.
+Scan each changed file explicitly against the **Rules** in the guide files you
+read (readability and naming, conditions and validation, domain invariants and
+immutability, boundaries and file layout, and contracts)—do not stop after
+verifying correctness and tests. An unjustified departure from a Rule is a
+*Should fix* finding even when the code is short and tests pass. Check relevant
+Defaults as well.
 
 For design, use the review questions and the three-part test in
 `guidance/module-design.md`. With design-only scope, skip sections 2 and 3, and

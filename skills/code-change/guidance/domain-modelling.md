@@ -23,5 +23,5 @@ rules. This file does not prescribe a class hierarchy or file layout; see
   format protocol output.
 - **D5 (Default)** Express domain actions, questions and relationships as named
   operations on the type that owns the knowledge (`order.isOverdue(today)`),
-  rather than making callers reconstruct them from fields or calculations. Leave
-  self-explanatory checks inline.
+  rather than reconstructing them from fields or inline conditional calculations
+  in callers or branching logic. Leave self-explanatory checks inline.

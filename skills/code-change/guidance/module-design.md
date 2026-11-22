@@ -71,11 +71,15 @@ history.
 
 ## Files
 
-- **M11 (Default)** One primary type or responsibility per file, with a filename
-  that names it. When responsibilities are separated (`M8`), give each primary
-  responsibility its own file. Keep tightly coupled supporting types and helpers
-  with their owner when they are implementation details or are read and changed
-  together.
+- **M11 (Rule)** Put one top-level type or focused responsibility in each file,
+  named after it, so readers and reviewers can navigate by filename rather than
+  scrolling through one long file. Exceptions are narrow and cohesive: a sealed
+  class or interface hierarchy with its subtypes, or a small private helper/value
+  type used exclusively as an internal detail of that one file. Do not group
+  multiple distinct domain types or separate responsibilities (such as entry
+  point, parsing or formatting, and domain models) into one file just because
+  the combined code is short or `private` (use module-internal visibility per
+  `M12`).
 - **M12 (Rule)** Do not widen visibility into the public API only to make a file
   layout or a test work. Using module- or package-internal visibility (such as
   Kotlin `internal`) so separated responsibilities (`M8`, `M11`) can live in their
@@ -102,8 +106,8 @@ better locality for maintainers, not more names.
 
 Investigate before judging: who calls the code, what they must know, and what is
 hard to read or change. Look inside workflow code as well as at its callers. A
-long method, several classes in one file, or multiple responsibilities are
-signals to investigate, not findings.
+long method or multiple cooperating files are signals to investigate, not
+findings on their own.
 
 Questions that often apply:
 
