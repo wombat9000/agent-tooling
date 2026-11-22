@@ -80,7 +80,6 @@ request without making an API call. `pnpm eval --help` lists all options.
 |---|---|---|
 | `canary` | Review | Uses the skill's report format and cites a guideline ID. Passes only if the skill loaded; run it first. |
 | `review-seeded-bug` | Review | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
-| `review-clean-change` | Review | Returns `Verdict: ready` and raises nothing above **Optional**. |
 | `implement-mars-rover` | Implementation | Implements `rover.MarsRover.execute(inputFile: Path): String` in Kotlin, passes its own and hidden black-box JUnit 5 contract tests, and keeps production code clean and modular. |
 | `implement-meeting-room-booking` | Implementation | Builds a Kotlin Spring Boot API from a Gradle-only starter, using JDBC and in-memory H2 for booking, rescheduling, cancellation, and listing. Hidden tests check HTTP behavior, persisted rows, and concurrent conflicts. |
 
