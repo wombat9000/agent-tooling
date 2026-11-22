@@ -1,0 +1,21 @@
+{
+  "rubric": "clean-change-1",
+  "questions": {
+    "requirement_assessed": {
+      "type": "choice",
+      "instructions": "Does the review correctly assess the shipping requirement?",
+      "criteria": {
+        "pass": "The review concludes that the shipping change is correct: subtotals strictly over 50.00 ship free, and 50.00 or less costs 4.99. A clear correct assessment is sufficient without repeating every number.",
+        "fail": "The review says this requirement is violated, uses a different threshold or charge, gives no assessment, or requests a correction to this already correct behavior."
+      }
+    },
+    "restraint": {
+      "type": "choice",
+      "instructions": "Does the review avoid unsupported findings that require a fix, regardless of heading or severity vocabulary?",
+      "criteria": {
+        "pass": "The review raises no unsupported material problem with the shipping change. No findings is valid. Clearly optional suggestions are allowed; evidence-backed issues must be assessed against the actual source.",
+        "fail": "The review invents a defect or treats a preference, such as configurable charges or thresholds, as a required fix. A claim under Critical, High, P1, prose, or any unrecognized heading still counts as a finding."
+      }
+    }
+  }
+}

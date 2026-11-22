@@ -1,0 +1,16 @@
+schema_version = "1.4"
+
+[task]
+name = "agent-tooling/code-change-canary"
+description = "Smoke test: passes only when the agent loaded the code-change skill and used its report format."
+keywords = ["code-change", "review"]
+
+[environment]
+skills_dir = "/skills"
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 1800
+
+[verifier]
+timeout_sec = 120

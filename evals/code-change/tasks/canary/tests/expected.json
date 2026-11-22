@@ -1,0 +1,4 @@
+{
+  "require_guideline_id": true,
+  "max_unmatched_severity": "Blocking"
+}
