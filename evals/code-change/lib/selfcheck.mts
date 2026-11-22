@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { grade, type ExpectedReview } from './grade_review.mts';
-import { parseRubric } from './judge_review.mts';
+import { parseRubric, parseSharedRubric } from './judge_review.mts';
 
 const LIB = fileURLToPath(new URL('.', import.meta.url));
 const TASKS = join(LIB, '../tasks');
@@ -42,6 +42,23 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
     if (existsSync(join(dir, 'tests/expected.json'))) {
       assert.equal(grade(referenceReport(task), expected(task)).reward, 1, task);
       assert.ok(Object.values(grade(null, expected(task))).every((score) => score === 0), task);
+    }
+  }
+});
+
+test('shared rubrics under rubrics/ parse cleanly and have non-overlapping question IDs per target', () => {
+  const rubricsDir = join(LIB, '../rubrics');
+  const files = readdirSync(rubricsDir).filter((name) => name.endsWith('.json')).sort();
+  assert.ok(files.length > 0);
+  const seenByTarget = new Map<string, Map<string, string>>();
+  for (const file of files) {
+    const slug = file.slice(0, -'.json'.length);
+    const parsed = parseSharedRubric(slug);
+    const seen = seenByTarget.get(parsed.target) ?? new Map<string, string>();
+    seenByTarget.set(parsed.target, seen);
+    for (const id of Object.keys(parsed.questions)) {
+      assert.equal(seen.get(id), undefined, `Overlapping question ID ${id} in ${seen.get(id)} and ${slug}`);
+      seen.set(id, slug);
     }
   }
 });

@@ -103,7 +103,10 @@ lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, 
 lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighter for HTML reports
 lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
 rubrics/
-  production-code.json     shared skill-level rubric for implementation/kata tasks (referenced via "extends")
+  domain-modelling.json    shared facet: immutability, domain invariants, boundary separation
+  readability.json         shared facet: direct readability and named domain expressions
+  module-design.json       shared facet: file-level modular organization and avoiding speculative abstraction
+  solid.json               shared facet: pragmatic SOLID principles (SRP, OCP, LSP, ISP, DIP)
 tasks/<task>/
   instruction.md           the prompt; never mentions the skill or the report format
   task.toml                Harbor configuration; skills go to /skills
@@ -181,8 +184,9 @@ No SDK or package install is needed. Both models use the
 [OpenRouter Decisions API](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request).
 
 Each task's hidden `tests/judge.json` defines binary pass/fail questions and an optional `target`
-(`"review"` by default, or `"production_code"`), or references a shared skill-level rubric under
-`rubrics/` via `"extends"` (for example, `{ "extends": "production-code" }`):
+(`"review"` by default, or `"production_code"`), or composes one or more shared skill-level rubric
+facets under `rubrics/` via `"extends"` (for example,
+`{ "extends": ["domain-modelling", "readability", "module-design", "solid"] }`):
 
 - **Review tasks (`lib/judge_review.mts`):** The judge receives the requirement, numbered base
   and feature Kotlin files, and the full review. It accepts free-form reviews; the deterministic
@@ -250,10 +254,11 @@ pnpm eval check
    requirement in `instruction.md`.
 2. Write `tests/expected.json`. Its fields are defined by `ExpectedReview` in `lib/grade_review.mts`.
 3. Write a reference review in `solution/solve.sh`.
-4. Configure `tests/judge.json`: implementation/kata tasks can reuse the shared skill rubric via
-   `{ "extends": "production-code" }`, while task-specific rubrics define `rubric` as a stable ID
-   and `questions` as named `choice` questions, each with `instructions` and exactly `pass`/`fail`
-   criteria. Update the rubric ID when its meaning changes; saved requests retain the exact text.
+4. Configure `tests/judge.json`: implementation/kata tasks can compose shared rubric facets via
+   `{ "extends": ["domain-modelling", "readability", "module-design", "solid"] }` (or a single
+   facet name), while task-specific rubrics define `rubric` as a stable ID and `questions` as named
+   `choice` questions, each with `instructions` and exactly `pass`/`fail` criteria. Update the
+   rubric ID when its meaning changes; saved requests retain the exact text.
 5. Run `pnpm eval check` (and `pnpm eval smoke --task <task>` once ready; `pnpm eval` stages `lib/grade_review.mts` into `tests/` automatically).
 
 Keep a few tasks you never look at while editing the skill. Wording tuned until specific tasks

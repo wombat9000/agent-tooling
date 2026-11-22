@@ -26,6 +26,7 @@ export interface JudgeRubric {
   rubric: string;
   target: RubricTarget;
   questions: Record<string, ChoiceQuestion>;
+  groups?: Record<string, string[]>;
 }
 
 interface ReviewRequest {
@@ -65,6 +66,7 @@ export interface JudgeResult {
   requested_model: string;
   returned_model: string | null;
   rubric: string;
+  rubric_groups?: Record<string, string[]>;
   deterministic: ReturnType<typeof grade>;
   /** Uncalibrated judge output, separate from format and Harbor reward.json. */
   quality: { pass_rate: number; checks: Record<string, Judgment> } | null;
@@ -83,11 +85,15 @@ export function nonempty(value: unknown, label: string): string {
   return value;
 }
 
-/** Load a task's tests/judge.json, resolving an optional shared rubric via `extends`. */
-function loadRawRubric(task: string): Record<string, unknown> {
-  const raw = object(JSON.parse(readFileSync(join(task, 'tests/judge.json'), 'utf8')), 'Rubric');
-  if (raw.extends === undefined) return raw;
-  const name = nonempty(raw.extends, 'extends');
+function parseExtends(value: unknown): string[] {
+  if (typeof value === 'string') return [nonempty(value, 'extends')];
+  if (Array.isArray(value) && value.length > 0) {
+    return value.map((entry, idx) => nonempty(entry, `extends[${idx}]`));
+  }
+  throw new Error('extends must be a nonempty string or array of rubric names');
+}
+
+function loadSharedRubric(name: string): Record<string, unknown> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
     throw new Error(`Invalid shared rubric name: ${name}`);
   }
@@ -99,37 +105,89 @@ function loadRawRubric(task: string): Record<string, unknown> {
   if (base.extends !== undefined) {
     throw new Error(`Shared rubric ${name} must not chain extends`);
   }
-  if (raw.target !== undefined && base.target !== undefined && raw.target !== base.target) {
-    throw new Error(`Task rubric target (${String(raw.target)}) conflicts with shared rubric ${name} (${String(base.target)})`);
+  return base;
+}
+
+/** Load a task's tests/judge.json, resolving one or more shared rubrics via `extends`. */
+function loadRawRubric(task: string): { raw: Record<string, unknown>; groups?: Record<string, string[]> } {
+  const raw = object(JSON.parse(readFileSync(join(task, 'tests/judge.json'), 'utf8')), 'Rubric');
+  if (raw.extends === undefined) return { raw };
+
+  const names = parseExtends(raw.extends);
+  const seenNames = new Set<string>();
+  const baseRubrics: string[] = [];
+  const mergedQuestions: Record<string, unknown> = {};
+  const questionOwner = new Map<string, string>();
+  const groups: Record<string, string[]> = {};
+  let baseTarget: unknown;
+
+  for (const name of names) {
+    if (seenNames.has(name)) {
+      throw new Error(`Duplicate shared rubric in extends: ${name}`);
+    }
+    seenNames.add(name);
+
+    const base = loadSharedRubric(name);
+    baseRubrics.push(nonempty(base.rubric, `Shared rubric ${name}.rubric`));
+
+    if (base.target !== undefined) {
+      if (baseTarget !== undefined && baseTarget !== base.target) {
+        throw new Error(`Shared rubric ${name} target (${String(base.target)}) conflicts with earlier shared rubric target (${String(baseTarget)})`);
+      }
+      baseTarget = base.target;
+    }
+
+    const baseQuestions = object(base.questions, `Shared rubric ${name}.questions`);
+    const groupIds: string[] = [];
+    for (const [id, question] of Object.entries(baseQuestions)) {
+      const existingOwner = questionOwner.get(id);
+      if (existingOwner !== undefined) {
+        throw new Error(`Overlapping question ID ${id} in shared rubrics ${existingOwner} and ${name}`);
+      }
+      questionOwner.set(id, name);
+      mergedQuestions[id] = question;
+      groupIds.push(id);
+    }
+    groups[name] = groupIds;
   }
-  const baseQuestions = object(base.questions, `Shared rubric ${name}.questions`);
+
+  if (raw.target !== undefined && baseTarget !== undefined && raw.target !== baseTarget) {
+    throw new Error(`Task rubric target (${String(raw.target)}) conflicts with shared rubric target (${String(baseTarget)})`);
+  }
   const taskQuestions = raw.questions === undefined ? {} : object(raw.questions, 'questions');
+  const extraIds = Object.keys(taskQuestions).filter((id) => !questionOwner.has(id));
+  if (extraIds.length > 0) groups.task = extraIds;
+
   return {
-    rubric: raw.rubric ?? base.rubric,
-    target: raw.target ?? base.target,
-    questions: { ...baseQuestions, ...taskQuestions },
+    raw: {
+      rubric: raw.rubric ?? baseRubrics.join('+'),
+      target: raw.target ?? baseTarget,
+      questions: { ...mergedQuestions, ...taskQuestions },
+    },
+    groups,
   };
+}
+
+function parseTarget(value: unknown): RubricTarget {
+  if (value === undefined || value === 'review') return 'review';
+  if (value === 'production_code') return 'production_code';
+  throw new Error(`Unknown rubric target: ${String(value)}`);
 }
 
 /** Read a task's judge target from tests/judge.json (defaults to review). */
 export function taskTarget(task: string): RubricTarget {
   const path = join(task, 'tests/judge.json');
   if (!statSync(path, { throwIfNoEntry: false })?.isFile()) return 'review';
-  const raw = loadRawRubric(task);
-  if (raw.target === undefined || raw.target === 'review') return 'review';
-  if (raw.target === 'production_code') return 'production_code';
-  throw new Error(`Unknown rubric target: ${String(raw.target)}`);
+  return parseTarget(loadRawRubric(task).raw.target);
 }
 
-/** Only binary choice rubrics are supported, so every check has the same score meaning. */
-export function parseRubric(task: string, rulesPrefix: string): JudgeRubric {
-  const raw = loadRawRubric(task);
+function parseRubricObject(
+  raw: Record<string, unknown>,
+  rulesPrefix: string,
+  groups?: Record<string, string[]>,
+): JudgeRubric {
   const rubric = nonempty(raw.rubric, 'rubric');
-  const target: RubricTarget = raw.target === undefined || raw.target === 'review'
-    ? 'review'
-    : raw.target === 'production_code'
-      ? 'production_code'
-      : (() => { throw new Error(`Unknown rubric target: ${String(raw.target)}`); })();
+  const target = parseTarget(raw.target);
   const entries = Object.entries(object(raw.questions, 'questions'));
   if (!entries.length) throw new Error('Rubric must contain at least one question');
   const questions = Object.fromEntries(entries.map(([id, value]) => {
@@ -149,7 +207,18 @@ export function parseRubric(task: string, rulesPrefix: string): JudgeRubric {
       },
     }];
   }));
-  return { rubric, target, questions };
+  return groups ? { rubric, target, questions, groups } : { rubric, target, questions };
+}
+
+/** Parse and validate a single shared rubric under rubrics/<slug>.json. */
+export function parseSharedRubric(slug: string, rulesPrefix = ''): JudgeRubric {
+  return parseRubricObject(loadSharedRubric(slug), rulesPrefix);
+}
+
+/** Only binary choice rubrics are supported, so every check has the same score meaning. */
+export function parseRubric(task: string, rulesPrefix: string): JudgeRubric {
+  const { raw, groups } = loadRawRubric(task);
+  return parseRubricObject(raw, rulesPrefix, groups);
 }
 
 function readRubric(task: string): JudgeRubric {
@@ -221,7 +290,7 @@ function probability(value: unknown, label: string): number {
 export async function judgeReview(options: JudgeOptions, transport: typeof fetch = fetch): Promise<JudgeResult> {
   const task = resolve(options.task);
   nonempty(options.model, 'model');
-  const { rubric, questions } = readRubric(task);
+  const { rubric, questions, groups } = readRubric(task);
   const expected: ExpectedReview = JSON.parse(readFileSync(join(task, 'tests/expected.json'), 'utf8'));
   const report = statSync(options.report, { throwIfNoEntry: false })?.isFile()
     ? readFileSync(options.report, 'utf8') : null;
@@ -239,6 +308,7 @@ export async function judgeReview(options: JudgeOptions, transport: typeof fetch
     requested_model: options.model,
     returned_model: null,
     rubric,
+    ...(groups ? { rubric_groups: groups } : {}),
     deterministic: grade(report, expected),
     quality: null,
   };

@@ -1,0 +1,46 @@
+{
+  "rubric": "solid-v1",
+  "target": "production_code",
+  "questions": {
+    "single_responsibility": {
+      "type": "choice",
+      "instructions": "Does each class, object, and function in the supplied production code have a single cohesive responsibility and reason to change?",
+      "criteria": {
+        "pass": "Each type and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same class or method.",
+        "fail": "A class, object, or function bundles multiple unrelated reasons to change so that modifying one concern requires editing unrelated behavior within the same unit."
+      }
+    },
+    "open_closed": {
+      "type": "choice",
+      "instructions": "Does the supplied production code attach variant-specific behavior cleanly so extensions are localized without fragile scattered conditionals, while avoiding speculative hooks?",
+      "criteria": {
+        "pass": "Behavior tied to domain variants or types lives with the owning type or an exhaustive, compiler-checked dispatch rather than being duplicated across fragile conditional chains in callers. Straightforward code with no real extension point passes without speculative abstraction.",
+        "fail": "Variant-specific behavior is scattered across repeated or fragile conditional chains or hardcoded caller checks that must all be updated together whenever a variant is added or changed."
+      }
+    },
+    "liskov_substitution": {
+      "type": "choice",
+      "instructions": "Do all subtypes, implementations, and overrides honor their supertype's contract without surprising exceptions, weakened guarantees, or caller type-checks?",
+      "criteria": {
+        "pass": "Every subtype, sealed branch, or override upholds its supertype's preconditions, postconditions, and invariants without throwing `UnsupportedOperationException`, silently no-oping required behavior, or forcing callers to branch on concrete runtime types. Code without inheritance or interface hierarchies also passes.",
+        "fail": "A subtype or implementation breaks its supertype's contract (such as throwing `UnsupportedOperationException`, tightening preconditions, violating invariants, or forcing callers to check concrete types via `is` or casts to work around subtype behavior)."
+      }
+    },
+    "interface_segregation": {
+      "type": "choice",
+      "instructions": "Are interfaces and collaborator contracts small and focused on what their callers actually use?",
+      "criteria": {
+        "pass": "Interfaces and collaborator contracts expose only cohesive operations needed by their callers, with no bloated catch-all interfaces or stubbed/unused methods. Code that defines no custom interfaces also passes.",
+        "fail": "An interface or shared contract bundles unrelated methods, forcing implementations to stub out unused operations or forcing callers to depend on broad contracts they do not need."
+      }
+    },
+    "dependency_inversion": {
+      "type": "choice",
+      "instructions": "Do high-level domain policies depend on domain values or focused abstractions rather than being tightly coupled to concrete low-level infrastructure?",
+      "criteria": {
+        "pass": "Core domain and policy logic depends on domain types, pure values, or focused abstractions rather than directly calling concrete low-level infrastructure (such as filesystem, network, database, or system clock APIs); concrete infrastructure is wired at the entry point or boundary, without adding speculative single-implementation interfaces where passing domain values already decouples the policy.",
+        "fail": "High-level domain or policy logic directly instantiates or invokes concrete low-level infrastructure APIs (such as filesystem, network, database, or system clock calls) instead of receiving domain values or depending on a focused abstraction."
+      }
+    }
+  }
+}

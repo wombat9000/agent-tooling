@@ -248,5 +248,102 @@ test('code reports render Check x Trial matrix, failure-first checks, and dedupl
   // Raw script tags inside highlighted Kotlin strings remain escaped.
   assert.ok(!html.includes('<script>x</script>'));
   assert.ok(html.includes('&lt;script&gt;x&lt;/script&gt;'));
+  // Without rubric_groups, no rubric filter tabs are shown.
+  assert.ok(!html.includes('class="rubric-tabs"'));
 });
+
+test('multi-rubric reports render per-rubric matrix tabs and filter rows interactively', (t) => {
+  const f = fixture(t);
+  const trial = putTrial(f.directory, 'one', ['pass', 'fail', 'pass'], {
+    rubric: 'domain-modelling-v1+solid-v1',
+    rubric_groups: {
+      'domain-modelling': ['check_0'],
+      solid: ['check_1', 'check_2'],
+    },
+    quality: {
+      pass_rate: 2 / 3,
+      checks: {
+        check_0: { choice: 'pass', pass_probability: 0.98, confidence: 0.96 },
+        check_1: { choice: 'fail', pass_probability: 0.2, confidence: 0.6 },
+        check_2: { choice: 'pass', pass_probability: 0.67, confidence: 0.34 },
+      },
+    },
+  });
+  writeFileSync(join(f.directory, 'summary.json'), JSON.stringify({
+    model: 'test/judge',
+    source_run: '/saved/source',
+    reports: [trial],
+  }));
+  const html = readFileSync(writeHtmlReport(f.directory), 'utf8');
+  assert.ok(html.includes('class="rubric-tabs"'));
+  assert.ok(html.includes('<span>All</span><span class="tab-pill fail">2/3</span>'));
+  assert.ok(html.includes('<span>Domain Modelling</span><span class="tab-pill pass">1/1</span>'));
+  assert.ok(html.includes('<span>SOLID</span><span class="tab-pill fail">1/2</span>'));
+  // Passing cells with different probabilities get distinct gradient colors.
+  const passStyles = [...html.matchAll(/class="pill pass trial-jump" style="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(passStyles.length, 2);
+  assert.notEqual(passStyles[0], passStyles[1]);
+
+  const tabs = [...html.matchAll(/<button type="button" class="rubric-tab([^"]*)" role="tab" aria-selected="([^"]*)" data-rubric-filter="([^"]*)">/g)]
+    .map((m) => {
+      const classes = new Set(['rubric-tab', ...m[1].trim().split(/\s+/).filter(Boolean)]);
+      const attrs: Record<string, string> = { 'aria-selected': m[2] };
+      const btn = {
+        dataset: { rubricFilter: m[3] },
+        classes,
+        attrs,
+        classList: { toggle(cls: string, force: boolean) { if (force) classes.add(cls); else classes.delete(cls); } },
+        setAttribute(k: string, v: string) { attrs[k] = v; },
+        closest(sel: string) { return sel === '.rubric-tab' ? btn : null; },
+      };
+      return btn;
+    });
+  const rows = [...html.matchAll(/<tr data-rubric-group="([^"]*)">/g)]
+    .map((m) => ({ dataset: { rubricGroup: m[1] }, hidden: false }));
+  assert.equal(tabs.length, 3);
+  assert.equal(rows.length, 3);
+
+  type Control = { value: string; textContent: string; addEventListener: (name: string, handler: () => void) => void };
+  const controls = Object.fromEntries(['task-filter', 'state-filter', 'visible-count', 'expand', 'collapse'].map((id) => {
+    const control: Control = { value: '', textContent: '', addEventListener() {} };
+    return [id, control];
+  }));
+  let docClick: ((event: { target: unknown }) => void) | undefined;
+  const script = html.match(/<script>([\s\S]*)<\/script>/)![1];
+  runInNewContext(script, {
+    document: {
+      getElementById: (id: string) => controls[id],
+      querySelectorAll: (sel: string) => {
+        if (sel === '.rubric-tab') return tabs;
+        if (sel === 'tr[data-rubric-group]') return rows;
+        return [];
+      },
+      addEventListener(name: string, fn: (event: { target: unknown }) => void) {
+        if (name === 'click') docClick = fn;
+      },
+    },
+  });
+  assert.ok(docClick);
+
+  // Click the "SOLID" tab (index 2): only solid rows remain visible.
+  docClick({ target: tabs[2] });
+  assert.deepEqual(tabs.map((b) => b.classes.has('active')), [false, false, true]);
+  assert.deepEqual(tabs.map((b) => b.attrs['aria-selected']), ['false', 'false', 'true']);
+  assert.deepEqual(
+    rows.filter((r) => !r.hidden).map((r) => r.dataset.rubricGroup),
+    ['solid', 'solid'],
+  );
+
+  // Click "Domain Modelling" (index 1): only domain-modelling row remains visible.
+  docClick({ target: tabs[1] });
+  assert.deepEqual(
+    rows.filter((r) => !r.hidden).map((r) => r.dataset.rubricGroup),
+    ['domain-modelling'],
+  );
+
+  // Click "All" (index 0): all 3 rows become visible again.
+  docClick({ target: tabs[0] });
+  assert.equal(rows.filter((r) => !r.hidden).length, 3);
+});
+
 
