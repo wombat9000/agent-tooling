@@ -1,0 +1,17 @@
+schema_version = "1.4"
+artifacts = ["/workspace/src"]
+
+[task]
+name = "agent-tooling/code-change-implement-meeting-room-booking"
+description = "Build a Kotlin Spring Boot meeting room booking API backed by H2 and JDBC."
+keywords = ["code-change", "implement", "kotlin", "spring-boot", "jdbc"]
+
+[environment]
+skills_dir = "/skills"
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 1800
+
+[verifier]
+timeout_sec = 300

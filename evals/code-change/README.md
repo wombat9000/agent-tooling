@@ -82,6 +82,7 @@ request without making an API call. `pnpm eval --help` lists all options.
 | `review-seeded-bug` | Review | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
 | `review-clean-change` | Review | Returns `Verdict: ready` and raises nothing above **Optional**. |
 | `implement-mars-rover` | Implementation | Implements `rover.MarsRover.execute(inputFile: Path): String` in Kotlin, passes its own and hidden black-box JUnit 5 contract tests, and keeps production code clean and modular. |
+| `implement-meeting-room-booking` | Implementation | Builds a Kotlin Spring Boot API from a Gradle-only starter, using JDBC and in-memory H2 for booking, rescheduling, cancellation, and listing. Hidden tests check HTTP behavior, persisted rows, and concurrent conflicts. |
 
 Review tasks ask the agent to write `/output/REVIEW.md` and grade report structure and finding
 labels deterministically. Implementation tasks export `/workspace/src` and verify build, agent
@@ -132,14 +133,14 @@ tasks/<task>/
 | `guideline` | At least one finding cites a guideline ID (canary only) |
 | `reward` | Every metric above is 1 |
 
-**Implementation tasks (`implement-mars-rover`):**
+**Implementation tasks:**
 
 | Metric | 1 means |
 |---|---|
-| `production_code_exists` | At least one `.kt` file exists under `src/main/kotlin/rover/` |
-| `agent_tests_exists` | At least one `.kt` test file exists under `src/test/kotlin/` |
-| `agent_tests_pass` | `./gradlew --offline test` passes on the agent's own tests |
-| `contract_tests_pass` | `./gradlew --offline test` passes with the hidden `VerifierMarsRoverContractTest` injected |
+| `has_production_code` | At least one nonempty `.kt` file exists in the task's production package |
+| `has_tests` | At least one nonempty `.kt` file exists in the task's test package |
+| `agent_tests_pass` | The agent's tests pass offline. Meeting Room Booking also builds an executable `bootJar`. |
+| `contract_tests_pass` | The task's hidden JUnit tests pass offline |
 | `reward` | Every metric above is 1 |
 
 These deterministic scores measure compliance and correctness, not qualitative review reasoning
@@ -173,8 +174,8 @@ harbor run -p evals/code-change/tasks -a codex -m <model> -k 5 -n 4 --artifact /
 Compare the two runs in step 4 task by task. Record a baseline before changing the skill, then
 rerun after each change.
 
-All four tasks pass the Docker oracle and nop checks. These checks confirm loading the task
-directory and running verification in Docker. They do not test live Codex authentication.
+The Docker smoke checks require every oracle trial to score 1 and every nop trial to score 0.
+These checks confirm task loading and verification in Docker. They do not test live Codex authentication.
 
 ## OpenRouter quality scoring
 
@@ -250,10 +251,10 @@ pnpm eval check
 
 ## Adding a task
 
-1. Copy a task folder, and replace `environment/base/`, `environment/change/` and the
-   requirement in `instruction.md`.
-2. Write `tests/expected.json`. Its fields are defined by `ExpectedReview` in `lib/grade_review.mts`.
-3. Write a reference review in `solution/solve.sh`.
+1. Copy a task folder of the same kind and replace its starter, fixtures, and `instruction.md`.
+2. For a review task, write `tests/expected.json` using `ExpectedReview` in `lib/grade_review.mts`.
+   For an implementation task, write hidden contract tests and wire them into `tests/test.sh`.
+3. Write the reference solution in `solution/solve.sh`.
 4. Configure `tests/judge.json`: implementation/kata tasks can compose shared rubric facets via
    `{ "extends": ["domain-modelling", "readability", "module-design", "solid"] }` (or a single
    facet name), while task-specific rubrics define `rubric` as a stable ID and `questions` as named

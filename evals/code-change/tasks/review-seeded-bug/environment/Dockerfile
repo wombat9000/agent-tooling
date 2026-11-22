@@ -1,8 +1,14 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates ripgrep \
  && rm -rf /var/lib/apt/lists/*
+
+# Pre-bake Codex CLI so Harbor skips per-trial installation.
+ARG CODEX_VERSION=0.171.0
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
+ && npm cache clean --force \
+ && codex --version
 
 # Fixture repository: `main` holds the base commit, `feature` the change under review.
 COPY base/ /workspace/
