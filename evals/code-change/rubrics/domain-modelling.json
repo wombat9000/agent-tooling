@@ -1,5 +1,5 @@
 {
-  "rubric": "domain-modelling-v1",
+  "rubric": "domain-modelling-v2",
   "target": "production_code",
   "questions": {
     "immutable_state": {
@@ -20,10 +20,10 @@
     },
     "boundary_separation": {
       "type": "choice",
-      "instructions": "Does the supplied production code keep external I/O, input parsing, and output encoding or formatting strictly at the boundary, separate from core domain logic?",
+      "instructions": "Does the supplied production code keep transport/protocol concerns (external I/O, input parsing, output formatting, and protocol error mapping) and storage mechanics cleanly separated from core domain and application logic?",
       "criteria": {
-        "pass": "External I/O, input parsing, and output formatting or encoding are isolated in dedicated boundary, parser, formatter, or entry-point code. Core domain types operate strictly on typed domain values and do not read files or streams, parse raw external text/tokens, or format protocol output.",
-        "fail": "Core domain types directly perform external I/O, parse raw input tokens/characters/strings, or format protocol output strings, OR boundary parsing/formatting logic embeds core domain transition rules."
+        "pass": "External I/O, input parsing, output formatting or encoding, and transport error mapping (such as HTTP status codes or protocol exceptions) are isolated at the entry-point boundary, and storage mechanics (such as queries and row mapping) stay in persistence code. Core domain and application logic operates strictly on typed domain values and domain outcomes without reading files or streams, parsing raw external text, formatting protocol output, or throwing transport-specific exceptions.",
+        "fail": "Core domain, application, or persistence code directly handles transport concerns (such as parsing raw external text/tokens, formatting protocol output, or throwing HTTP/transport status exceptions), OR transport handlers or persistence adapters embed core business rules and workflow coordination instead of keeping them separate."
       }
     }
   }

@@ -40,13 +40,19 @@ See also `C7`: no layers for hypothetical future variation.
 - **M5 (Rule)** Write workflow and entry-point code as a sequence of meaningful
   operations that a reader can follow without deciphering mechanics; delegate
   low-level boundary and domain mechanics to focused units rather than inlining
-  them. Keep storage details (query construction, row mapping) with the storage
-  code, and protocol parsing, encoding and interaction at the system boundaries,
-  both incoming and outgoing.
+  them. Keep protocol concerns (parsing, encoding, transport types, and protocol
+  status codes or exceptions) at the entry-point boundary, storage mechanics
+  (query construction, row mapping) in persistence code, and business rules and
+  workflow coordination in application or domain logic between them—do not wire
+  transport handlers directly into a repository or store that absorbs business
+  rules or throws transport errors.
 - **M6 (Rule)** Apply the deletion test to a suspected pass-through layer: imagine
-  removing it. If callers would have to duplicate meaningful rules, it earns its
-  place. If only forwarding disappears, remove it, unless it has another concrete
-  responsibility. A good name does not make a pass-through valuable.
+  removing it. If callers, transport handlers, or persistence adapters would
+  have to absorb or duplicate meaningful business rules, workflow coordination,
+  or domain-to-protocol translation, it earns its place (and needs no interface
+  when there is one implementation, per `M8` and `C7`). If only forwarding
+  disappears, remove it, unless it has another concrete responsibility. A good
+  name does not make a pass-through valuable.
 
 Internal helpers that clarify an implementation are fine and need not become
 caller-facing concepts.
