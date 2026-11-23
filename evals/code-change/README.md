@@ -16,7 +16,7 @@ packages to install. Docker and Harbor (`uv tool install harbor`) are needed for
 pnpm eval check             # All offline tests
 pnpm eval smoke             # Docker: oracle must score 1, nop must score 0
 pnpm eval canary            # One Codex trial with the skill
-pnpm eval run               # All tasks with the skill: 5 attempts each, 4 concurrent
+pnpm eval run               # All tasks with the skill: 5 attempts each, 2 concurrent
 pnpm eval run --baseline    # Same settings without the skill
 ```
 
@@ -70,9 +70,26 @@ Use `--model ID` or `EVAL_MODEL` to change the Codex model. Use `--effort LEVEL`
 equally to skill and baseline runs. Use `--judge MODEL_ID` for another
 OpenRouter judge, and `--scope whole|per-file` to control whether `production_code` tasks are
 judged across all production files at once (default `whole`) or one file per request (`per-file`).
-`--task NAME`, `--attempts N`, and `--concurrency N` can narrow a full run.
-Add `--dry-run` to preview Harbor commands without starting them. For judging, it saves the
-request without making an API call. `pnpm eval --help` lists all options.
+`--task NAME`, `--attempts N`, and `--concurrency N` can narrow or tune a full run (`run` defaults
+to `2` concurrent trials). Add `--dry-run` to preview Harbor commands without starting them,
+acquiring the Harbor lock, or checking Docker. For judging, `--dry-run` saves the request without
+making an API call. `pnpm eval --help` lists all options.
+
+### Host-wide Harbor lock and busy-Docker guard
+
+Container-running commands (`smoke`, `canary`, and `run`, skipped on `--dry-run`) serialize across
+worktrees and agents via a user-wide lock file at
+`${XDG_CACHE_HOME:-~/.cache}/agent-tooling-evals/harbor.lock` (override with `EVAL_LOCK_PATH`).
+The lock records the active PID, command, task, working directory, and start timestamp. If another
+live process holds the lock, `pnpm eval` logs the holder and waits until it finishes; pass
+`--no-wait` to fail immediately instead. Stale locks from exited processes are reclaimed
+automatically, and locks are released on normal exit, errors, `SIGINT`, and `SIGTERM`.
+
+Before starting `pnpm eval run` (skipped on `--dry-run`), the CLI checks running containers via
+`docker ps -q` (ignoring failures if `docker` is unavailable). If other containers are already
+running and `--concurrency` was omitted, it warns and steps concurrency down from `2` to `1` to
+avoid thrashing a local Docker VM alongside other workloads. If `--concurrency N` was explicitly
+passed, it keeps `N` and still prints a short warning.
 
 ## Tasks
 
@@ -94,8 +111,10 @@ host-side judge uses OpenRouter to assess qualitative criteria after the trial.
 
 ```
 cli.mts                    terminal shortcuts used by pnpm eval
-cli.test.mts               offline tests of defaults, auth, and child commands
+cli.test.mts               offline tests of defaults, auth, locks, Docker concurrency, and child commands
+lib/docker_concurrency.mts default concurrency policy and busy-Docker host guard for `pnpm eval run`
 lib/grade_review.mts       shared review grader: REVIEW.md + expected.json → /logs/verifier/reward.json
+lib/harbor_lock.mts        host-wide Harbor lock with owner metadata, stale-PID reclamation, and signal cleanup
 lib/sync.sh                stages lib/grade_review.mts into review tasks' tests/ for direct harbor runs (gitignored; pnpm eval does this automatically)
 lib/selfcheck.mts          checks review tasks without Docker: reference solution scores 1, no report 0
 lib/judge_review.mts       scores a saved review with an OpenRouter decision model (plus shared rubric/API helpers)
@@ -179,8 +198,8 @@ harbor run -p evals/code-change/tasks -a nop
 harbor run -p evals/code-change/tasks/canary -a codex -m <model> --skill skills/code-change --artifact /output/REVIEW.md
 
 # 4. Every task, 5 attempts each, with and without the skill.
-harbor run -p evals/code-change/tasks -a codex -m <model> -k 5 -n 4 --skill skills/code-change --artifact /output/REVIEW.md
-harbor run -p evals/code-change/tasks -a codex -m <model> -k 5 -n 4 --artifact /output/REVIEW.md
+harbor run -p evals/code-change/tasks -a codex -m <model> -k 5 -n 2 --skill skills/code-change --artifact /output/REVIEW.md
+harbor run -p evals/code-change/tasks -a codex -m <model> -k 5 -n 2 --artifact /output/REVIEW.md
 ```
 
 Compare the two runs in step 4 task by task. Record a baseline before changing the skill, then

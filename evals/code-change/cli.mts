@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Terminal entry point for code-change evals. Run pnpm eval --help for commands. */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -11,6 +11,8 @@ import { judgeReview, taskTarget } from './lib/judge_review.mts';
 import { judgeCode, type JudgeScope } from './lib/judge_code.mts';
 import { latestCodexRun, reportsFromRun } from './lib/run_reports.mts';
 import { latestJudgment, writeHtmlReport } from './lib/html_report.mts';
+import { DEFAULT_RUN_CONCURRENCY, countRunningDockerContainers, resolveRunConcurrency } from './lib/docker_concurrency.mts';
+import { HarborLockInterruptedError, signalExitCode, withHarborLock } from './lib/harbor_lock.mts';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TASKS = join(ROOT, 'evals/code-change/tasks');
@@ -24,7 +26,7 @@ Commands:
   check                 Run all offline tests; no Docker or API key needed
   smoke                 Run Harbor oracle and nop checks; Docker required
   canary                Run one skill-loading trial with Codex
-  run                   Run all tasks with the skill (5 attempts, 4 concurrent)
+  run                   Run all tasks with the skill (5 attempts, 2 concurrent)
   judge [task] [report]  Score saved reviews or code (default: latest completed Codex run)
   report [DIRECTORY]    Build HTML from saved judge scores; no API call
 
@@ -35,10 +37,13 @@ Run options (canary, run):
   --auth local|api      Codex auth (default: local login)
   --baseline            Omit the skill
   --attempts N          Attempts per task (canary: 1, run: 5)
-  --concurrency N       Concurrent trials (canary: 1, run: 4)
+  --concurrency N       Concurrent trials (canary: 1, run: 2; 1 if Docker is busy)
 
 Task option (run, smoke):
   --task NAME           Run one task instead of all tasks
+
+Lock option (smoke, canary, run):
+  --no-wait             Fail immediately if another eval holds the Harbor lock
 
 Judge options:
   --latest              Use the latest completed Codex run (default without a report)
@@ -57,6 +62,7 @@ All commands:
   --dry-run             Preview commands; judge saves a request without an API call
   --help                Show this help
 
+Harbor commands serialize via a host-wide lock (EVAL_LOCK_PATH or ~/.cache/agent-tooling-evals/harbor.lock).
 Reports are exported automatically. Results: eval-results/
 Judging needs OPENROUTER_API_KEY in your shell.
 `;
@@ -89,29 +95,66 @@ function syncGrader(tasks: string[]): void {
   }
 }
 
-function positiveInteger(value: string | undefined, fallback: number, name: string): string {
-  if (value === undefined) return String(fallback);
-  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
+
+function parseOptionalPositiveInteger(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  const isValidPositiveInteger = POSITIVE_INTEGER_PATTERN.test(value) && Number.isSafeInteger(parsed);
+  if (!isValidPositiveInteger) {
     throw new Error(`${name} must be a positive integer`);
   }
-  return value;
+  return parsed;
 }
 
-/** Run children directly without a shell; preserve output and their nonzero exit status. */
-function run(command: string, args: string[], env: NodeJS.ProcessEnv, dryRun: boolean): number {
+function abortReasonSignal(signal: AbortSignal): NodeJS.Signals | null {
+  const isPosixStop = signal.reason === 'SIGINT' || signal.reason === 'SIGTERM';
+  return isPosixStop ? signal.reason : null;
+}
+
+/** Run children directly without a shell; preserve output, signal forwarding, and exit status. */
+function run(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  dryRun: boolean,
+  abortSignal?: AbortSignal,
+): Promise<number> {
   if (dryRun) {
     console.log(JSON.stringify({ command, args, cwd: ROOT,
       codex_auth: env.CODEX_AUTH_JSON_PATH ?? null }));
-    return 0;
+    return Promise.resolve(0);
   }
-  const child = spawnSync(command, args, { cwd: ROOT, env, stdio: 'inherit' });
-  if (child.error) {
-    if ((child.error as NodeJS.ErrnoException).code === 'ENOENT' && command === 'harbor') {
-      throw new Error('Harbor is not installed. Run: uv tool install harbor');
-    }
-    throw child.error;
+  if (abortSignal?.aborted) {
+    return Promise.resolve(signalExitCode(abortReasonSignal(abortSignal)));
   }
-  return child.status ?? 1;
+  return new Promise((resolveStatus, rejectError) => {
+    const child = spawn(command, args, { cwd: ROOT, env, stdio: 'inherit' });
+    const onAbort = () => {
+      const forwardSignal = abortReasonSignal(abortSignal!) ?? 'SIGTERM';
+      try { child.kill(forwardSignal); } catch { /* Child already exited. */ }
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+    child.once('error', (error) => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      const isMissingHarbor = (error as NodeJS.ErrnoException).code === 'ENOENT' && command === 'harbor';
+      if (isMissingHarbor) {
+        rejectError(new Error('Harbor is not installed. Run: uv tool install harbor'));
+        return;
+      }
+      rejectError(error);
+    });
+
+    child.once('close', (code, termSignal) => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      if (code !== null) {
+        resolveStatus(code);
+        return;
+      }
+      resolveStatus(signalExitCode(termSignal));
+    });
+  });
 }
 
 /** Explicit auth selection prevents an inherited local-login flag from overriding API mode. */
@@ -151,9 +194,9 @@ function verifySmoke(job: string, trials: number, expectedReward: number): void 
 }
 
 /** Opening is opt-in, so report generation also works in headless terminals. */
-function showReport(path: string, open: boolean): number {
+function showReport(path: string, open: boolean): Promise<number> {
   console.log(`HTML report: ${path}`);
-  if (!open) return 0;
+  if (!open) return Promise.resolve(0);
   const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
   return run(opener, [path], process.env, false);
 }
@@ -254,7 +297,7 @@ async function main(): Promise<number> {
         saveSummary();
         if (entry.status === 'error' || entry.status === 'missing_report') {
           if (entry.error) console.error(entry.error);
-          showReport(join(out, 'report.html'), values.open);
+          await showReport(join(out, 'report.html'), values.open);
           return 1;
         }
       }
@@ -278,26 +321,37 @@ async function main(): Promise<number> {
     if (result.quality) console.log(`Quality checks passed: ${Object.values(result.quality.checks).filter((v) => v.choice === 'pass').length}/${Object.keys(result.quality.checks).length}`);
     console.log(`Results: ${out}`);
     if (result.error) console.error(result.error);
-    const reportStatus = showReport(writeHtmlReport(out), values.open);
+    const reportStatus = await showReport(writeHtmlReport(out), values.open);
     return result.status === 'error' ? 1 : reportStatus;
   }
   if (command === 'smoke') {
-    const { values } = parseArgs({ args, options: { ...common, task: { type: 'string' } } });
+    const { values } = parseArgs({ args, options: {
+      ...common,
+      task: { type: 'string' },
+      'no-wait': { type: 'boolean', default: false },
+    } });
     const targets = taskDirectories(values.task);
     const task = values.task ? targets[0] : TASKS;
     const env = { ...process.env };
     delete env.OPENROUTER_API_KEY;
-    if (!values['dry-run']) syncGrader(targets);
-    for (const agent of ['oracle', 'nop']) {
-      const name = `${agent}-${randomUUID()}`;
-      const status = run('harbor', ['run', '-p', task, '-a', agent, '-n', '1',
-        '-o', join(RESULTS, 'harbor'), '--job-name', name], env, values['dry-run']);
-      if (status !== 0) return status;
-      if (!values['dry-run']) {
-        verifySmoke(join(RESULTS, 'harbor', name), targets.length, agent === 'oracle' ? 1 : 0);
+    const executeSmoke = async (abortSignal?: AbortSignal): Promise<number> => {
+      if (!values['dry-run']) syncGrader(targets);
+      for (const agent of ['oracle', 'nop']) {
+        const name = `${agent}-${randomUUID()}`;
+        const status = await run('harbor', ['run', '-p', task, '-a', agent, '-n', '1',
+          '-o', join(RESULTS, 'harbor'), '--job-name', name], env, values['dry-run'], abortSignal);
+        if (status !== 0) return status;
+        if (!values['dry-run']) {
+          verifySmoke(join(RESULTS, 'harbor', name), targets.length, agent === 'oracle' ? 1 : 0);
+        }
       }
-    }
-    return 0;
+      return 0;
+    };
+    if (values['dry-run']) return executeSmoke();
+    return withHarborLock(
+      { command: 'smoke', task: values.task ?? null, cwd: ROOT, noWait: values['no-wait'], env },
+      executeSmoke,
+    );
   }
   if (command === 'canary' || command === 'run') {
     const { values } = parseArgs({ args, options: {
@@ -309,6 +363,7 @@ async function main(): Promise<number> {
       baseline: { type: 'boolean', default: false },
       attempts: { type: 'string' }, concurrency: { type: 'string' },
       task: { type: 'string' },
+      'no-wait': { type: 'boolean', default: false },
     } });
     if (command === 'canary' && values.task) throw new Error('--task applies to run and smoke; canary always selects canary.');
     if (!values.model.trim()) throw new Error('--model must name a model');
@@ -319,23 +374,48 @@ async function main(): Promise<number> {
     const taskName = command === 'canary' ? 'canary' : values.task;
     const targets = taskDirectories(taskName);
     const task = taskName ? targets[0] : TASKS;
-    const attempts = positiveInteger(values.attempts, command === 'canary' ? 1 : 5, '--attempts');
-    const concurrency = positiveInteger(values.concurrency, command === 'canary' ? 1 : 4, '--concurrency');
-    const harborArgs = ['run', '-p', task, '-a', 'codex', '-m', values.model,
-      '--ak', `reasoning_effort=${values.effort}`,
-      '--ak', `config=${JSON.stringify({ service_tier: values['service-tier'] })}`,
-      '-k', attempts, '-n', concurrency, '-o', join(RESULTS, 'harbor'),
-      '--job-name', `${command}-${values.baseline ? 'baseline' : 'skill'}-${randomUUID()}`];
-    if (targets.some((dir) => taskTarget(dir) === 'review')) harborArgs.push('--artifact', '/output/REVIEW.md');
-    if (!values.baseline) harborArgs.push('--skill', join(ROOT, 'skills/code-change'));
+    const defaultAttempts = command === 'canary' ? 1 : 5;
+    const attempts = String(parseOptionalPositiveInteger(values.attempts, '--attempts') ?? defaultAttempts);
+    const requestedConcurrency = parseOptionalPositiveInteger(values.concurrency, '--concurrency');
     const env = codexEnvironment(values.auth, values['dry-run']);
-    if (!values['dry-run']) syncGrader(targets);
-    return run('harbor', harborArgs, env, values['dry-run']);
+    const buildHarborArgs = (concurrency: number): string[] => {
+      const harborArgs = ['run', '-p', task, '-a', 'codex', '-m', values.model,
+        '--ak', `reasoning_effort=${values.effort}`,
+        '--ak', `config=${JSON.stringify({ service_tier: values['service-tier'] })}`,
+        '-k', attempts, '-n', String(concurrency), '-o', join(RESULTS, 'harbor'),
+        '--job-name', `${command}-${values.baseline ? 'baseline' : 'skill'}-${randomUUID()}`];
+      if (targets.some((dir) => taskTarget(dir) === 'review')) harborArgs.push('--artifact', '/output/REVIEW.md');
+      if (!values.baseline) harborArgs.push('--skill', join(ROOT, 'skills/code-change'));
+      return harborArgs;
+    };
+    if (values['dry-run']) {
+      const defaultConcurrency = command === 'canary' ? 1 : DEFAULT_RUN_CONCURRENCY;
+      return run('harbor', buildHarborArgs(requestedConcurrency ?? defaultConcurrency), env, true);
+    }
+    return withHarborLock(
+      { command, task: taskName ?? null, cwd: ROOT, noWait: values['no-wait'], env },
+      async (abortSignal) => {
+        let concurrency = requestedConcurrency ?? 1;
+        if (command === 'run') {
+          const activeContainers = countRunningDockerContainers(env);
+          const decision = resolveRunConcurrency(requestedConcurrency, activeContainers);
+          if (decision.warning) console.error(decision.warning);
+          concurrency = decision.concurrency;
+        }
+        syncGrader(targets);
+        return run('harbor', buildHarborArgs(concurrency), env, false, abortSignal);
+      },
+    );
   }
   throw new Error(`Unknown command: ${command}. Run pnpm eval --help.`);
 }
 
 main().then((status) => { process.exitCode = status; }).catch((error) => {
+  if (error instanceof HarborLockInterruptedError) {
+    console.error(error.message);
+    process.exitCode = error.exitCode;
+    return;
+  }
   console.error(error instanceof Error ? error.message : 'Eval command failed');
   process.exitCode = 1;
 });
