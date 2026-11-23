@@ -1,6 +1,7 @@
 {
   "source_root": "src",
   "extends": [
+    "domain-modelling",
     "readability",
     "module-design",
     "solid"

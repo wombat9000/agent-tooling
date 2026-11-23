@@ -139,7 +139,7 @@ test('shared skill rubrics compose via extends and reject invalid, duplicate, or
   const { parseRubric, taskTarget } = await import('./judge_review.mts');
   assert.equal(taskTarget(MARS_ROVER), 'production_code');
   const resolved = parseRubric(MARS_ROVER, '');
-  assert.equal(resolved.rubric, 'domain-modelling-v2+readability-v1+module-design-v1+solid-v2');
+  assert.equal(resolved.rubric, 'domain-modelling-v3+readability-v2+module-design-v2+solid-v3');
   assert.equal(resolved.target, 'production_code');
   assert.equal(Object.keys(resolved.questions).length, 12);
   assert.ok(resolved.questions.single_responsibility);
@@ -161,7 +161,7 @@ test('shared skill rubrics compose via extends and reject invalid, duplicate, or
   };
 
   const single = parseRubric(makeTask('single', { extends: 'readability' }), '');
-  assert.equal(single.rubric, 'readability-v1');
+  assert.equal(single.rubric, 'readability-v2');
   assert.equal(single.target, 'production_code');
   assert.equal(Object.keys(single.questions).length, 2);
 

@@ -1,20 +1,20 @@
 {
-  "rubric": "solid-v2",
+  "rubric": "solid-v3",
   "target": "production_code",
   "questions": {
     "single_responsibility": {
       "type": "choice",
-      "instructions": "Does each class, object, and function in the supplied production code have a single cohesive responsibility and reason to change?",
+      "instructions": "Does each module, type, and function in the supplied production code have a single cohesive responsibility and reason to change?",
       "criteria": {
-        "pass": "Each type and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same class or method.",
-        "fail": "A class, object, or function bundles multiple unrelated reasons to change so that modifying one concern requires editing unrelated behavior within the same unit."
+        "pass": "Each module, type, and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same unit.",
+        "fail": "A module, type, or function bundles multiple unrelated reasons to change so that modifying one concern requires editing unrelated behavior within the same unit."
       }
     },
     "open_closed": {
       "type": "choice",
       "instructions": "Does the supplied production code attach variant-specific behavior cleanly so extensions are localized without fragile scattered conditionals, while avoiding speculative hooks?",
       "criteria": {
-        "pass": "Behavior tied to domain variants or types lives with the owning type or an exhaustive, compiler-checked dispatch rather than being duplicated across fragile conditional chains in callers. Straightforward code with no real extension point passes without speculative abstraction.",
+        "pass": "Behavior tied to domain variants or types lives with the owning type or an exhaustive dispatch rather than being duplicated across fragile conditional chains in callers. Straightforward code with no real extension point passes without speculative abstraction.",
         "fail": "Variant-specific behavior is scattered across repeated or fragile conditional chains or hardcoded caller checks that must all be updated together whenever a variant is added or changed."
       }
     },
@@ -22,8 +22,8 @@
       "type": "choice",
       "instructions": "Do all subtypes, implementations, and overrides honor their supertype's contract without surprising exceptions, weakened guarantees, or caller type-checks?",
       "criteria": {
-        "pass": "Every subtype, sealed branch, or override upholds its supertype's preconditions, postconditions, and invariants without throwing `UnsupportedOperationException`, silently no-oping required behavior, or forcing callers to branch on concrete runtime types. Code without inheritance or interface hierarchies also passes.",
-        "fail": "A subtype or implementation breaks its supertype's contract (such as throwing `UnsupportedOperationException`, tightening preconditions, violating invariants, or forcing callers to check concrete types via `is` or casts to work around subtype behavior)."
+        "pass": "Every subtype, union/sealed branch, or override upholds its supertype's preconditions, postconditions, and invariants without throwing unsupported-operation errors, silently no-oping required behavior, or forcing callers to branch on concrete runtime types. Code without inheritance or interface hierarchies also passes.",
+        "fail": "A subtype or implementation breaks its supertype's contract (such as throwing unsupported-operation errors, tightening preconditions, violating invariants, or forcing callers to inspect concrete runtime types or downcast to work around subtype behavior)."
       }
     },
     "interface_segregation": {
