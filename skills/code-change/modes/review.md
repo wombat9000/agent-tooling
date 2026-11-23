@@ -50,8 +50,8 @@ a check passes.
 Check each applicable Rule group in the guide files you read:
 
 - [ ] Readability, names, and inline conditions (`C1`–`C3`, `C7`, `C9`) —
-  including compound (`&&`/`||`) or non-obvious checks inside `require`/`if`/`when`
-  and input/boundary validation.
+  including compound (`&&`/`||`) or non-obvious checks inside guards,
+  conditionals, branch expressions, and input/boundary validation.
 - [ ] Domain invariants and immutability (`D1`, `D2`; in Kotlin `K2`, `K3`).
 - [ ] Boundaries, layering, and information hiding (`D4`, `M1`–`M3`, `M5`–`M8`, `M10`).
 - [ ] File layout and visibility (`M11`, `M12`).

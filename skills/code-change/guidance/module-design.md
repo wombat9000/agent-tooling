@@ -80,16 +80,18 @@ history.
 - **M11 (Rule)** Put one top-level type or focused responsibility in each file,
   named after it, so readers and reviewers can navigate by filename rather than
   scrolling through one long file. Exceptions are narrow and cohesive: a sealed
-  class or interface hierarchy with its subtypes, or a small private helper/value
-  type used exclusively as an internal detail of that one file. Do not group
-  multiple distinct domain types or separate responsibilities (such as entry
-  point, parsing or formatting, and domain models) into one file just because
-  the combined code is short or `private` (use module-internal visibility per
-  `M12`).
+  or discriminated-union type hierarchy with its subtypes, or a small private
+  helper/value type used exclusively as an internal detail of that one file. Do
+  not group multiple distinct domain types or separate responsibilities (such as
+  entry point, parsing or formatting, and domain models) into one file just
+  because the combined code is short or internal to the package (see `M12`).
 - **M12 (Rule)** Do not widen visibility into the public API only to make a file
-  layout or a test work. Using module- or package-internal visibility (such as
-  Kotlin `internal`) so separated responsibilities (`M8`, `M11`) can live in their
-  own files is fine; exposing internal types or helpers as public is not.
+  layout or a test work. Keep helpers shared across separated files (`M8`, `M11`)
+  internal to the module or package using the language's boundary mechanism—such
+  as Kotlin `internal`, package-private visibility, or file-level `export` in
+  TypeScript/ESM without re-exporting from the package entry point (`index.ts`
+  or `package.json` `exports`); exposing internal types or helpers as part of
+  the public API is not.
 
 ## Examples
 
