@@ -1,29 +1,29 @@
 {
-  "rubric": "domain-modelling-v2",
+  "rubric": "domain-modelling-v3",
   "target": "production_code",
   "questions": {
     "immutable_state": {
       "type": "choice",
       "instructions": "Does the supplied production code avoid mutable domain state and model state transitions immutably?",
       "criteria": {
-        "pass": "Domain types represent state with immutable properties (`val`) and immutable or defensively-copied collections, and state transitions return new values rather than mutating domain objects in place. Local variables inside parsing loops or a fold/loop accumulator holding an immutable value are acceptable.",
-        "fail": "Any domain class stores mutable `var` properties, mutates collections or domain state in place, or shares mutable state across independent runs or calls."
+        "pass": "Domain models represent state with read-only/immutable properties and immutable or defensively-copied collections, and state transitions return new values rather than mutating domain objects or collections in place. Local variables inside parsing loops, fold/loop accumulators holding immutable values, and UI state containers that replace state with new immutable values are acceptable.",
+        "fail": "Domain types store mutable fields, mutate collections or domain state in place, or share mutable state across independent runs or calls."
       }
     },
     "domain_invariants": {
       "type": "choice",
-      "instructions": "Do the domain types in the supplied production code own and enforce their intrinsic invariants at construction?",
+      "instructions": "Do the domain types or domain construction functions in the supplied production code own and enforce their intrinsic invariants?",
       "criteria": {
-        "pass": "Domain concepts with validity rules or domain behavior use dedicated types whose constructors/`init` blocks enforce their intrinsic invariants (pure enums or value types with no extra validity constraints also pass). Dedicated boundary, parser, formatter, or entry-point code passes when it delegates domain construction to validated domain types.",
-        "fail": "Core logic passes around raw unvalidated primitives or untyped tuples (`Pair`, raw `Int`/`Char`/`String` tokens) for validated domain concepts, or enforces domain invariants only in parsers/callers while leaving domain constructors able to create invalid states."
+        "pass": "Domain concepts with validity rules, constrained sets of states, or domain behavior use dedicated domain types, enums/unions, or validated constructors/factories that enforce their intrinsic invariants (pure enums/unions or value types with no extra validity constraints also pass). Dedicated boundary, parser, formatter, UI, or entry-point code passes when it delegates domain construction or validation to those domain types or factories.",
+        "fail": "Core logic represents structured domain concepts or constrained states with raw unvalidated primitives, magic strings/numbers, or untyped pairs/tuples, or enforces domain invariants only ad hoc in parsers/callers/views while leaving domain creation able to produce invalid states."
       }
     },
     "boundary_separation": {
       "type": "choice",
-      "instructions": "Does the supplied production code keep transport/protocol concerns (external I/O, input parsing, output formatting, and protocol error mapping) and storage mechanics cleanly separated from core domain and application logic?",
+      "instructions": "Does the supplied production code keep transport/UI concerns (external I/O, input parsing, output formatting/rendering, and protocol error mapping) and storage mechanics cleanly separated from core domain and application logic?",
       "criteria": {
-        "pass": "External I/O, input parsing, output formatting or encoding, and transport error mapping (such as HTTP status codes or protocol exceptions) are isolated at the entry-point boundary, and storage mechanics (such as queries and row mapping) stay in persistence code. Core domain and application logic operates strictly on typed domain values and domain outcomes without reading files or streams, parsing raw external text, formatting protocol output, or throwing transport-specific exceptions.",
-        "fail": "Core domain, application, or persistence code directly handles transport concerns (such as parsing raw external text/tokens, formatting protocol output, or throwing HTTP/transport status exceptions), OR transport handlers or persistence adapters embed core business rules and workflow coordination instead of keeping them separate."
+        "pass": "External I/O, input parsing, output formatting or UI rendering, and transport error mapping (such as HTTP status codes or protocol exceptions) are isolated at the entry-point or UI boundary, and storage mechanics (such as queries, row mapping, or browser-storage serialization) stay in persistence code. Core domain and application logic operates strictly on typed domain values and domain outcomes without reading files or streams, parsing raw external text, formatting protocol output, or throwing transport-specific exceptions.",
+        "fail": "Core domain, application, or persistence code directly handles transport or UI concerns (such as parsing raw external text/tokens, formatting protocol output, or throwing HTTP/transport status exceptions), OR transport/UI handlers or persistence adapters embed core business rules and workflow coordination instead of keeping them separate."
       }
     }
   }
