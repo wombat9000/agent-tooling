@@ -16,35 +16,29 @@ finding. **Default**: preferred; a departure is at most Optional.
 ## Conditions and validation
 
 - **C3 (Rule)** Give compound boolean conditions (`&&`, `||`), boundary or index
-  checks (such as `index < lastIndex` or `value == limit - 1`), and nested
-  conditional expressions (`if`/`else`) an intention-revealing domain name—as a
-  local `val`, property, or focused helper—instead of embedding them directly
-  inside `require` calls, `if` conditions, `when` branches, lambdas, or call
-  arguments (such as `copy(...)`), even when the inline expression is short.
-  Leave a single self-explanatory check (such as `isEmpty()`, `value > 0`, or
+  checks (such as `index < lastIndex` or `value == limit - 1`), and inline
+  conditional expressions (`if`/`else`, ternaries) an intention-revealing domain
+  name—as a local constant/variable, property, or focused helper—instead of
+  embedding them directly inside guards/assertions, branch conditions, lambdas,
+  or call arguments, even when the inline expression is short. Leave a single
+  self-explanatory check (such as an emptiness check, `value > 0`, or
   `subtotal > threshold`) inline in a standalone guard or as the direct return
   expression of a small named function whose name states the rule.
 
-  ```kotlin
-  // Instead of: if (code.length == 8 && code.take(3).all(Char::isLetter)) …
+  ```text
+  // Instead of: if (code.length == 8 && allLetters(code.prefix(3))) …
   if (isWellFormedSku(code)) …
 
-  // Instead of: require(age >= minimumAge && hasConsent)
-  val isEligible = age >= minimumAge && hasConsent
-  require(isEligible)
+  // Instead of: assert(age >= minimumAge && hasConsent)
+  isEligible = age >= minimumAge && hasConsent
+  assert(isEligible)
 
-  // Instead of:
-  //   when (status) {
-  //       Status.RETRY -> copy(delay = if (attempts >= maxAttempts) maxDelay else delay * 2)
-  //       …
-  //   }
-  when (status) {
-      Status.RETRY -> copy(delay = nextBackoffDelay())
-      …
-  }
+  // Instead of an inline conditional inside a branch or call argument:
+  //   RETRY -> update(delay = if (attempts >= maxAttempts) maxDelay else delay * 2)
+  RETRY -> update(delay = nextBackoffDelay())
 
-  // Instead of: items.map { item -> if (item.active && item.expired) archive(item) else item }
-  items.map(::archiveIfExpired)
+  // Instead of: items.map(item -> if (item.active && item.expired) archive(item) else item)
+  items.map(archiveIfExpired)
   ```
 - **C4 (Default)** Prefer ordinary string operations and explicit checks over
   regular expressions when they express the rule clearly. Use a regular
@@ -53,9 +47,10 @@ finding. **Default**: preferred; a departure is at most Optional.
 
 ## Functions, classes and dependencies
 
-- **C5 (Default)** Choose functions or classes by responsibility. Use a class when
-  it gives related behavior and knowledge a coherent home, even without mutable
-  state; use standalone functions when no such grouping is needed.
+- **C5 (Default)** Choose functions, modules, or classes by responsibility. Use
+  a class or module when it gives related behavior and knowledge a coherent
+  home, even without mutable state; use standalone functions when no such
+  grouping is needed.
 - **C6 (Default)** Extract a small function when it expresses a coherent domain
   operation, not merely to reduce line count.
 - **C7 (Rule)** Add an interface, framework or abstraction layer only for a need

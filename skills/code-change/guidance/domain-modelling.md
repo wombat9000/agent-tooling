@@ -10,11 +10,13 @@ rules. This file does not prescribe a class hierarchy or file layout; see
   external API, makes immutable transitions unsuitable. Needing to track a value
   that changes over time is not, by itself, such a requirement.
 - **D2 (Rule)** Give a domain value its own type when it has validity rules or
-  behavior, and enforce its intrinsic rules at construction. When validity depends
-  on several values together, the domain object that owns their relationship
-  enforces it and preserves it through its operations. Parsers construct valid
-  domain objects; they are not the only guard of domain validity. Do not add
-  wrappers that carry no domain meaning.
+  behavior, and enforce its intrinsic rules at construction—via its constructor
+  or a validated factory function. When validity depends on several values
+  together, the domain type or module that owns their relationship enforces it
+  and preserves it through its operations. Parsers and UI handlers call those
+  constructors or factories to produce valid domain values; they are not the
+  only guard of domain validity. Do not add wrappers that carry no domain
+  meaning.
 - **D3 (Default)** Once a type guarantees a condition, let dependent operations
   rely on it instead of rechecking it or distinguishing cases that behave the same.
   Keep checks for external input and for conditions the invariants do not cover.
@@ -26,6 +28,7 @@ rules. This file does not prescribe a class hierarchy or file layout; see
   injected collaborators from the entry point or boundary, and translate domain
   outcomes at the boundary.
 - **D5 (Default)** Express domain actions, questions and relationships as named
-  operations on the type that owns the knowledge (`order.isOverdue(today)`),
-  rather than reconstructing them from fields or inline conditional calculations
-  in callers or branching logic. Leave self-explanatory checks inline.
+  operations on the type or module that owns the knowledge
+  (`order.isOverdue(today)` or `isOverdue(order, today)`), rather than
+  reconstructing them from fields or inline conditional calculations in callers
+  or branching logic. Leave self-explanatory checks inline.
