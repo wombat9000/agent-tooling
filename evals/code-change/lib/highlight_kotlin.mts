@@ -1,5 +1,7 @@
 /** Zero-dependency Kotlin tokenizer for build-time HTML syntax highlighting. */
 
+import { escapeHtml, span } from './source_tokens.mts';
+
 const KEYWORDS = new Set([
   'abstract', 'as', 'break', 'by', 'catch', 'class', 'companion', 'const',
   'constructor', 'continue', 'crossinline', 'data', 'do', 'else', 'enum',
@@ -11,16 +13,6 @@ const KEYWORDS = new Set([
 ]);
 
 const LITERALS = new Set(['true', 'false', 'null']);
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (ch) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[ch]!);
-}
-
-function span(cls: string, raw: string): string {
-  return `<span class="${cls}">${escapeHtml(raw)}</span>`;
-}
 
 function isIdentStart(ch: string): boolean {
   return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_';

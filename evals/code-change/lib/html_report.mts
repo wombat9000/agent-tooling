@@ -2,6 +2,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { highlightKotlinLines } from './highlight_kotlin.mts';
+import { highlightTypeScriptLines } from './highlight_typescript.mts';
+import { escapeHtml } from './source_tokens.mts';
 
 interface Check {
   choice: string;
@@ -169,9 +171,7 @@ function loadTrials(directory: string): { source: string; model: string; scope: 
 
 /** Escape all saved content, including Markdown, before placing it in HTML or attributes. */
 function escape(value: unknown): string {
-  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[character]!);
+  return escapeHtml(String(value ?? ''));
 }
 
 function percent(value: number | null | undefined): string {
@@ -586,10 +586,23 @@ function codeLinesHtml(source: string, filePath?: string): string {
     const match = /^(\d+): (.*)$/.exec(line);
     return { num: match ? match[1] : String(idx + 1), code: match ? match[2] : line };
   });
-  const isKotlin = Boolean(filePath && /\.kts?$/i.test(filePath));
-  const rendered = isKotlin
-    ? highlightKotlinLines(parsed.map((entry) => entry.code))
-    : parsed.map((entry) => escape(entry.code) || ' ');
+  const extension = extname(filePath ?? '').toLowerCase();
+  const lines = parsed.map((entry) => entry.code);
+  let rendered: string[];
+  switch (extension) {
+    case '.kt':
+    case '.kts':
+      rendered = highlightKotlinLines(lines);
+      break;
+    case '.ts':
+    case '.tsx':
+    case '.cts':
+    case '.mts':
+      rendered = highlightTypeScriptLines(lines, extension === '.tsx');
+      break;
+    default:
+      rendered = lines.map((line) => escapeHtml(line) || ' ');
+  }
   const rows = parsed.map((entry, idx) =>
     `<div class="code-line"><span class="ln">${escape(entry.num)}</span><span class="cl">${rendered[idx]}</span></div>`,
   ).join('');

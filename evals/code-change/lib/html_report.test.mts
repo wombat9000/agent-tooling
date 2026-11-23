@@ -410,3 +410,52 @@ test('multi-rubric reports render collapsible rubric groups, weakest-link cells,
 });
 
 
+
+test('TypeScript and TSX reports highlight syntax and escape JSX across source lines', (t) => {
+  const { directory } = fixture(t);
+  const trial = putTrial(directory, 'todo-trial', ['pass'], { target: 'production_code' });
+  const sources = {
+    'todo.ts': ['const title = <string>input;', 'const limit = 80;'],
+    'TodoApp.tsx': [
+      'export const identity = <T,>(value: T) => value;',
+      '/* JSX component',
+      ' * on multiple lines */',
+      'export const View = () => (',
+      '  <Card title="a & b"',
+      '    visible={2 < 3}>',
+      "    It's // JSX text",
+      '    {items.map((item) => <Item key={item.id} />)}',
+      '    {`value: ${true ? "yes" : "no"}`}',
+      '    <script>{title}</script>',
+      '  </Card>',
+      ');',
+    ],
+  };
+  const productionFiles = Object.fromEntries(Object.entries(sources).map(([name, lines]) => [
+    name, lines.map((line, index) => `${index + 1}: ${line}`).join('\n'),
+  ]));
+  const request = { ...trial.request, state: { ...trial.request.state, production_files: productionFiles } };
+  writeFileSync(join(trial.result_dir, 'request.json'), JSON.stringify(request));
+  writeFileSync(join(directory, 'summary.json'), JSON.stringify({ model: 'test/judge', reports: [trial] }));
+
+  const html = readFileSync(writeHtmlReport(directory), 'utf8');
+  for (const token of [
+    '<span class="tok-kw">export</span>',
+    '&lt;<span class="tok-ty">string</span>&gt;input',
+    '&lt;<span class="tok-ty">T</span>,&gt;',
+    '<span class="tok-num">80</span>',
+    '<span class="tok-cm"> * on multiple lines */</span>',
+    '<span class="tok-ty">&lt;Card</span>',
+    '<span class="tok-ann">title</span>=<span class="tok-str">&quot;a &amp; b&quot;</span>',
+    '<span class="tok-ann">visible</span>',
+    '<span class="tok-num">2</span> &lt; <span class="tok-num">3</span>',
+    'It&#39;s // JSX text',
+    '<span class="tok-ty">&lt;Item</span>',
+    '<span class="tok-kw">${</span><span class="tok-num">true</span>',
+    '<span class="tok-ty">&lt;/Card</span>',
+    '<span class="tok-ty">&lt;script</span>',
+  ]) {
+    assert.ok(html.includes(token), token);
+  }
+  assert.doesNotMatch(html, /<script>\{title\}<\/script>/);
+});

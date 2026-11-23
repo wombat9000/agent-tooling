@@ -1,7 +1,7 @@
 /** Locate completed Harbor Codex runs and their exported artifacts without reading agent logs. */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { taskTarget, type RubricTarget } from './judge_review.mts';
+import { taskSourceRoot, taskTarget, type RubricTarget } from './judge_review.mts';
 
 /** One trial's exported artifact (REVIEW.md or production src dir), paired with its local eval task. */
 export interface RunReport {
@@ -33,11 +33,9 @@ export function latestCodexRun(jobsDirectory: string): string {
   return runs[0].directory;
 }
 
-function productionSourceDir(trialDirectory: string): string | null {
-  for (const candidate of [
-    join(trialDirectory, 'artifacts/workspace/src/main/kotlin'),
-    join(trialDirectory, 'artifacts/src/main/kotlin'),
-  ]) {
+function productionSourceDir(trialDirectory: string, sourceRoot: string): string | null {
+  for (const artifactRoot of ['artifacts/workspace', 'artifacts']) {
+    const candidate = join(trialDirectory, artifactRoot, sourceRoot);
     if (statSync(candidate, { throwIfNoEntry: false })?.isDirectory()) return candidate;
   }
   return null;
@@ -69,9 +67,9 @@ export function reportsFromRun(jobDirectory: string, tasksDirectory: string, tas
     const rewardCandidate = join(trialDir, 'verifier/reward.json');
     const rewardPath = statSync(rewardCandidate, { throwIfNoEntry: false })?.isFile() ? rewardCandidate : undefined;
     if (target === 'production_code') {
-      const sourceDir = productionSourceDir(trialDir);
+      const sourceDir = productionSourceDir(trialDir, taskSourceRoot(taskDir));
       if (!sourceDir) {
-        throw new Error(`No exported production Kotlin sources for ${trial.name}. Task needs artifacts = ["/workspace/src"].`);
+        throw new Error(`No exported production sources for ${trial.name}. Task needs artifacts = ["/workspace/src"].`);
       }
       reports.push({ trial: trial.name, task, target, report: sourceDir, rewardPath });
     } else {

@@ -37,7 +37,7 @@ pnpm eval judge --latest --judge jev                          # Same reports, Je
 
 Each judge run creates a standalone `report.html` with a Check × Trial matrix (sorted worst-first,
 with hoverable rubric criteria and trial/file breakdowns), task KPI summaries, failure-first check
-tables, P(pass), confidence, and the original review or tabbed, syntax-highlighted Kotlin source.
+tables, P(pass), confidence, and the original review or tabbed production source. Kotlin and TypeScript files (including TSX) are syntax-highlighted.
 Terminal output points to the page instead of listing every trial score. Add `--open` to open the
 report after judging.
 
@@ -54,8 +54,8 @@ request/result files, not the task rubric as it exists today.
 
 No artifact paths are needed for saved runs. The latest run is selected by its completion time;
 unfinished runs and oracle/nop jobs are excluded. Use `--run DIRECTORY` to choose a specific
-saved Harbor run. To score one review file or exported `src/main/kotlin` directory manually, use
-`pnpm eval judge TASK PATH`.
+saved Harbor run. To score one review file or an exported production source directory manually, use
+`pnpm eval judge TASK PATH`. Pass `src/main/kotlin` for Kotlin or `src` for the TypeScript app.
 
 Judge runs get a unique directory under `eval-results/judges/`. Batch runs contain one
 directory per trial and a `summary.json` with the source run and each trial's status and score.
@@ -82,10 +82,12 @@ request without making an API call. `pnpm eval --help` lists all options.
 | `review-seeded-bug` | Review | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
 | `implement-mars-rover` | Implementation | Implements `rover.MarsRover.execute(inputFile: Path): String` in Kotlin, passes its own and hidden black-box JUnit 5 contract tests, and keeps production code clean and modular. |
 | `implement-meeting-room-booking` | Implementation | Builds a Kotlin Spring Boot API from a Gradle-only starter, using JDBC and in-memory H2 for booking, rescheduling, cancellation, and listing. Hidden tests check HTTP behavior, persisted rows, and concurrent conflicts. |
+| `implement-react-router-todo` | Implementation | Builds a TypeScript React Router todo app with pnpm, route-based filters, and browser-local persistence. Hidden Playwright tests exercise the production build. |
 
 Review tasks ask the agent to write `/output/REVIEW.md` and grade report structure and finding
-labels deterministically. Implementation tasks export `/workspace/src` and verify build, agent
-tests, and hidden contract tests with Gradle inside the container. In both cases, an optional
+labels deterministically. Implementation tasks export `/workspace/src` and check the build,
+agent tests, and hidden contract tests inside the container. The Kotlin tasks use Gradle. The
+todo task uses pnpm and Playwright. In both cases, an optional
 host-side judge uses OpenRouter to assess qualitative criteria after the trial.
 
 ## Layout
@@ -98,9 +100,10 @@ lib/sync.sh                stages lib/grade_review.mts into review tasks' tests/
 lib/selfcheck.mts          checks review tasks without Docker: reference solution scores 1, no report 0
 lib/judge_review.mts       scores a saved review with an OpenRouter decision model (plus shared rubric/API helpers)
 lib/judge_review.test.mts  offline tests of review judge requests, responses, and failure handling
-lib/judge_code.mts         scores exported production Kotlin code (whole or per-file) with an OpenRouter decision model
+lib/judge_code.mts         scores exported production source code (whole or per-file) with an OpenRouter decision model
 lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, and failure handling
-lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighter for HTML reports
+lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighting
+lib/highlight_typescript.mts  zero-dependency build-time TypeScript and TSX syntax highlighting
 lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
 rubrics/
   domain-modelling.json    shared facet: immutability, domain invariants, boundary separation
@@ -132,7 +135,7 @@ tasks/<task>/
 | `guideline` | At least one finding cites a guideline ID (canary only) |
 | `reward` | Every metric above is 1 |
 
-**Implementation tasks:**
+**Kotlin implementation tasks:**
 
 | Metric | 1 means |
 |---|---|
@@ -140,6 +143,15 @@ tasks/<task>/
 | `has_tests` | At least one nonempty `.kt` file exists in the task's test package |
 | `agent_tests_pass` | The agent's tests pass offline. Meeting Room Booking also builds an executable `bootJar`. |
 | `contract_tests_pass` | The task's hidden JUnit tests pass offline |
+| `reward` | Every metric above is 1 |
+
+**TypeScript implementation task:**
+
+| Metric | 1 means |
+|---|---|
+| `build_pass` | `pnpm build` type-checks and builds the app |
+| `agent_tests_pass` | At least one agent Playwright test runs and the suite passes |
+| `contract_tests_pass` | The hidden Playwright tests pass against the production build |
 | `reward` | Every metric above is 1 |
 
 These deterministic scores measure compliance and correctness, not qualitative review reasoning
@@ -195,7 +207,8 @@ facets under `rubrics/` via `"extends"` (for example,
   consequence, and unsupported findings; the clean task asks about correct behavior and
   unsupported findings.
 - **Implementation tasks (`lib/judge_code.mts`):** The judge receives the requirement and the
-  exported production Kotlin files (`src/main/kotlin/**/*.kt`, excluding test files). With
+  exported production files under `src/main/kotlin` by default or the task rubric's
+  `source_root` (the todo task uses `src`). With
   `--scope whole` (default), all production files are judged in one request. With
   `--scope per-file`, each production file is judged separately against the same rubric, and
   results report both mean `pass_rate` and strict `all_files_pass_rate` (fraction of checks
