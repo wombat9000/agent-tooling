@@ -19,7 +19,7 @@ const CODE_JUDGE_RULES = 'Evaluate the supplied production code against the task
 
 function isProductionSource(path: string): boolean {
   if (path.endsWith('.kt')) return true;
-  const isSource = /\.(?:tsx?|[cm]ts)$/.test(path);
+  const isSource = /\.(?:tsx?|[cm]ts)$/.test(path) && !/\.d\.[cm]?ts$/.test(path);
   const isTest = /(?:^|\/)(?:__tests__|test|tests)\//.test(path) || /\.(?:spec|test)\.[cm]?tsx?$/.test(path);
   return isSource && !isTest;
 }
@@ -141,7 +141,7 @@ function aggregatePerFile(
 }
 
 /**
- * Score exported production Kotlin files with OpenRouter's Decisions API.
+ * Score exported production source files with OpenRouter's Decisions API.
  * Supports `whole` (1 request with all files) and `per-file` (1 request per file, aggregated).
  */
 export async function judgeCode(
