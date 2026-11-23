@@ -1,60 +1,146 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  DEFAULT_RUN_CONCURRENCY,
+  countRunningDockerContainers,
+  resolveRunConcurrency,
+} from './lib/docker_concurrency.mts';
+import { isProcessAlive, resolveHarborLockPath, withHarborLock } from './lib/harbor_lock.mts';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CLI = join(ROOT, 'evals/code-change/cli.mts');
 
-/** Substitute only Harbor; no test can start Docker, an agent, or a paid model call. */
+async function waitForCondition(predicate: () => boolean, timeoutMs: number = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for test condition`);
+}
+
+function collectOutput(child: ChildProcess): {
+  stdout: () => string;
+  stderr: () => string;
+  done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>;
+} {
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk) => { stdout += chunk; });
+  child.stderr?.on('data', (chunk) => { stderr += chunk; });
+  const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolveDone, rejectDone) => {
+    child.once('error', rejectDone);
+    child.once('close', (code, signal) => resolveDone({ code, signal, stdout, stderr }));
+  });
+  return { stdout: () => stdout, stderr: () => stderr, done };
+}
+
+/** Substitute Harbor and Docker; no test can start Docker, an agent, or a paid model call. */
 function fixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), 'code-change-cli-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, 'bin');
   mkdirSync(bin);
   const record = join(root, 'harbor.jsonl');
+  const dockerRecord = join(root, 'docker.jsonl');
+  const lockPath = join(root, 'harbor.lock');
   const auth = join(root, 'auth.json');
   writeFileSync(auth, '{}');
+  const docker = join(bin, 'docker');
+  writeFileSync(docker, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (process.env.TEST_DOCKER_RECORD) {
+  fs.appendFileSync(process.env.TEST_DOCKER_RECORD, JSON.stringify({ args }) + '\\n');
+}
+const exitCode = Number(process.env.TEST_DOCKER_EXIT ?? 0);
+if (exitCode !== 0) process.exit(exitCode);
+const count = Number(process.env.TEST_DOCKER_CONTAINERS ?? 0);
+for (let i = 1; i <= count; i += 1) {
+  process.stdout.write('fake-container-' + i + '\\n');
+}
+`);
+  chmodSync(docker, 0o755);
   const harbor = join(bin, 'harbor');
   writeFileSync(harbor, `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
+if (process.env.TEST_LOCK_SNAPSHOT && process.env.EVAL_LOCK_PATH && fs.existsSync(process.env.EVAL_LOCK_PATH)) {
+  fs.writeFileSync(process.env.TEST_LOCK_SNAPSHOT, fs.readFileSync(process.env.EVAL_LOCK_PATH, 'utf8'));
+}
 fs.appendFileSync(process.env.TEST_HARBOR_RECORD, JSON.stringify({
   args, cwd: process.cwd(), auth: process.env.CODEX_AUTH_JSON_PATH ?? null,
   forceAuth: process.env.CODEX_FORCE_AUTH_JSON ?? null,
   openrouterPresent: Boolean(process.env.OPENROUTER_API_KEY),
 }) + '\\n');
-const agent = args[args.indexOf('-a') + 1];
-if (agent === 'oracle' || agent === 'nop') {
-  const job = path.join(args[args.indexOf('-o') + 1], args[args.indexOf('--job-name') + 1]);
-  fs.mkdirSync(job, { recursive: true });
-  const targetPath = args[args.indexOf('-p') + 1];
-  const defaultTrials = fs.existsSync(path.join(targetPath, 'task.toml'))
-    ? 1
-    : fs.readdirSync(targetPath).filter((entry) => fs.existsSync(path.join(targetPath, entry, 'task.toml'))).length;
-  const trials = process.env.TEST_SMOKE_TRIALS ? Number(process.env.TEST_SMOKE_TRIALS) : defaultTrials;
-  const reward = process.env.TEST_SMOKE_REWARD ? Number(process.env.TEST_SMOKE_REWARD) : agent === 'oracle' ? 1 : 0;
-  fs.writeFileSync(path.join(job, 'result.json'), JSON.stringify({ n_total_trials: trials,
-    stats: { n_completed_trials: trials, n_errored_trials: 0, evals: { test: { metrics: [{ reward }] } } } }));
+const finish = () => {
+  const agent = args[args.indexOf('-a') + 1];
+  if (agent === 'oracle' || agent === 'nop') {
+    const job = path.join(args[args.indexOf('-o') + 1], args[args.indexOf('--job-name') + 1]);
+    fs.mkdirSync(job, { recursive: true });
+    const targetPath = args[args.indexOf('-p') + 1];
+    const defaultTrials = fs.existsSync(path.join(targetPath, 'task.toml'))
+      ? 1
+      : fs.readdirSync(targetPath).filter((entry) => fs.existsSync(path.join(targetPath, entry, 'task.toml'))).length;
+    const trials = process.env.TEST_SMOKE_TRIALS ? Number(process.env.TEST_SMOKE_TRIALS) : defaultTrials;
+    const reward = process.env.TEST_SMOKE_REWARD ? Number(process.env.TEST_SMOKE_REWARD) : agent === 'oracle' ? 1 : 0;
+    fs.writeFileSync(path.join(job, 'result.json'), JSON.stringify({ n_total_trials: trials,
+      stats: { n_completed_trials: trials, n_errored_trials: 0, evals: { test: { metrics: [{ reward }] } } } }));
+  }
+  process.exit(Number(process.env.TEST_HARBOR_EXIT ?? 0));
+};
+if (process.env.TEST_HARBOR_READY_FILE) {
+  fs.writeFileSync(process.env.TEST_HARBOR_READY_FILE, String(process.pid));
 }
-process.exit(Number(process.env.TEST_HARBOR_EXIT ?? 0));
+if (process.env.TEST_HARBOR_WAIT_FILE) {
+  const timer = setInterval(() => {
+    if (fs.existsSync(process.env.TEST_HARBOR_WAIT_FILE)) {
+      clearInterval(timer);
+      finish();
+    }
+  }, 20);
+} else {
+  finish();
+}
 `);
   chmodSync(harbor, 0o755);
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, EVAL_MODEL: '',
-    CODEX_AUTH_JSON_PATH: auth, TEST_HARBOR_RECORD: record, OPENROUTER_API_KEY: 'fake-judge-key' };
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    EVAL_MODEL: '',
+    EVAL_LOCK_PATH: lockPath,
+    CODEX_AUTH_JSON_PATH: auth,
+    TEST_HARBOR_RECORD: record,
+    TEST_DOCKER_RECORD: dockerRecord,
+    OPENROUTER_API_KEY: 'fake-judge-key',
+  };
   return {
-    root, record, auth,
+    root, record, dockerRecord, lockPath, auth,
     run(args: string[], extra: NodeJS.ProcessEnv = {}) {
       const child = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...env, ...extra } });
       assert.ifError(child.error);
       return child;
     },
+    spawn(args: string[], extra: NodeJS.ProcessEnv = {}) {
+      const child = spawn(process.execPath, [CLI, ...args], { env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
+      t.after(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      });
+      return { child, ...collectOutput(child) };
+    },
     calls(): Array<{ args: string[]; cwd: string; auth: string | null; forceAuth: string | null; openrouterPresent: boolean }> {
       return existsSync(record) ? readFileSync(record, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
+    },
+    dockerCalls(): Array<{ args: string[] }> {
+      return existsSync(dockerRecord) ? readFileSync(dockerRecord, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
     },
   };
 }
@@ -82,15 +168,18 @@ test('full run defaults and baseline overrides produce the intended Harbor argum
   assert.equal(f.run(['run']).status, 0);
   const defaults = f.calls()[0].args;
   assert.equal(defaults[defaults.indexOf('-k') + 1], '5');
-  assert.equal(defaults[defaults.indexOf('-n') + 1], '4');
+  assert.equal(defaults[defaults.indexOf('-n') + 1], '2');
   assert.ok(defaults.includes('reasoning_effort=high'));
   assert.ok(defaults.includes('config={"service_tier":"priority"}'));
+  const explicitHigher = f.run(['run', '--concurrency', '4']);
+  assert.equal(explicitHigher.status, 0, explicitHigher.stderr);
+  assert.equal(f.calls()[1].args[f.calls()[1].args.indexOf('-n') + 1], '4');
   const child = f.run(['run', '--baseline', '--task', 'review-seeded-bug', '--model', 'openai/example',
     '--attempts', '2', '--concurrency', '1', '--auth', 'api', '--effort', 'medium', '--service-tier', 'default'], {
     OPENAI_API_KEY: 'fake-agent-key', CODEX_FORCE_AUTH_JSON: '1',
   });
   assert.equal(child.status, 0, child.stderr);
-  const overridden = f.calls()[1];
+  const overridden = f.calls()[2];
   assert.equal(overridden.auth, null);
   assert.equal(overridden.forceAuth, null);
   assert.ok(!overridden.args.includes('--skill'));
@@ -275,4 +364,243 @@ test('Harbor commands stage lib/grade_review.mts into target tasks and dry-run l
   clear();
   assert.equal(f.run(['run']).status, 0);
   for (const task of tasks) assert.equal(readFileSync(staged(task), 'utf8'), source, task);
+});
+
+test('help documents default concurrency of 2, --no-wait, and busy-Docker behavior', (t) => {
+  const f = fixture(t);
+  const help = f.run(['--help']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /5 attempts, 2 concurrent/);
+  assert.match(help.stdout, /--concurrency N\s+Concurrent trials \(canary: 1, run: 2; 1 if Docker is busy\)/);
+  assert.match(help.stdout, /--no-wait/);
+  assert.match(help.stdout, /EVAL_LOCK_PATH/);
+});
+
+test('Harbor lock stores owner metadata while running and releases on normal exit and failure', (t) => {
+  const f = fixture(t);
+  const snapshot = join(f.root, 'lock-snapshot.json');
+  const ok = f.run(['run', '--task', 'review-seeded-bug'], { TEST_LOCK_SNAPSHOT: snapshot });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.ok(!existsSync(f.lockPath), 'lock file should be removed after normal exit');
+
+  const owner = JSON.parse(readFileSync(snapshot, 'utf8'));
+  assert.equal(typeof owner.pid, 'number');
+  assert.ok(owner.pid > 0);
+  assert.equal(owner.command, 'run');
+  assert.equal(owner.task, 'review-seeded-bug');
+  assert.equal(owner.cwd, resolve(ROOT));
+  assert.ok(Number.isFinite(Date.parse(owner.startedAt)));
+
+  const failed = f.run(['canary'], { TEST_HARBOR_EXIT: '7' });
+  assert.equal(failed.status, 7);
+  assert.ok(!existsSync(f.lockPath), 'lock file should be removed when Harbor exits non-zero');
+
+  const badSmoke = f.run(['smoke'], { TEST_SMOKE_REWARD: '0' });
+  assert.equal(badSmoke.status, 1);
+  assert.ok(!existsSync(f.lockPath), 'lock file should be removed when smoke verification throws');
+  t.after(() => {
+    for (const call of f.calls()) {
+      const jobIndex = call.args.indexOf('--job-name');
+      if (jobIndex !== -1 && (call.args.includes('oracle') || call.args.includes('nop'))) {
+        rmSync(join(ROOT, 'eval-results/harbor', call.args[jobIndex + 1]), { recursive: true, force: true });
+      }
+    }
+  });
+});
+
+test('Harbor lock releases cleanly when interrupted by SIGTERM', async (t) => {
+  const f = fixture(t);
+  const readyFile = join(f.root, 'ready');
+  const waitFile = join(f.root, 'never-created');
+  const proc = f.spawn(['run', '--task', 'review-seeded-bug'], {
+    TEST_HARBOR_READY_FILE: readyFile,
+    TEST_HARBOR_WAIT_FILE: waitFile,
+  });
+
+  await waitForCondition(() => existsSync(readyFile) && existsSync(f.lockPath));
+  proc.child.kill('SIGTERM');
+  const result = await proc.done;
+  assert.notEqual(result.code, 0);
+  assert.ok(!existsSync(f.lockPath), 'lock file should be removed after SIGTERM');
+});
+
+test('Harbor lock reclaims stale locks from exited PIDs automatically', (t) => {
+  const f = fixture(t);
+  const shortLived = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+  assert.ok(shortLived.pid);
+  writeFileSync(f.lockPath, JSON.stringify({
+    pid: shortLived.pid,
+    token: 'stale-token',
+    command: 'run',
+    task: 'canary',
+    cwd: '/tmp/old-worktree',
+    startedAt: '2026-01-01T00:00:00.000Z',
+  }));
+
+  const child = f.run(['canary']);
+  assert.equal(child.status, 0, child.stderr);
+  assert.match(child.stderr, new RegExp(`Reclaimed stale Harbor lock.*PID ${shortLived.pid}`));
+  assert.equal(f.calls().length, 1);
+  assert.ok(!existsSync(f.lockPath));
+});
+
+test('withHarborLock reclaims an aged corrupt lock file', async (t) => {
+  const f = fixture(t);
+  writeFileSync(f.lockPath, '{not-json');
+  const messages: string[] = [];
+  const result = await withHarborLock(
+    {
+      command: 'run',
+      task: null,
+      cwd: ROOT,
+      lockPath: f.lockPath,
+      initGraceMs: 0,
+      log: (message) => messages.push(message),
+    },
+    async () => {
+      const activeOwner = JSON.parse(readFileSync(f.lockPath, 'utf8'));
+      assert.equal(activeOwner.pid, process.pid);
+      return 'reclaimed';
+    },
+  );
+  assert.equal(result, 'reclaimed');
+  assert.ok(messages.some((message) => message.includes('corrupt or incomplete metadata')));
+  assert.ok(!existsSync(f.lockPath));
+});
+
+test('isProcessAlive handles live PIDs, ESRCH, EPERM, and non-positive PIDs; resolveHarborLockPath respects precedence', () => {
+  assert.equal(isProcessAlive(process.pid), true);
+  assert.equal(isProcessAlive(0), false);
+  assert.equal(isProcessAlive(-5), false);
+  assert.equal(isProcessAlive(1.5), false);
+  assert.equal(isProcessAlive(4242, () => {
+    const err = new Error('no such process') as NodeJS.ErrnoException;
+    err.code = 'ESRCH';
+    throw err;
+  }), false);
+  assert.equal(isProcessAlive(4242, () => {
+    const err = new Error('operation not permitted') as NodeJS.ErrnoException;
+    err.code = 'EPERM';
+    throw err;
+  }), true);
+
+  assert.equal(
+    resolveHarborLockPath({ EVAL_LOCK_PATH: '/tmp/custom.lock', XDG_CACHE_HOME: '/tmp/xdg' }, '/Users/example'),
+    resolve('/tmp/custom.lock'),
+  );
+  assert.equal(
+    resolveHarborLockPath({ XDG_CACHE_HOME: '/tmp/xdg' }, '/Users/example'),
+    join(resolve('/tmp/xdg'), 'agent-tooling-evals', 'harbor.lock'),
+  );
+  assert.equal(
+    resolveHarborLockPath({}, '/Users/example'),
+    join('/Users/example', '.cache', 'agent-tooling-evals', 'harbor.lock'),
+  );
+});
+
+test('live lock fails fast with --no-wait, blocks and resumes when waiting, and cleans up on SIGTERM while waiting', async (t) => {
+  const f = fixture(t);
+  const readyFile = join(f.root, 'holder-ready');
+  const releaseFile = join(f.root, 'holder-release');
+  const holder = f.spawn(['run', '--task', 'review-seeded-bug'], {
+    TEST_HARBOR_READY_FILE: readyFile,
+    TEST_HARBOR_WAIT_FILE: releaseFile,
+  });
+
+  await waitForCondition(() => existsSync(readyFile) && existsSync(f.lockPath));
+  const holderOwner = JSON.parse(readFileSync(f.lockPath, 'utf8'));
+
+  for (const args of [['run', '--no-wait'], ['canary', '--no-wait'], ['smoke', '--no-wait']]) {
+    const blocked = f.run(args);
+    assert.equal(blocked.status, 1, JSON.stringify(args));
+    assert.match(blocked.stderr, new RegExp(`PID ${holderOwner.pid}`));
+    assert.match(blocked.stderr, /command: run/);
+    assert.ok(blocked.stderr.includes(holderOwner.cwd));
+    assert.ok(existsSync(f.lockPath), '--no-wait must not remove the live lock');
+  }
+  assert.equal(f.calls().length, 1, 'none of the --no-wait calls should have launched Harbor');
+
+  const interruptedWaiter = f.spawn(['canary']);
+  await waitForCondition(() => interruptedWaiter.stderr().includes(`PID ${holderOwner.pid}`));
+  interruptedWaiter.child.kill('SIGTERM');
+  const interruptedResult = await interruptedWaiter.done;
+  assert.notEqual(interruptedResult.code, 0);
+  assert.match(interruptedResult.stderr, /Interrupted while waiting for Harbor lock/);
+  assert.ok(existsSync(f.lockPath), 'interrupted waiter must not remove holder lock');
+
+  const waiter = f.spawn(['canary']);
+  await waitForCondition(() => waiter.stderr().includes(`Waiting for Harbor lock`) && waiter.stderr().includes(`PID ${holderOwner.pid}`));
+  assert.equal(f.calls().length, 1, 'waiter must not launch Harbor before holder releases lock');
+
+  writeFileSync(releaseFile, 'go');
+  const [holderResult, waiterResult] = await Promise.all([holder.done, waiter.done]);
+  assert.equal(holderResult.code, 0, holderResult.stderr);
+  assert.equal(waiterResult.code, 0, waiterResult.stderr);
+  assert.match(waiterResult.stderr, /Acquired Harbor lock/);
+  assert.equal(f.calls().length, 2, 'waiter should launch Harbor after holder finishes');
+  assert.ok(!existsSync(f.lockPath), 'lock should be released after waiter finishes');
+});
+
+test('busy Docker host steps down default run concurrency to 1 and warns only when explicit --concurrency is set', (t) => {
+  const f = fixture(t);
+
+  const autoStepDown = f.run(['run'], { TEST_DOCKER_CONTAINERS: '3' });
+  assert.equal(autoStepDown.status, 0, autoStepDown.stderr);
+  assert.equal(f.calls()[0].args[f.calls()[0].args.indexOf('-n') + 1], '1');
+  assert.match(autoStepDown.stderr, /3 Docker containers are already running/);
+  assert.match(autoStepDown.stderr, /from 2 to 1/);
+  assert.equal(f.dockerCalls().length, 1);
+  assert.deepEqual(f.dockerCalls()[0].args, ['ps', '-q']);
+
+  const explicitKept = f.run(['run', '--concurrency', '4'], { TEST_DOCKER_CONTAINERS: '2' });
+  assert.equal(explicitKept.status, 0, explicitKept.stderr);
+  assert.equal(f.calls()[1].args[f.calls()[1].args.indexOf('-n') + 1], '4');
+  assert.match(explicitKept.stderr, /2 Docker containers are already running/);
+  assert.match(explicitKept.stderr, /keeping explicit --concurrency 4/);
+
+  const explicitOneStillWarns = f.run(['run', '--concurrency', '1'], { TEST_DOCKER_CONTAINERS: '1' });
+  assert.equal(explicitOneStillWarns.status, 0, explicitOneStillWarns.stderr);
+  assert.equal(f.calls()[2].args[f.calls()[2].args.indexOf('-n') + 1], '1');
+  assert.match(explicitOneStillWarns.stderr, /1 Docker container is already running/);
+  assert.match(explicitOneStillWarns.stderr, /keeping explicit --concurrency 1/);
+
+  const dockerFailed = f.run(['run'], { TEST_DOCKER_EXIT: '1', TEST_DOCKER_CONTAINERS: '5' });
+  assert.equal(dockerFailed.status, 0, dockerFailed.stderr);
+  assert.equal(f.calls()[3].args[f.calls()[3].args.indexOf('-n') + 1], '2');
+  assert.equal(dockerFailed.stderr.trim(), '');
+
+  assert.equal(countRunningDockerContainers(process.env, '/nonexistent/docker-binary'), 0);
+  assert.deepEqual(resolveRunConcurrency(undefined, 0), { concurrency: DEFAULT_RUN_CONCURRENCY, warning: null });
+  assert.deepEqual(resolveRunConcurrency(4, 0), { concurrency: 4, warning: null });
+  assert.equal(resolveRunConcurrency(undefined, 2).concurrency, 1);
+  assert.equal(resolveRunConcurrency(3, 2).concurrency, 3);
+});
+
+test('--dry-run bypasses Harbor lock acquisition and Docker container checks', (t) => {
+  const f = fixture(t);
+  writeFileSync(f.lockPath, JSON.stringify({
+    pid: process.pid,
+    token: 'live-holder',
+    command: 'run',
+    task: null,
+    cwd: '/tmp/other-worktree',
+    startedAt: new Date().toISOString(),
+  }));
+
+  for (const args of [
+    ['run', '--dry-run'],
+    ['run', '--dry-run', '--no-wait'],
+    ['canary', '--dry-run', '--no-wait'],
+    ['smoke', '--dry-run', '--no-wait'],
+  ]) {
+    const child = f.run(args, { TEST_DOCKER_CONTAINERS: '4' });
+    assert.equal(child.status, 0, `${JSON.stringify(args)}: ${child.stderr}`);
+    assert.equal(child.stderr.trim(), '', `${JSON.stringify(args)} should not warn or wait`);
+  }
+
+  const runDry = JSON.parse(f.run(['run', '--dry-run'], { TEST_DOCKER_CONTAINERS: '4' }).stdout);
+  assert.equal(runDry.args[runDry.args.indexOf('-n') + 1], '2');
+  assert.equal(f.dockerCalls().length, 0, '--dry-run must not invoke docker ps');
+  assert.equal(f.calls().length, 0, '--dry-run must not invoke harbor');
+  assert.ok(existsSync(f.lockPath), '--dry-run must leave an existing lock untouched');
 });
