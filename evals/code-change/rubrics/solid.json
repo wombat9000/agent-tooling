@@ -36,10 +36,10 @@
     },
     "dependency_inversion": {
       "type": "choice",
-      "instructions": "Do high-level domain policies depend on domain values or focused abstractions rather than being tightly coupled to concrete low-level infrastructure?",
+      "instructions": "Do domain objects, application services, and workflows depend on domain values or focused abstractions rather than directly invoking concrete infrastructure or ambient system APIs?",
       "criteria": {
-        "pass": "Core domain and policy logic depends on domain types, pure values, or focused abstractions. A time-based policy receives the current time as a value or reads it through a supplied clock. The entry point or infrastructure adapter can read the system clock to supply that time or wire the clock implementation. Passing a value is sufficient where it already decouples the policy.",
-        "fail": "High-level domain or policy logic directly instantiates or invokes concrete low-level infrastructure APIs (such as filesystem, network, database, or system clock calls). For time rules, fail if a domain object, service, or workflow reads the system clock directly to enforce a deadline or decide whether a timestamp is in the past. This includes calling a built-in current-time function, whether the caller makes the comparison itself or passes the result to a helper that makes it."
+        "pass": "Domain objects, application services, and workflows depend on domain types, pure values, or focused abstractions rather than directly calling concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock APIs); concrete infrastructure is read or wired at the entry point, composition root, or infrastructure adapter boundary, without adding speculative single-implementation interfaces where passing domain values or a concrete adapter already decouples the policy.",
+        "fail": "A domain object, application service, or workflow directly instantiates or invokes concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock calls) instead of receiving values or depending on a focused abstraction—including when a service or workflow calls a concrete or ambient API directly and passes the result to a domain helper."
       }
     }
   }
