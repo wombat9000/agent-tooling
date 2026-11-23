@@ -1,5 +1,5 @@
 {
-  "rubric": "solid-v1",
+  "rubric": "solid-v2",
   "target": "production_code",
   "questions": {
     "single_responsibility": {
@@ -38,8 +38,8 @@
       "type": "choice",
       "instructions": "Do high-level domain policies depend on domain values or focused abstractions rather than being tightly coupled to concrete low-level infrastructure?",
       "criteria": {
-        "pass": "Core domain and policy logic depends on domain types, pure values, or focused abstractions rather than directly calling concrete low-level infrastructure (such as filesystem, network, database, or system clock APIs); concrete infrastructure is wired at the entry point or boundary, without adding speculative single-implementation interfaces where passing domain values already decouples the policy.",
-        "fail": "High-level domain or policy logic directly instantiates or invokes concrete low-level infrastructure APIs (such as filesystem, network, database, or system clock calls) instead of receiving domain values or depending on a focused abstraction."
+        "pass": "Core domain and policy logic depends on domain types, pure values, or focused abstractions. A time-based policy receives the current time as a value or reads it through a supplied clock. The entry point or infrastructure adapter can read the system clock to supply that time or wire the clock implementation. Passing a value is sufficient where it already decouples the policy.",
+        "fail": "High-level domain or policy logic directly instantiates or invokes concrete low-level infrastructure APIs (such as filesystem, network, database, or system clock calls). For time rules, fail if a domain object, service, or workflow reads the system clock directly to enforce a deadline or decide whether a timestamp is in the past. This includes calling a built-in current-time function, whether the caller makes the comparison itself or passes the result to a helper that makes it."
       }
     }
   }
