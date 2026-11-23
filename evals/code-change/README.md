@@ -110,6 +110,7 @@ rubrics/
   readability.json         shared facet: direct readability and named domain expressions
   module-design.json       shared facet: file-level modular organization and avoiding speculative abstraction
   solid.json               shared facet: pragmatic SOLID principles (SRP, OCP, LSP, ISP, DIP)
+  fowler-smells.json       shared facet: Martin Fowler Refactoring code smells (duplication, long functions, feature envy, primitive obsession, repeated switches, etc.)
 tasks/<task>/
   instruction.md           the prompt; never mentions the skill or the report format
   task.toml                Harbor configuration; skills go to /skills

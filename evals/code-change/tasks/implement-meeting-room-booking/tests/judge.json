@@ -3,6 +3,7 @@
     "domain-modelling",
     "readability",
     "module-design",
-    "solid"
+    "solid",
+    "fowler-smells"
   ]
 }
