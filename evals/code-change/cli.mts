@@ -7,7 +7,6 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { DEFAULT_DECISION_MODEL } from '../../skills/judge-code/scripts/decisions.mts';
 import { judgeReview, taskTarget } from './lib/judge_review.mts';
 import { judgeCode, type JudgeScope } from './lib/judge_code.mts';
 import { latestCodexRun, reportsFromRun } from './lib/run_reports.mts';
@@ -20,7 +19,7 @@ const TASKS = join(ROOT, 'evals/code-change/tasks');
 const GRADER = join(ROOT, 'evals/code-change/lib/grade_review.mts');
 const RESULTS = join(ROOT, 'eval-results');
 const DEFAULT_MODEL = 'openai/gpt-6.1-terra';
-const JUDGES: Record<string, string> = { jev: 'typesafe/jev-1.14', d1: DEFAULT_DECISION_MODEL };
+const JUDGES: Record<string, string> = { jev: 'typesafe/jev-1.14', d1: 'liquid/d1.2-ultra' };
 const HELP = `Usage: pnpm eval <command> [options]
 
 Commands:
@@ -215,7 +214,6 @@ async function main(): Promise<number> {
       'evals/code-change/lib/selfcheck.mts',
       'evals/code-change/lib/judge_review.test.mts',
       'evals/code-change/lib/judge_code.test.mts',
-      'evals/code-change/lib/standalone_judge.test.mts',
       'evals/code-change/lib/run_reports.test.mts',
       'evals/code-change/lib/html_report.test.mts',
       'evals/code-change/cli.test.mts',

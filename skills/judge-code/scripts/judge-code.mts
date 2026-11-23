@@ -1,21 +1,23 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { CODE_JUDGE_RULES, runCodeJudge, type CodeRequest } from './code-judge.mts';
-import { DEFAULT_DECISION_MODEL } from './decisions.mts';
-import { saveFailedCheckEvidence } from './evidence.mts';
+import { DEFAULT_DECISION_MODEL, runDecisionJudge } from './decisions.mts';
 import { readInputs } from './inputs.mts';
-import { bundledRubricIds, parseBundledRubrics } from './rubrics.mts';
+import { bundledRubrics, resolveRubrics } from './rubrics.mts';
 
-const USAGE = `Usage: node judge-code.mts --source FILE_OR_DIRECTORY --requirements FILE --rubric ID --out NEW_DIRECTORY
+const USAGE = `Usage: node judge-code.mts --source FILE_OR_DIRECTORY --out NEW_DIRECTORY [options]
 
-  --rubric ID      Installed versioned rubric ID (repeat for additional facets)
-  --list-rubrics   List the bundled rubric IDs
-  --model ID       OpenRouter Decisions model (default: ${DEFAULT_DECISION_MODEL})
-  --dry-run        Save the exact Decisions request locally without sending anything
-  --no-evidence    Skip the structured follow-up for failed checks
-  --help, -h       Show this help
+  --source PATH         Production Kotlin or TypeScript file or directory (required)
+  --out NEW_DIRECTORY   New private output directory (required)
+  --rubric NAME_OR_PATH Bundled rubric name/ID or local .json rubric (repeatable)
+  --all                 Include all bundled rubrics
+  --exclude CHECK_ID    Exclude a specific check ID (repeatable)
+  --requirements FILE   Optional Markdown or text requirements document
+  --conventions FILE    Optional Markdown or text repo conventions document
+  --model ID            OpenRouter Decisions model (default: ${DEFAULT_DECISION_MODEL})
+  --dry-run             Save the exact Decisions request locally without sending anything
+  --allow-credentials   Allow inputs that match heuristic credential patterns after review
+  --list-rubrics        List bundled rubric names, versions, and check IDs
+  --help, -h            Show this help
 
 Select a production Kotlin or TypeScript module. Read SKILL.md before live scoring.
 `;
@@ -23,42 +25,60 @@ Select a production Kotlin or TypeScript module. Read SKILL.md before live scori
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
     source: { type: 'string' },
-    requirements: { type: 'string' },
-    rubric: { type: 'string', multiple: true },
     out: { type: 'string' },
+    rubric: { type: 'string', multiple: true },
+    all: { type: 'boolean' },
+    exclude: { type: 'string', multiple: true },
+    requirements: { type: 'string' },
+    conventions: { type: 'string' },
     model: { type: 'string', default: DEFAULT_DECISION_MODEL },
     'dry-run': { type: 'boolean' },
-    'no-evidence': { type: 'boolean' },
+    'allow-credentials': { type: 'boolean' },
     'list-rubrics': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
   } });
+
   if (values.help) {
     console.log(USAGE);
     return;
   }
   if (values['list-rubrics']) {
-    console.log(bundledRubricIds().join('\n'));
+    for (const rubric of bundledRubrics()) {
+      console.log(`${rubric.slug} (${rubric.id}): ${rubric.checks.join(', ')}`);
+    }
     return;
   }
-  if (!values.source?.trim() || !values.requirements?.trim() || !values.rubric?.length || !values.out?.trim()) {
+  if (!values.source?.trim() || !values.out?.trim()) {
     throw new Error(USAGE);
   }
-  if (!/^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i.test(values.model)) throw new Error('Use a full OpenRouter model ID for --model');
-  const rubric = parseBundledRubrics(values.rubric, CODE_JUDGE_RULES);
-  const { files, requirements, out } = readInputs(values.source, values.requirements, values.out);
-  const result = await runCodeJudge({
-    taskName: 'standalone',
-    requirements,
-    files,
+  if (!/^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i.test(values.model)) {
+    throw new Error('Use a full OpenRouter model ID for --model');
+  }
+
+  const rubric = resolveRubrics({
+    rubrics: values.rubric ?? [],
+    all: values.all,
+    exclude: values.exclude,
+    hasRequirements: values.requirements !== undefined,
+    hasConventions: values.conventions !== undefined,
+  });
+  const inputs = readInputs({
+    source: values.source,
+    out: values.out,
+    requirements: values.requirements,
+    conventions: values.conventions,
+    allowCredentials: values['allow-credentials'],
+  });
+  const result = await runDecisionJudge({
+    files: inputs.files,
+    requirements: inputs.requirements,
+    conventions: inputs.conventions,
     rubric,
-    out,
+    out: inputs.out,
     model: values.model,
     dryRun: values['dry-run'],
   });
-  if (result.status === 'scored' && !values['no-evidence']) {
-    const decision: CodeRequest = JSON.parse(readFileSync(join(out, 'request.json'), 'utf8'));
-    await saveFailedCheckEvidence(result, decision, out, fetch);
-  }
+
   console.log(JSON.stringify(result));
   if (result.status === 'error') process.exitCode = 1;
 }

@@ -51,7 +51,7 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
 });
 
 test('shared rubrics under rubrics/ parse cleanly and have non-overlapping question IDs per target', () => {
-  const rubricsDir = join(LIB, '../../../skills/judge-code/rubrics');
+  const rubricsDir = join(LIB, '../rubrics');
   const files = readdirSync(rubricsDir).filter((name) => name.endsWith('.json')).sort();
   assert.ok(files.length > 0);
   const seenByTarget = new Map<string, Map<string, string>>();
