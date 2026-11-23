@@ -24,9 +24,6 @@ writing code, and follow them while writing, not only afterwards.
   leave unrelated improvements out (mention them in the handoff instead). Do not
   treat tight scope as a reason to collapse distinct responsibilities into one
   file or dense function (`M5`, `M8`, `M11`).
-- Apply `C3` at the call site while writing code. Name compound predicates used
-  in collection callbacks or input decoders, and name the value chosen by a
-  nested condition. Keep simple, self-explanatory guards inline.
 - Write a general solution, not one shaped to pass specific tests. If a test
   looks wrong, report it rather than working around it.
 - When a refactoring is needed, first make the behavior-preserving change and

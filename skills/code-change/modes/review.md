@@ -49,12 +49,9 @@ a check passes.
 
 Check each applicable Rule group in the guide files you read:
 
-- [ ] Readability, names, abstraction, and contracts (`C1`, `C2`, `C7`, `C9`).
-- [ ] Named conditions (`C3`) — inspect compound checks in guards, collection
-  callbacks, and type guards at input boundaries. Look for nested conditionals
-  in call arguments and render expressions too. Check that the name describes
-  the decision, as in `records.filter(isValidStoredRecord)`. Leave simple,
-  self-explanatory guards inline.
+- [ ] Readability, names, and inline conditions (`C1`–`C3`, `C7`, `C9`) —
+  including compound (`&&`/`||`) or non-obvious checks inside `require`/`if`/`when`
+  and input/boundary validation.
 - [ ] Domain invariants and immutability (`D1`, `D2`; in Kotlin `K2`, `K3`).
 - [ ] Boundaries, layering, and information hiding (`D4`, `M1`–`M3`, `M5`–`M8`, `M10`).
 - [ ] File layout and visibility (`M11`, `M12`).

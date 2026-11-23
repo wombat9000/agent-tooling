@@ -194,12 +194,13 @@ test('shared skill rubrics compose via extends and reject invalid, duplicate, or
   assert.throws(() => parseRubric(makeTask('conflict', { extends: ['readability', 'solid'], target: 'review' }), ''), /conflicts with shared rubric/);
 });
 
-test('collects TypeScript and TSX production modules without including test files', async (t) => {
+test('collects TypeScript and TSX production modules without including test or declaration files', async (t) => {
   const { root } = sampleSources(t);
   const sourceDir = join(root, 'app');
   mkdirSync(join(sourceDir, '__tests__'), { recursive: true });
   writeFileSync(join(sourceDir, 'App.tsx'), 'export const App = () => <main />;');
   writeFileSync(join(sourceDir, 'todos.ts'), 'export const todos = [];');
+  writeFileSync(join(sourceDir, 'vite-env.d.ts'), '/// <reference types="vite/client" />');
   writeFileSync(join(sourceDir, 'App.spec.tsx'), 'ignored');
   writeFileSync(join(sourceDir, '__tests__/helpers.ts'), 'ignored');
 

@@ -9,6 +9,10 @@ function todo(page, title) {
   return page.getByRole('checkbox', { name: title, exact: true });
 }
 
+function filterLink(page, label) {
+  return page.getByRole('link', { name: new RegExp(`^${label}\\b`) });
+}
+
 test('creates trimmed titles in order and validates the title bounds', async ({ page }) => {
   await page.goto('/');
   const field = page.getByRole('textbox', { name: 'New todo' });
@@ -22,6 +26,7 @@ test('creates trimmed titles in order and validates the title bounds', async ({ 
   await field.fill('  Buy oat milk  ');
   await field.press('Enter');
   await expect(todo(page, 'Buy oat milk')).not.toBeChecked();
+  await expect(page.getByRole('status')).not.toBeVisible();
   await expect(field).toBeEmpty();
   await expect(page.getByRole('alert')).toHaveCount(0);
 
@@ -41,17 +46,18 @@ test('creates trimmed titles in order and validates the title bounds', async ({ 
 
 test('keeps the route and immediately applies each filter after mutations', async ({ page }) => {
   await page.goto('/active');
-  await expect(page.getByRole('link', { name: 'Active', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(filterLink(page, 'Active')).toHaveAttribute('aria-current', 'page');
   await addTodo(page, 'Pack lunch');
   await expect(todo(page, 'Pack lunch')).toBeVisible();
+  await expect(page.getByRole('status')).not.toBeVisible();
   await todo(page, 'Pack lunch').click();
   await expect(todo(page, 'Pack lunch')).toHaveCount(0);
   await expect(page.getByRole('status')).toBeVisible();
   await expect(page).toHaveURL('/active');
 
-  await page.getByRole('link', { name: 'Completed', exact: true }).click();
+  await filterLink(page, 'Completed').click();
   await expect(page).toHaveURL('/completed');
-  await expect(page.getByRole('link', { name: 'Completed', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(filterLink(page, 'Completed')).toHaveAttribute('aria-current', 'page');
   await expect(todo(page, 'Pack lunch')).toBeChecked();
 
   await addTodo(page, 'Wash the dishes');
@@ -68,7 +74,7 @@ test('keeps the route and immediately applies each filter after mutations', asyn
   await page.goForward();
   await expect(page).toHaveURL('/completed');
   await expect(page.getByRole('checkbox')).toHaveCount(0);
-  await page.getByRole('link', { name: 'All', exact: true }).click();
+  await filterLink(page, 'All').click();
   await expect(page).toHaveURL('/');
   await expect(page.getByRole('checkbox')).toHaveCount(2);
 });
