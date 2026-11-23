@@ -98,15 +98,14 @@ cli.test.mts               offline tests of defaults, auth, and child commands
 lib/grade_review.mts       shared review grader: REVIEW.md + expected.json → /logs/verifier/reward.json
 lib/sync.sh                stages lib/grade_review.mts into review tasks' tests/ for direct harbor runs (gitignored; pnpm eval does this automatically)
 lib/selfcheck.mts          checks review tasks without Docker: reference solution scores 1, no report 0
-lib/judge_review.mts       scores a saved review with an OpenRouter decision model
+lib/judge_review.mts       scores a saved review with an OpenRouter decision model (plus shared rubric/API helpers)
 lib/judge_review.test.mts  offline tests of review judge requests, responses, and failure handling
-lib/judge_code.mts         adapts exported production source and rewards to the bundled judge-code scorer
+lib/judge_code.mts         scores exported production source code (whole or per-file) with an OpenRouter decision model
 lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, and failure handling
-lib/standalone_judge.test.mts  offline tests of the installed judge-code CLI and evidence follow-up
 lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighting
 lib/highlight_typescript.mts  zero-dependency build-time TypeScript and TSX syntax highlighting
 lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
-../../skills/judge-code/rubrics/
+rubrics/
   domain-modelling.json    shared facet: immutability, domain invariants, boundary separation
   readability.json         shared facet: direct readability and named domain expressions
   module-design.json       shared facet: file-level modular organization and avoiding speculative abstraction
@@ -199,7 +198,7 @@ No SDK or package install is needed. Both models use the
 
 Each task's hidden `tests/judge.json` defines binary pass/fail questions and an optional `target`
 (`"review"` by default, or `"production_code"`), or composes one or more shared skill-level rubric
-facets under [`skills/judge-code/rubrics/`](../../skills/judge-code/rubrics) via `"extends"` (for example,
+facets under `rubrics/` via `"extends"` (for example,
 `{ "extends": ["domain-modelling", "readability", "module-design", "solid"] }`):
 
 - **Review tasks (`lib/judge_review.mts`):** The judge receives the requirement, numbered base

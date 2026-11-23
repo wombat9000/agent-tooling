@@ -1,0 +1,78 @@
+{
+  "rubric": "fowler-smells-v1",
+  "target": "production_code",
+  "questions": {
+    "no_duplicated_code": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of the Duplicated Code smell?",
+      "criteria": {
+        "pass": "Domain rules, validation checks, error mappings, and persistence or transformation blocks are factored cleanly without copy-pasted logic across functions, branches, or files.",
+        "fail": "Substantially similar validation logic, business rules, control-flow blocks, or query/mapping fragments are copy-pasted in multiple places instead of being unified into a shared helper or owning domain method."
+      }
+    },
+    "no_long_functions": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of the Long Function smell?",
+      "criteria": {
+        "pass": "Functions and methods remain concise and focused on one cohesive level of abstraction, delegating distinct sub-steps to well-named domain methods or helpers where appropriate.",
+        "fail": "One or more functions are overly long, monolithic procedures that pack multiple sequential concerns (such as parsing, validation, policy checks, state updates, and persistence or response building) inline without decomposition."
+      }
+    },
+    "no_long_parameter_lists_or_data_clumps": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of Long Parameter List and Data Clumps smells?",
+      "criteria": {
+        "pass": "Function and constructor parameter lists stay concise, and groups of values that naturally belong together (such as start/end timestamps, ranges, or request inputs) are grouped into cohesive domain or boundary types rather than passed repeatedly as separate primitives.",
+        "fail": "Functions take sprawling parameter lists, or the same cluster of primitive values is repeatedly passed together across multiple method signatures instead of being modeled as a cohesive value object."
+      }
+    },
+    "no_feature_envy_or_data_class_anemia": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of Feature Envy and anemic Data Class smells?",
+      "criteria": {
+        "pass": "Domain behavior, invariant checks, policy rules, and state transitions live with the domain types that own the relevant data rather than being computed externally. Boundary request/response DTOs and thin persistence row mappers may remain simple data carriers.",
+        "fail": "Service, controller, or helper methods repeatedly pull fields out of passive domain data classes to compute rules, policies, or state transitions that belong on the owning domain type."
+      }
+    },
+    "no_message_chains": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of the Message Chains smell?",
+      "criteria": {
+        "pass": "Callers interact directly with their collaborators or intention-revealing domain methods rather than navigating deep chains of nested object properties to reach internal data. Fluent builders, standard library collection pipelines, and framework/JDBC query chains are acceptable.",
+        "fail": "Code repeatedly navigates deep object-graph property chains (such as reaching through multiple nested domain objects to inspect or manipulate internal fields) instead of asking the owning object directly."
+      }
+    },
+    "no_primitive_obsession": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of the Primitive Obsession smell?",
+      "criteria": {
+        "pass": "Domain concepts with distinct meaning, units, valid states, or constraints (such as time intervals, statuses, tiers, directions, or validated quantities) are represented with dedicated domain types or enums rather than raw strings, booleans, or magic numbers in core logic.",
+        "fail": "Core domain or service logic relies on raw strings, magic numbers, untyped pairs/tuples, or raw boolean flags to represent structured domain concepts, states, or rules."
+      }
+    },
+    "no_repeated_switches": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of the Repeated Switches smell?",
+      "criteria": {
+        "pass": "Conditional dispatch on a domain type, tier, or status is consolidated onto the owning enum/sealed hierarchy or a single authoritative location rather than repeated across multiple functions or classes.",
+        "fail": "Multiple `when`/`if` chains across different methods or files branch on the same enum, status, or tier discriminator to implement scattered variant-specific rules."
+      }
+    },
+    "no_speculative_or_middle_man": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of Speculative Generality, Lazy Element, and Middle Man smells?",
+      "criteria": {
+        "pass": "Every class, interface, and wrapper earns its keep with a concrete responsibility required by the task, without unused extension points, speculative abstractions, or trivial pass-through delegates.",
+        "fail": "The code contains speculative interfaces/abstractions for hypothetical future needs, near-empty types with no real responsibility, or middle-man classes whose methods merely forward calls unchanged to another object."
+      }
+    },
+    "no_comment_deodorant_or_dead_code": {
+      "type": "choice",
+      "instructions": "Is the supplied production code free of Comments-as-Deodorant and Dead Code smells?",
+      "criteria": {
+        "pass": "Comments are reserved for non-obvious rationale, concurrency/locking intent, or contract nuances rather than narrating obvious lines or apologizing for convoluted code, and there is no commented-out code or unreachable private dead code.",
+        "fail": "The code contains noisy comments that merely restate obvious code, comments excusing unclear logic that should be refactored, commented-out code blocks, or unused private helpers/constants."
+      }
+    }
+  }
+}
