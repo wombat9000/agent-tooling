@@ -74,3 +74,27 @@ test('empty history, absent tasks, and unknown task folders give explicit errors
   rmSync(join(f.tasks, 'canary'), { recursive: true });
   assert.throws(() => reportsFromRun(job, f.tasks), /Unknown task/);
 });
+
+test('saved implementation runs find TypeScript and preserve the Kotlin source root', (t) => {
+  const f = fixture(t);
+  const job = f.run('implementation-run', '2026-01-02T00:00:00');
+  for (const [task, artifactPath, sourceRoot] of [
+    ['implement-react-router-todo', 'artifacts/workspace/src', 'src'],
+    ['implement-mars-rover', 'artifacts/src/main/kotlin', undefined],
+  ] as const) {
+    const taskDir = join(f.tasks, task);
+    mkdirSync(join(taskDir, 'tests'), { recursive: true });
+    writeFileSync(join(taskDir, 'task.toml'), '');
+    writeFileSync(join(taskDir, 'tests/judge.json'), JSON.stringify({ target: 'production_code', source_root: sourceRoot }));
+    const exported = join(job, `${task}__one`, artifactPath);
+    mkdirSync(exported, { recursive: true });
+  }
+  writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-01-02T00:00:00', n_total_trials: 5 }));
+  const reports = reportsFromRun(job, f.tasks).filter((entry) => entry.target === 'production_code');
+  assert.deepEqual(reports.map(({ task, report }) => [task, report]), [
+    ['implement-mars-rover', join(job, 'implement-mars-rover__one/artifacts/src/main/kotlin')],
+    ['implement-react-router-todo', join(job, 'implement-react-router-todo__one/artifacts/workspace/src')],
+  ]);
+  rmSync(join(job, 'implement-mars-rover__one/artifacts/src/main/kotlin'), { recursive: true });
+  assert.throws(() => reportsFromRun(job, f.tasks), /No exported production sources for implement-mars-rover__one/);
+});

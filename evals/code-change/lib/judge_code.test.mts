@@ -193,3 +193,21 @@ test('shared skill rubrics compose via extends and reject invalid, duplicate, or
   assert.throws(() => parseRubric(makeTask('traversal', { extends: '../evil' }), ''), /Invalid shared rubric name/);
   assert.throws(() => parseRubric(makeTask('conflict', { extends: ['readability', 'solid'], target: 'review' }), ''), /conflicts with shared rubric/);
 });
+
+test('collects TypeScript and TSX production modules without including test files', async (t) => {
+  const { root } = sampleSources(t);
+  const sourceDir = join(root, 'app');
+  mkdirSync(join(sourceDir, '__tests__'), { recursive: true });
+  writeFileSync(join(sourceDir, 'App.tsx'), 'export const App = () => <main />;');
+  writeFileSync(join(sourceDir, 'todos.ts'), 'export const todos = [];');
+  writeFileSync(join(sourceDir, 'App.spec.tsx'), 'ignored');
+  writeFileSync(join(sourceDir, '__tests__/helpers.ts'), 'ignored');
+
+  const out = join(root, 'todo-judge');
+  const task = join(ROOT, 'evals/code-change/tasks/implement-react-router-todo');
+  const result = await judgeCode({ task, sourceDir, out, model: 'dry-run', dryRun: true });
+  const request = JSON.parse(readFileSync(join(out, 'request.json'), 'utf8'));
+  assert.equal(result.status, 'dry_run');
+  assert.deepEqual(Object.keys(request.state.production_files), ['App.tsx', 'todos.ts']);
+  assert.ok(readFileSync(writeHtmlReport(out), 'utf8').includes('<span class="tok-ty">&lt;main</span>'));
+});

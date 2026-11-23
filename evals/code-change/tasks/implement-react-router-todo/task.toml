@@ -1,0 +1,17 @@
+schema_version = "1.4"
+artifacts = ["/workspace/src"]
+
+[task]
+name = "agent-tooling/code-change-implement-react-router-todo"
+description = "Build a browser-persisted todo app in TypeScript with React Router and tests."
+keywords = ["code-change", "implement", "typescript", "react-router"]
+
+[environment]
+skills_dir = "/skills"
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 1800
+
+[verifier]
+timeout_sec = 300

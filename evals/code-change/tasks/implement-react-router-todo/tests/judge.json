@@ -1,0 +1,23 @@
+{
+  "rubric": "react-router-todo-v1",
+  "source_root": "src",
+  "extends": ["readability", "module-design", "solid"],
+  "questions": {
+    "single_source_of_todo_state": {
+      "type": "choice",
+      "instructions": "Do the route views show projections of one todo collection without synchronizing separate writable copies?",
+      "criteria": {
+        "pass": "The active route and one todo collection determine the visible list. Any persisted representation initializes or records the collection without introducing a competing mutable list for a route.",
+        "fail": "The app stores independent writable lists or duplicates completion or filter state across routes, requiring manual synchronization for the views to agree."
+      }
+    },
+    "storage_boundary": {
+      "type": "choice",
+      "instructions": "Is browser storage kept at a persistence boundary?",
+      "criteria": {
+        "pass": "Storage keys, serialization, and browser storage access are localized. Route and item rendering do not repeatedly implement persistence mechanics.",
+        "fail": "Multiple view components or todo operations independently implement browser storage keys, parsing, or serialization."
+      }
+    }
+  }
+}

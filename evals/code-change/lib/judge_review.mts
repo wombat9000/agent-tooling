@@ -162,6 +162,7 @@ function loadRawRubric(task: string): { raw: Record<string, unknown>; groups?: R
     raw: {
       rubric: raw.rubric ?? baseRubrics.join('+'),
       target: raw.target ?? baseTarget,
+      source_root: raw.source_root,
       questions: { ...mergedQuestions, ...taskQuestions },
     },
     groups,
@@ -179,6 +180,15 @@ export function taskTarget(task: string): RubricTarget {
   const path = join(task, 'tests/judge.json');
   if (!statSync(path, { throwIfNoEntry: false })?.isFile()) return 'review';
   return parseTarget(loadRawRubric(task).raw.target);
+}
+
+/** Find the production subtree inside the exported /workspace/src artifact. */
+export function taskSourceRoot(task: string): string {
+  const root = loadRawRubric(task).raw.source_root ?? 'src/main/kotlin';
+  if (typeof root !== 'string' || !/^src(?:\/[a-zA-Z0-9_-]+)*$/.test(root)) {
+    throw new Error('Rubric source_root must be src or a subdirectory of src');
+  }
+  return root;
 }
 
 function parseRubricObject(
@@ -225,21 +235,20 @@ function readRubric(task: string): JudgeRubric {
   return parseRubric(task, JUDGE_RULES);
 }
 
-/** Collect Kotlin files recursively; symlinks are rejected. */
-export function collectKotlinFiles(directory: string, includeKts = true, prefix = ''): Record<string, string> {
+// Collect source files recursively without following symlinks.
+export function collectSourceFiles(directory: string, include: (path: string) => boolean, prefix = ''): Record<string, string> {
   const files: Record<string, string> = {};
-  const ext = includeKts ? /\.kts?$/ : /\.kt$/;
   for (const entry of readdirSync(join(directory, prefix), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isSymbolicLink()) throw new Error(`Fixture symlinks are not supported: ${path}`);
-    if (entry.isDirectory()) Object.assign(files, collectKotlinFiles(directory, includeKts, path));
-    else if (entry.isFile() && ext.test(path)) files[path] = readFileSync(join(directory, path), 'utf8');
+    if (entry.isDirectory()) Object.assign(files, collectSourceFiles(directory, include, path));
+    else if (entry.isFile() && include(path)) files[path] = readFileSync(join(directory, path), 'utf8');
   }
   return files;
 }
 
 function fixtureFiles(directory: string): Record<string, string> {
-  return collectKotlinFiles(directory, true);
+  return collectSourceFiles(directory, (path) => /\.kts?$/.test(path));
 }
 
 export function numbered(files: Record<string, string>): Record<string, string> {
