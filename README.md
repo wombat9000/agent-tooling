@@ -12,6 +12,7 @@ Reusable agent skills live under `skills/`. Each skill has an entry-point docume
 - [node-dependency-management](<skills/node-dependency-management/SKILL.md>): npm and pnpm dependency selection, installation, upgrades, and removal. Requires verified vendor maintenance or at least 1,000 GitHub stars, substantive activity within the previous year, and a short risk-based review.
 - [renovate](<skills/renovate/SKILL.md>): ecosystem-neutral dependency maintenance through bounded, parent-first upgrade batches. Supports assessment-only reports, reassesses resolution exceptions, and requires validation evidence.
 - [code-change](<skills/code-change/SKILL.md>): implements and reviews code changes in one style. Implement mode carries a change through verification, an independent review and resolution of findings; review mode returns evidence-backed findings with defined severities. Both modes share one style guide of numbered Rules and Defaults, with [module-design](<skills/code-change/guidance/module-design.md>), [domain-modelling](<skills/code-change/guidance/domain-modelling.md>) and [Kotlin](<skills/code-change/guidance/kotlin.md>) guidance read only when applicable.
+- [judge-code](<skills/judge-code/SKILL.md>) scores a Kotlin or TypeScript production module against versioned binary rubrics and locates evidence for failed checks. It bundles a read-only Node CLI with a local dry run.
 
 ## Evaluations
 
@@ -70,6 +71,14 @@ pnpm dlx skills add wombat9000/agent-tooling --skill code-change
 
 `code-change` replaces `implementing-changes`, `reviewing-changes`, `reviewing-design` and `writing-code`. Remove those skills when you install it, so that agents do not load both. Preserve the full skill directory, including `modes/` and `guidance/`.
 
+### Install the code-quality judging skill
+
+```bash
+pnpm dlx skills add wombat9000/agent-tooling --skill judge-code
+```
+
+The [judge-code instructions](<skills/judge-code/SKILL.md>) include the standalone invocation, input filters, and OpenRouter data-sharing details.
+
 ### Select a release
 
 The shorthand commands above use the repository's default branch. For a specific release, use its GitHub tree URL and select the skill separately:
@@ -105,6 +114,7 @@ After installation, check that your agent discovers the skill. Reload its sessio
 - “Use the code-change skill to implement this change. Do not commit or push.”
 - “Use the code-change skill to review this branch against its requirements. Do not edit files.”
 - “Use the code-change skill to review the design of the billing module only.”
+- “Use the judge-code skill to score the booking module against the module-design and readability rubrics. Preview the files and criteria first.”
 
 Provide the task scope and say whether you want a review or file changes. Skills supply instructions; they do not grant extra tool permissions or authorize commits and releases.
 
