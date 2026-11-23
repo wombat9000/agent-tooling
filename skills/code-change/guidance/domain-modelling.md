@@ -20,11 +20,11 @@ rules. This file does not prescribe a class hierarchy or file layout; see
   Keep checks for external input and for conditions the invariants do not cover.
 - **D4 (Rule)** Parse external input into domain values and operations before
   executing domain behavior. Domain objects and application logic do not
-  interpret input tokens, format protocol output, or throw transport-specific
-  errors (such as HTTP status exceptions); translate domain outcomes at the
-  boundary. Supply the current time to time-based decisions as a value or
-  through an injected clock. Read the system clock directly only at a boundary
-  that supplies time to the policy.
+  interpret input tokens, format protocol output, throw transport-specific
+  errors (such as HTTP status exceptions), or read ambient system state (such as
+  the system clock or environment) directly; supply such inputs as values or
+  injected collaborators from the entry point or boundary, and translate domain
+  outcomes at the boundary.
 - **D5 (Default)** Express domain actions, questions and relationships as named
   operations on the type that owns the knowledge (`order.isOverdue(today)`),
   rather than reconstructing them from fields or inline conditional calculations
