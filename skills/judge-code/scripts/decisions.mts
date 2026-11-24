@@ -5,6 +5,7 @@ import type { StructureManifest } from './structure.mts';
 
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const DEFAULT_DECISION_MODEL = 'liquid/d1.2-ultra';
+export const DEFAULT_FILE_MODE_DECISION_MODEL = 'typesafe/jev-1.14';
 export const PASS_THRESHOLD = 0.8;
 export const DEFAULT_OPENROUTER_CONCURRENCY = 16;
 export const DEFAULT_CLI_CONCURRENCY = 4;

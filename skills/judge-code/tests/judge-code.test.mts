@@ -1199,3 +1199,65 @@ test('formatSummary does not round failing sub-threshold probabilities up to the
   assert.match(summary, /direct_readability \(0\.796\)/);
   assert.doesNotMatch(summary, /\(0\.80\)/);
 });
+
+test('OpenRouter default model is typesafe/jev-1.14 in file mode and liquid/d1.2-ultra in code/structure modes', (t) => {
+  const { run, root } = setup(t);
+
+  // --help documents both per-mode defaults
+  const helpProc = run('preview', ['--help']);
+  assert.equal(helpProc.status, 0, helpProc.stderr);
+  assert.match(helpProc.stdout, /liquid\/d1\.2-ultra for code\/structure, typesafe\/jev-1\.14 for file/);
+
+  // --mode file defaults to typesafe/jev-1.14
+  const fileOut = join(root, 'default-model-file');
+  const fileProc = run('preview', ['--source', 'booking', '--mode', 'file', '--rubric', 'readability', '--out', fileOut, '--dry-run']);
+  assert.equal(fileProc.status, 0, fileProc.stderr);
+  const fileRes = JSON.parse(fileProc.stdout);
+  assert.equal(fileRes.requested_model, 'typesafe/jev-1.14');
+  const firstReq = JSON.parse(readFileSync(join(fileOut, fileRes.file_results[0].result_dir, 'request.json'), 'utf8'));
+  assert.equal(firstReq.model, 'typesafe/jev-1.14');
+
+  // Explicit --model overrides the --mode file default
+  const overrideOut = join(root, 'override-model-file');
+  const overrideProc = run('preview', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--model', 'liquid/d1.2-ultra',
+    '--out', overrideOut,
+    '--dry-run',
+  ]);
+  assert.equal(overrideProc.status, 0, overrideProc.stderr);
+  const overrideRes = JSON.parse(overrideProc.stdout);
+  assert.equal(overrideRes.requested_model, 'liquid/d1.2-ultra');
+  const overrideReq = JSON.parse(readFileSync(join(overrideOut, overrideRes.file_results[0].result_dir, 'request.json'), 'utf8'));
+  assert.equal(overrideReq.model, 'liquid/d1.2-ultra');
+
+  // --mode code and --mode structure keep liquid/d1.2-ultra as default
+  const codeOut = join(root, 'default-model-code');
+  const codeProc = run('preview', ['--source', 'booking', '--mode', 'code', '--rubric', 'readability', '--out', codeOut, '--dry-run']);
+  assert.equal(codeProc.status, 0, codeProc.stderr);
+  assert.equal(JSON.parse(codeProc.stdout).requested_model, 'liquid/d1.2-ultra');
+  assert.equal(JSON.parse(readFileSync(join(codeOut, 'request.json'), 'utf8')).model, 'liquid/d1.2-ultra');
+
+  const structOut = join(root, 'default-model-struct');
+  const structProc = run('preview', ['--source', 'booking', '--mode', 'structure', '--out', structOut, '--dry-run']);
+  assert.equal(structProc.status, 0, structProc.stderr);
+  assert.equal(JSON.parse(structProc.stdout).requested_model, 'liquid/d1.2-ultra');
+  assert.equal(JSON.parse(readFileSync(join(structOut, 'request.json'), 'utf8')).model, 'liquid/d1.2-ultra');
+
+  // --model remains rejected for --backend codex and --backend claude (including in --mode file)
+  for (const backend of ['codex', 'claude'] as const) {
+    const rejected = run('reject', [
+      '--source', 'booking',
+      '--mode', 'file',
+      '--rubric', 'readability',
+      '--backend', backend,
+      '--model', 'typesafe/jev-1.14',
+      '--out', join(root, `reject-model-${backend}`),
+      '--dry-run',
+    ]);
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, /only supported with --backend openrouter/);
+  }
+});
