@@ -74,6 +74,7 @@ test('shared rubrics under rubrics/ parse cleanly and have non-overlapping quest
     ['testing-core', 4],
     ['testing-unit', 2],
     ['testing-integration', 4],
+    ['testing-e2e', 3],
   ] as const) {
     const parsed = parseSharedRubric(slug);
     assert.equal(parsed.target, 'test_code', `${slug} must target test_code`);
@@ -133,7 +134,7 @@ test('Unicode letters do not end verdict words or guideline IDs, and TU/TI testi
   assert.equal(grade(clean, { verdicts: ['ready'], must_find: [] }).verdict, 0);
   const canary = referenceReport('canary').replaceAll('M3', 'éM3').replaceAll('T2', 'T2é');
   assert.equal(grade(canary, expected('canary')).guideline, 0);
-  for (const id of ['TU1', 'TI2']) {
+  for (const id of ['TU1', 'TI2', 'TE1']) {
     const withTierId = referenceReport('canary').replaceAll('M3', 'éM3').replaceAll('T2', id);
     assert.equal(grade(withTierId, expected('canary')).guideline, 1, id);
   }

@@ -112,7 +112,7 @@ test('test_code target finds exported test and production context roots, skips r
   mkdirSync(join(todoTask, 'tests'), { recursive: true });
   writeFileSync(join(todoTask, 'task.toml'), '');
   writeFileSync(join(todoTask, 'tests/judge.json'), JSON.stringify({ target: 'production_code', source_root: 'src' }));
-  writeFileSync(join(todoTask, 'tests/judge-tests.json'), JSON.stringify({ test_source_root: 'tests', extends: ['testing-core', 'testing-integration'] }));
+  writeFileSync(join(todoTask, 'tests/judge-tests.json'), JSON.stringify({ test_source_root: 'tests', extends: ['testing-core', 'testing-e2e'] }));
   mkdirSync(join(job, 'implement-react-router-todo__one/artifacts/workspace/src'), { recursive: true });
   mkdirSync(join(job, 'implement-react-router-todo__one/artifacts/workspace/tests'), { recursive: true });
   writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-01-02T00:00:00', n_total_trials: 5 }));

@@ -28,7 +28,7 @@ writing code, and follow them while writing, not only afterwards.
   looks wrong, report it rather than working around it.
 - When a refactoring is needed, first make the behavior-preserving change and
   verify it with the existing tests, then change behavior.
-- Write tests that follow `guidance/testing.md` (`T1`–`T5`), plus `guidance/testing-unit.md` (`TU1`–`TU2`) for unit tests and `guidance/testing-integration.md` (`TI1`–`TI3`) for persistence, API/HTTP, or end-to-end tests.
+- Write tests that follow `guidance/testing.md` (`T1`–`T5`), plus `guidance/testing-unit.md` (`TU1`–`TU2`) for unit tests, `guidance/testing-integration.md` (`TI1`–`TI3`) for persistence, API/HTTP, or service integration tests, and `guidance/testing-e2e.md` (`TE1`–`TE3`) for browser or UI end-to-end tests.
 
 ## 3. Verify
 

@@ -4,10 +4,11 @@ Core testing guidance. Write tests that protect real behavior at the right layer
 and stay skimmable as the codebase grows. Apply these rules at the scale of the
 system: a small pure-logic library needs only fast unit tests at its public
 boundary, whereas a layered service separates fast unit test file(s),
-persistence tests, and thin end-to-end slices. Read whenever writing, changing,
-or reviewing tests; pair with [testing-unit.md](testing-unit.md) for unit tests
-and [testing-integration.md](testing-integration.md) for persistence, API/HTTP,
-or end-to-end tests. Language- and framework-independent.
+persistence tests, and thin end-to-end slices. Read whenever writing, changing, or reviewing tests; pair with
+[testing-unit.md](testing-unit.md) for unit tests,
+[testing-integration.md](testing-integration.md) for persistence, API/HTTP, or
+service integration tests, and [testing-e2e.md](testing-e2e.md) for browser or
+UI end-to-end tests. Language- and framework-independent.
 
 - **T1 (Rule)** Derive expected outcomes independently from the requirements,
   not by calling the production logic under test or running the implementation

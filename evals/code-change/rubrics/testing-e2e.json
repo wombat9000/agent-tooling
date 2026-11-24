@@ -1,0 +1,30 @@
+{
+  "rubric": "testing-e2e-v1",
+  "target": "test_code",
+  "questions": {
+    "resilient_user_visible_locators": {
+      "type": "choice",
+      "instructions": "Do the browser/UI end-to-end tests locate and assert UI elements through user-visible accessible roles, labels, headings, visible text, or intentional test hooks rather than brittle CSS selectors, DOM paths, or positional indexes?",
+      "criteria": {
+        "pass": "Browser/UI tests interact with and assert elements via accessible roles, labels, headings, visible text, or dedicated test IDs where no accessible role/label exists, keeping locators resilient to layout or styling refactors.",
+        "fail": "Browser/UI tests rely heavily on brittle CSS class chains, structural DOM hierarchy paths (such as deep descendant/child selectors), or hardcoded positional indexes (such as nth-child or arbitrary element indices) to locate or verify elements."
+      }
+    },
+    "deterministic_e2e_waiting_and_isolation": {
+      "type": "choice",
+      "instructions": "Do the browser/UI end-to-end tests use deterministic auto-waiting observable assertions without arbitrary fixed sleeps/timeouts, and isolate or reset state cleanly per test?",
+      "criteria": {
+        "pass": "Tests rely on web-first auto-waiting observable assertions rather than arbitrary fixed sleeps or manual wait timers, and each test starts from clean, isolated state (via fresh browser context/storage reset or clean seeding) so tests do not depend on execution order.",
+        "fail": "Tests use arbitrary fixed sleeps/timeouts (such as sleep or waitForTimeout) to synchronize UI updates, OR share mutable state across tests so later tests depend on earlier tests' side effects."
+      }
+    },
+    "focused_user_journeys": {
+      "type": "choice",
+      "instructions": "Does each browser/UI end-to-end test cover a focused, coherent user-visible flow rather than a sprawling kitchen-sink script, without pushing exhaustive pure client-side logic matrices into slow browser tests?",
+      "criteria": {
+        "pass": "Each browser/UI end-to-end test verifies one focused, coherent user-visible flow or contract (such as core interaction, routing, validation feedback, or persistence across reload) with a clear purpose, and avoids pushing exhaustive pure client-side computation or edge-case matrices into slow browser runs when fast unit tests would be more appropriate.",
+        "fail": "One or more browser/UI end-to-end tests act as sprawling kitchen-sink scripts that chain unrelated features, independent workflows, and multiple unrelated error/validation cases into a single mega-test; OR the suite pushes an exhaustive pure-logic matrix exclusively through slow browser tests instead of fast unit tests."
+      }
+    }
+  }
+}

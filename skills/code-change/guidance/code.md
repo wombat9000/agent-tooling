@@ -70,4 +70,4 @@ finding. **Default**: preferred; a departure is at most Optional.
 
 ## Tests
 
-See [testing.md](testing.md) (`T1`–`T5`) when writing, changing, or reviewing tests, plus [testing-unit.md](testing-unit.md) (`TU1`–`TU2`) for unit tests and [testing-integration.md](testing-integration.md) (`TI1`–`TI3`) for persistence, API/HTTP, or end-to-end tests.
+See [testing.md](testing.md) (`T1`–`T5`) when writing, changing, or reviewing tests, plus [testing-unit.md](testing-unit.md) (`TU1`–`TU2`) for unit tests, [testing-integration.md](testing-integration.md) (`TI1`–`TI3`) for persistence, API/HTTP, or service integration tests, and [testing-e2e.md](testing-e2e.md) (`TE1`–`TE3`) for browser or UI end-to-end tests.

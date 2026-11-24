@@ -2,6 +2,6 @@
   "test_source_root": "tests",
   "extends": [
     "testing-core",
-    "testing-integration"
+    "testing-e2e"
   ]
 }
