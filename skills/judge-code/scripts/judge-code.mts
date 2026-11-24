@@ -4,6 +4,7 @@ import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
 import {
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_DECISION_MODEL,
+  DEFAULT_FILE_MODE_DECISION_MODEL,
   DEFAULT_OPENROUTER_CONCURRENCY,
   runDecisionJudge,
   type JudgeBackend,
@@ -27,7 +28,7 @@ const USAGE = `Usage: node judge-code.mts --source FILE_OR_DIRECTORY --out NEW_D
   --exclude CHECK_ID    Exclude a specific check ID (repeatable)
   --requirements FILE   Optional Markdown or text requirements document
   --conventions FILE    Optional Markdown or text repo conventions document
-  --model ID            OpenRouter Decisions model ID (default: ${DEFAULT_DECISION_MODEL}; openrouter only)
+  --model ID            OpenRouter Decisions model ID (default: ${DEFAULT_DECISION_MODEL} for code/structure, ${DEFAULT_FILE_MODE_DECISION_MODEL} for file; openrouter only)
   --concurrency N       Max concurrent per-file requests in --mode file (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
   --format FORMAT       Output format: json (default) or summary
   --fail-on-violation   Exit with status 1 when any check fails
@@ -67,14 +68,15 @@ function parseConcurrency(value: string | undefined): number | undefined {
   return parsed;
 }
 
-function resolveModel(backend: JudgeBackend, modelArg: string | undefined): string | undefined {
+function resolveModel(backend: JudgeBackend, mode: JudgeMode, modelArg: string | undefined): string | undefined {
   if (backend !== 'openrouter') {
     if (modelArg !== undefined) {
       throw new Error(`--model is only supported with --backend openrouter (codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`);
     }
     return undefined;
   }
-  const model = modelArg ?? DEFAULT_DECISION_MODEL;
+  const defaultModel = mode === 'file' ? DEFAULT_FILE_MODE_DECISION_MODEL : DEFAULT_DECISION_MODEL;
+  const model = modelArg ?? defaultModel;
   if (!/^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i.test(model)) {
     throw new Error('Use a full OpenRouter model ID for --model (for example liquid/d1.2-ultra)');
   }
@@ -127,7 +129,6 @@ async function main(): Promise<void> {
   const backend = parseBackend(values.backend);
   const format = parseFormat(values.format);
   const concurrency = parseConcurrency(values.concurrency);
-  const model = resolveModel(backend, values.model);
 
   const rubric = resolveRubrics({
     mode,
@@ -143,6 +144,8 @@ async function main(): Promise<void> {
     : mode === 'file'
       ? 'file'
       : 'code';
+
+  const model = resolveModel(backend, resolvedMode, values.model);
 
   const runOptions = resolvedMode === 'structure'
     ? (() => {
