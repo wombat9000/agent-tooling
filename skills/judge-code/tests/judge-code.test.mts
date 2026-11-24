@@ -1148,3 +1148,54 @@ console.log(JSON.stringify({
   assert.match(claudeProc.stdout, /4 scored \(4 passed, 0 failed\)/);
   assert.match(claudeProc.stdout, /min P\(pass\)=n\/a/);
 });
+
+test('formatSummary does not round failing sub-threshold probabilities up to the pass threshold', async () => {
+  const { formatSummary } = await import('../scripts/format.mts');
+  const summary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'file',
+    file_count: 1,
+    elapsed_ms: 120,
+    requested_model: 'liquid/d1.2-ultra',
+    returned_model: 'liquid/d1.2-ultra',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability'] },
+    pass_threshold: 0.8,
+    quality: {
+      pass_rate: 0,
+      all_files_pass_rate: 0,
+      checks: {
+        direct_readability: {
+          choice: 'fail',
+          files_passed: 0,
+          files_total: 1,
+          pass_probability: 0.7961,
+          min_pass_probability: 0.7961,
+          confidence: 0.59,
+        },
+      },
+    },
+    file_results: [
+      {
+        file: 'edge.ts',
+        status: 'scored',
+        returned_model: 'liquid/d1.2-ultra',
+        elapsed_ms: 120,
+        pass_rate: 0,
+        result_dir: 'files/01-edge.ts',
+        checks: {
+          direct_readability: {
+            choice: 'fail',
+            model_choice: 'pass',
+            pass_probability: 0.7961,
+            confidence: 0.59,
+          },
+        },
+      },
+    ],
+  }, '/tmp/out');
+  assert.match(summary, /min P\(pass\)=0\.796/);
+  assert.match(summary, /direct_readability \(0\.796\)/);
+  assert.doesNotMatch(summary, /\(0\.80\)/);
+});
