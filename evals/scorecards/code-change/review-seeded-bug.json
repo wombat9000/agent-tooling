@@ -64,7 +64,7 @@
         },
         "quality": {
           "pass_rate": 1,
-          "mean_pass_probability": 0.9984,
+          "mean_pass_probability": 0.9985,
           "checks": {
             "defect_identified": {
               "passed": 3,
@@ -76,18 +76,18 @@
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9989
+              "mean_pass_probability": 0.999
             },
             "restraint": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9971
+              "mean_pass_probability": 0.9974
             }
           }
         },
         "hashes": {
-          "skill_hash": "4f22cf92820e",
+          "skill_hash": "a30a911ea658",
           "task_hash": "df6614a31e20",
           "rubric_hash": "16ef7859205a"
         }

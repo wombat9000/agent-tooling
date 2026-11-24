@@ -23,9 +23,15 @@ reviewing design.
 - **M1 (Rule)** Design around an operation callers need, not the implementation
   steps they must coordinate. The interface completes the operation and owns its
   rules.
-- **M2 (Rule)** Keep the interface small without hiding essential costs or failure
-  modes. A single method with undocumented ordering requirements is not a simple
-  interface.
+- **M2 (Rule)** Keep interfaces and function signatures small without hiding
+  essential costs or failure modes. Group clusters of related inputs that
+  naturally belong together or travel across signatures (such as start/end
+  timestamps, ranges, or multi-field request/command inputs) into a cohesive
+  domain value or command object rather than passing sprawling lists of separate
+  primitives (typically 4+ parameters or repeated clusters). Do not introduce
+  single-field wrappers or parameter objects for a couple of simple independent
+  arguments (`C7`, `D2`). A single method with undocumented ordering requirements
+  is not a simple interface.
 
 See also `C7`: no layers for hypothetical future variation.
 
@@ -40,12 +46,16 @@ See also `C7`: no layers for hypothetical future variation.
 - **M5 (Rule)** Write workflow and entry-point code as a sequence of meaningful
   operations that a reader can follow without deciphering mechanics; delegate
   low-level boundary and domain mechanics to focused units rather than inlining
-  them. Keep protocol concerns (parsing, encoding, transport types, and protocol
-  status codes or exceptions) at the entry-point boundary, storage mechanics
-  (query construction, row mapping) in persistence code, and business rules and
-  workflow coordination in application or domain logic between them—do not wire
-  transport handlers directly into a repository or store that absorbs business
-  rules or throws transport errors.
+  them. Keep each function focused on one cohesive level of abstraction: do not
+  pack input validation, policy checks, state transitions, persistence updates,
+  and notification or response assembly inline into one long procedural handler—
+  delegate domain rules and transitions to the owning domain types (`D5`) and
+  extract cohesive workflow sub-steps (`C6`). Keep protocol concerns (parsing,
+  encoding, transport types, and protocol status codes or exceptions) at the
+  entry-point boundary, storage mechanics (query construction, row mapping) in
+  persistence code, and business rules and workflow coordination in application
+  or domain logic between them—do not wire transport handlers directly into a
+  repository or store that absorbs business rules or throws transport errors.
 - **M6 (Rule)** Apply the deletion test to a suspected pass-through layer: imagine
   removing it. If callers, transport handlers, or persistence adapters would
   have to absorb or duplicate meaningful business rules, workflow coordination,

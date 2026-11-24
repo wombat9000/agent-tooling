@@ -50,10 +50,17 @@ a check passes.
 Check each applicable Rule group in the guide files you read:
 
 - [ ] Readability, names, and inline conditions (`C1`–`C3`, `C7`, `C9`) —
-  including compound (`&&`/`||`) or non-obvious checks inside guards,
-  conditionals, branch expressions, and input/boundary validation.
-- [ ] Domain invariants and immutability (`D1`, `D2`; in Kotlin `K2`, `K3`).
-- [ ] Boundaries, layering, and information hiding (`D4`, `M1`–`M3`, `M5`–`M8`, `M10`).
+  including compound (`&&`/`||`), multi-part range/state, or boundary checks
+  inside constructors, guards, conditionals, branch expressions, and
+  input/boundary validation, plus unnamed domain magic numbers.
+- [ ] Domain invariants, immutability, and owning behavior (`D1`, `D2`, `D5`; in
+  Kotlin `K2`, `K3`) — including raw strings/numbers for closed domain
+  states/tiers/categories, UI/parser-only validation bypassing validated domain
+  constructors/factories, anemic domain records with external policy logic, and
+  repeated `if`/`switch` branches on the same discriminator.
+- [ ] Boundaries, concise signatures, layering, and information hiding (`D4`,
+  `M1`–`M3`, `M5`–`M8`, `M10`) — including sprawling primitive parameter lists or
+  repeated data clumps (`M2`) and long monolithic workflow handlers (`M5`).
 - [ ] File layout and visibility (`M11`, `M12`).
 - [ ] Test layering, typed/observable assertions, owner boundaries, unit single-behavior AAA and doubles, integration scope/fixtures/wiring, and E2E locators/waiting/journeys (`T1`–`T4`, plus `TU1`–`TU2` / `TI1`–`TI3` / `TE1`–`TE3` as applicable) when tests are in scope (full scope only) — explicitly auditing any newly added or modified high-level API/HTTP or E2E test files for inline raw storage queries or mutations (`TI2`), ad-hoc or duplicated setup/request helpers instead of existing shared fixtures or client helpers (`TI2`), and raw untyped JSON tree parsing instead of typed response models or structured matchers (`T3`).
 
