@@ -26,6 +26,10 @@ Read only the file for the chosen mode.
 | [guidance/code.md](guidance/code.md) | Always |
 | [guidance/module-design.md](guidance/module-design.md) | The code adds or changes a function, class or module interface; splits, merges or moves code between files; or the review has design-only scope |
 | [guidance/domain-modelling.md](guidance/domain-modelling.md) | The code creates or changes domain values, validation or state transitions |
+| [guidance/testing.md](guidance/testing.md) | The change writes, changes, or reviews tests |
+| [guidance/testing-unit.md](guidance/testing-unit.md) | The change writes, changes, or reviews unit tests |
+| [guidance/testing-integration.md](guidance/testing-integration.md) | The change writes, changes, or reviews persistence, API/HTTP, or service integration tests |
+| [guidance/testing-e2e.md](guidance/testing-e2e.md) | The change writes, changes, or reviews browser or UI end-to-end tests |
 | [guidance/kotlin.md](guidance/kotlin.md) | The code is Kotlin |
 
 Each guideline has an ID and a strength:

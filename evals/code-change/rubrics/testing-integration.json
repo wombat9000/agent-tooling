@@ -1,0 +1,38 @@
+{
+  "rubric": "testing-integration-v1",
+  "target": "test_code",
+  "questions": {
+    "right_execution_tier": {
+      "type": "choice",
+      "instructions": "Across the persistence, API/HTTP, and service integration test layers alongside the production code, are behaviors tested at the right execution tier—with pure domain logic covered directly in fast unit tests and heavyweight integration layers kept to their proper concerns?",
+      "criteria": {
+        "pass": "When production code contains substantial pure domain logic, policy rules, state transitions, or validation alongside an application, HTTP, or database boundary, pure logic is covered directly in fast unit tests (not exclusively via heavyweight integration tests), transport/binding slices or persistence tests own their respective concerns, and high-level API/service integration tests stay thin vertical slices without mixing in unit-level direct calls or raw database constraint tests.",
+        "fail": "Production code contains substantial pure domain logic, policy rules, state transitions, or validation alongside an application/HTTP/database boundary, yet the test suite relies exclusively on heavyweight full-stack, HTTP, or database integration tests with no direct unit tests for pure logic; OR pure logic tests needlessly boot a full application context, server, or database; OR a high-level API integration test class mixes in unit-level direct domain calls or raw database constraint tests."
+      }
+    },
+    "integration_cohesive_scope": {
+      "type": "choice",
+      "instructions": "Within persistence, API/HTTP, and service integration test layers, does each test cover either one focused contract check or one coherent workflow/lifecycle transition with a clear purpose rather than a sprawling kitchen-sink script?",
+      "criteria": {
+        "pass": "Each persistence, API/HTTP, or service integration test has a clear, focused scope—verifying either one contract check or one coherent workflow or lifecycle transition (brief setup calls needed to reach the starting state are fine), with larger suites organized cleanly by capability.",
+        "fail": "One or more persistence, API/HTTP, or service integration tests act as sprawling kitchen-sink scripts that chain unrelated endpoints, independent workflows, and multiple unrelated error or validation rejections into a single mega-test."
+      }
+    },
+    "shared_fixtures_no_raw_db_in_api": {
+      "type": "choice",
+      "instructions": "Do persistence, API/HTTP, and service integration tests keep setup skimmable with shared fixtures/helpers and keep high-level API integration test bodies completely free of inline raw database queries or mutations?",
+      "criteria": {
+        "pass": "Shared fixture builders or client/actor helpers keep integration test bodies skimmable without copy-pasting private entity-creation helpers or hardcoded magic IDs across sibling test files. High-level API/HTTP integration test method bodies contain no inline raw database queries or mutations (a clean-slate reset in a setup/teardown hook is acceptable, and direct database queries belong in dedicated persistence tests or shared persistence fixtures).",
+        "fail": "High-level API/HTTP integration test bodies contain inline raw database queries or mutations (such as direct SQL/table reads, inserts, updates, or row-count queries) instead of using public boundaries or dedicated persistence tests; OR sibling integration test files copy-paste private entity-creation/auth-setup helpers or hardcoded magic IDs instead of sharing them; OR repetitive low-level request/setup boilerplate obscures test intent."
+      }
+    },
+    "real_internal_wiring": {
+      "type": "choice",
+      "instructions": "Do persistence, API/HTTP, and service integration tests exercise real internal application wiring rather than mocking or spying on internal services or repositories inside a full-stack test context?",
+      "criteria": {
+        "pass": "Persistence, API/HTTP, and service integration tests exercise real internal application wiring across real internal services, handlers, and repositories rather than replacing internal components with mocks or spies inside a full-stack test context. Faking or stubbing only external third-party boundaries (such as email gateways, payment providers, or external identity providers) is acceptable.",
+        "fail": "Full-stack integration or API/HTTP tests mock or spy on internal application services, domain collaborators, or internal repositories instead of exercising real internal wiring."
+      }
+    }
+  }
+}

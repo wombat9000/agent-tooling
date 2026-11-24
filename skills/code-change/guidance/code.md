@@ -70,15 +70,4 @@ finding. **Default**: preferred; a departure is at most Optional.
 
 ## Tests
 
-- **T1 (Rule)** Derive expected values from the requirements, not from running the
-  implementation. Expected values copied from the output only confirm what the
-  code already does.
-- **T2 (Rule)** Assert observable results, such as returned values, persisted
-  state or emitted output, rather than only that the code ran or which internal
-  calls it made.
-- **T3 (Rule)** Test through the module's interface so that internal
-  reorganization does not require rewriting assertions. Do not widen visibility to
-  test private helpers.
-- **T4 (Rule)** Add a test when it would fail for a specific, plausible wrong
-  implementation that the existing tests would not catch. Do not add tests only to
-  increase their number.
+See [testing.md](testing.md) (`T1`–`T5`) when writing, changing, or reviewing tests, plus [testing-unit.md](testing-unit.md) (`TU1`–`TU2`) for unit tests, [testing-integration.md](testing-integration.md) (`TI1`–`TI3`) for persistence, API/HTTP, or service integration tests, and [testing-e2e.md](testing-e2e.md) (`TE1`–`TE3`) for browser or UI end-to-end tests.

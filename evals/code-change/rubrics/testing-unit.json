@@ -1,0 +1,22 @@
+{
+  "rubric": "testing-unit-v1",
+  "target": "test_code",
+  "questions": {
+    "unit_single_behavior_aaa": {
+      "type": "choice",
+      "instructions": "Within the unit test files (tests that run directly in memory without booting a server, database, or browser), does each unit test verify one cohesive behavior, invariant, or failure condition with a clear Arrange-Act-Assert flow?",
+      "criteria": {
+        "pass": "Every unit test file focuses each test on one cohesive behavior, invariant, or failure condition with a single clear Arrange, one Act, and focused Assert phase and a focused name. Checking a compact table or loop of related inputs for one cohesive rule is acceptable. Evaluate unit test files specifically: if a layered project has zero unit tests when pure domain logic exists, pass this check so the missing unit layer is scored under `right_execution_tier` in `testing-integration` rather than double-penalized here.",
+        "fail": "One or more unit tests chain unrelated operations, multiple distinct behaviors, or compound multi-phase workflows into a single unit test method (such as combining unrelated rules or multiple independent success and error paths under compound test names)."
+      }
+    },
+    "disciplined_test_doubles": {
+      "type": "choice",
+      "instructions": "Within unit tests, are real pure domain objects used directly rather than mocked, and are any boundary collaborator test doubles (mocks, stubs, fakes) used with discipline?",
+      "criteria": {
+        "pass": "Unit tests use real pure domain objects directly rather than mocking them. Where boundary collaborators are mocked or faked in unit tests, tests stub once and assert observable outcomes or captured arguments once without duplicating identical multi-field argument predicates in both stubbing and verification, avoid brittle strict call-order assertions unless call ordering is itself an observable contract, avoid broad catch-all wildcard matchers in meaningful verifications, and do not write mock-only tests for trivial one-line pass-through wrappers. Clean mock-free unit suites pass.",
+        "fail": "Unit tests unnecessarily mock pure domain value or policy objects; OR double-specify the same multi-field argument predicate in both mock stubbing and verification; OR enforce brittle strict call-order assertions when ordering is not an observable contract; OR rely on broad catch-all wildcards in meaningful verifications; OR consist of mock-only tests for trivial one-line pass-through wrappers."
+      }
+    }
+  }
+}

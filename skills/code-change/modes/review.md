@@ -35,7 +35,7 @@ required and actual behavior differ.
 Derive the expected results from the requirements. Name plausible wrong
 implementations, such as an off-by-one at a boundary or state left modified
 after a rejected operation, and check whether the tests would fail for them.
-Check the tests against `T1`–`T4`.
+Check the tests against `guidance/testing.md` (`T1`–`T5`), plus `guidance/testing-unit.md` (`TU1`–`TU2`) for unit tests, `guidance/testing-integration.md` (`TI1`–`TI3`) for persistence, API/HTTP, or service integration tests, and `guidance/testing-e2e.md` (`TE1`–`TE3`) for browser or UI end-to-end tests.
 
 A test gap is a finding only for in-scope behavior where a named wrong
 implementation would pass. A missing test is not evidence of a defect.
@@ -55,6 +55,7 @@ Check each applicable Rule group in the guide files you read:
 - [ ] Domain invariants and immutability (`D1`, `D2`; in Kotlin `K2`, `K3`).
 - [ ] Boundaries, layering, and information hiding (`D4`, `M1`–`M3`, `M5`–`M8`, `M10`).
 - [ ] File layout and visibility (`M11`, `M12`).
+- [ ] Test layering, typed/observable assertions, owner boundaries, unit single-behavior AAA and doubles, integration scope/fixtures/wiring, and E2E locators/waiting/journeys (`T1`–`T4`, plus `TU1`–`TU2` / `TI1`–`TI3` / `TE1`–`TE3` as applicable) when tests are in scope (full scope only) — explicitly auditing any newly added or modified high-level API/HTTP or E2E test files for inline raw storage queries or mutations (`TI2`), ad-hoc or duplicated setup/request helpers instead of existing shared fixtures or client helpers (`TI2`), and raw untyped JSON tree parsing instead of typed response models or structured matchers (`T3`).
 
 Check relevant Defaults as well. For design, use the review questions and the
 three-part test in `guidance/module-design.md`. With design-only scope, skip

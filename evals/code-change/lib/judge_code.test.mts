@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { judgeCode } from './judge_code.mts';
+import { judgeCode, judgeTests } from './judge_code.mts';
 import { writeHtmlReport } from './html_report.mts';
 
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
@@ -114,12 +114,29 @@ test('per-file mode stops on first API error and dry-run/missing make no API cal
 
   const failed = await judgeCode({ task: MARS_ROVER, sourceDir: src, model: 'liquid/d1.2-ultra', out: join(root, 'err'), scope: 'per-file' }, (async () => {
     calls += 1;
-    return new Response('{}', { status: 429 });
+    return new Response('{}', { status: 400 });
   }) as typeof fetch);
   assert.equal(calls, 1);
   assert.equal(failed.status, 'error');
   assert.equal(failed.quality, null);
   assert.deepEqual(failed.file_results?.map((f) => f.status), ['error', 'pending']);
+
+  let retryCalls = 0;
+  const sleeps: number[] = [];
+  const recovered = await judgeCode(
+    { task: MARS_ROVER, sourceDir: src, model: 'liquid/d1.2-ultra', out: join(root, 'recovered'), scope: 'whole' },
+    (async (_url, init) => {
+      retryCalls += 1;
+      if (retryCalls === 1) return new Response('{}', { status: 429, headers: { 'Retry-After': '2' } });
+      const body = JSON.parse(String(init?.body));
+      return decisionResponse('liquid/d1.2-ultra-snap', Object.fromEntries(Object.keys(body.questions).map((id) => [id, true])));
+    }) as typeof fetch,
+    { sleep: async (ms) => { sleeps.push(ms); }, onRetry: () => {} },
+  );
+  assert.equal(retryCalls, 2);
+  assert.deepEqual(sleeps, [2_000]);
+  assert.equal(recovered.status, 'scored');
+  assert.equal(recovered.quality?.pass_rate, 1);
 
   delete process.env.OPENROUTER_API_KEY;
   const dry = await judgeCode({ task: MARS_ROVER, sourceDir: src, model: 'liquid/d1.2-ultra', out: join(root, 'dry'), scope: 'per-file', dryRun: true });
@@ -211,4 +228,116 @@ test('collects TypeScript and TSX production modules without including test or d
   assert.equal(result.status, 'dry_run');
   assert.deepEqual(Object.keys(request.state.production_files), ['App.tsx', 'todos.ts']);
   assert.ok(readFileSync(writeHtmlReport(out), 'utf8').includes('<span class="tok-ty">&lt;main</span>'));
+});
+
+test('judgeTests sends test_files and read-only production_files_context against composed test_code facets', async (t) => {
+  const { root, src, rewardPath } = sampleSources(t);
+  const testDir = join(root, 'src/test/kotlin/rover');
+  mkdirSync(testDir, { recursive: true });
+  writeFileSync(join(testDir, 'MarsRoverTest.kt'), 'package rover\nimport kotlin.test.Test\nclass MarsRoverTest { @Test fun ok() {} }\n');
+  writeFileSync(join(testDir, 'notes.txt'), 'ignored\n');
+
+  const requests: Array<{
+    state: {
+      scope: string;
+      test_files: Record<string, string>;
+      production_files_context?: Record<string, string>;
+    };
+    questions: Record<string, { instructions: string }>;
+  }> = [];
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  t.after(() => { if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = prevKey; });
+
+  const out = join(root, 'tests-scored');
+  const result = await judgeTests(
+    { task: MARS_ROVER, testDir: join(root, 'src/test/kotlin'), productionDir: src, model: 'liquid/d1.2-ultra', out, rewardPath },
+    (async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      requests.push(body);
+      return decisionResponse('liquid/d1.2-ultra-snap', Object.fromEntries(
+        Object.keys(body.questions).map((id) => [id, id !== 'unit_single_behavior_aaa']),
+      ));
+    }) as typeof fetch,
+  );
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].state.scope, 'whole');
+  assert.deepEqual(Object.keys(requests[0].state.test_files), ['rover/MarsRoverTest.kt']);
+  assert.deepEqual(Object.keys(requests[0].state.production_files_context ?? {}), ['rover/Direction.kt', 'rover/Rover.kt']);
+  assert.match(requests[0].questions.independent_requirement_coverage.instructions, /production_files_context.*read-only context/);
+  assert.equal(requests[0].questions.right_execution_tier, undefined);
+  assert.equal(result.status, 'scored');
+  assert.equal(result.target, 'test_code');
+  assert.equal(result.file_count, 1);
+  assert.equal(result.context_file_count, 2);
+  assert.equal(result.rubric, 'testing-core-v1+testing-unit-v1');
+  assert.deepEqual(Object.keys(result.rubric_groups ?? {}), ['testing-core', 'testing-unit']);
+  assert.equal(result.deterministic.reward, 1);
+  assert.equal(result.quality?.checks.unit_single_behavior_aaa.choice, 'fail');
+  assert.equal(result.quality?.checks.independent_requirement_coverage.choice, 'pass');
+  assert.equal(result.quality?.pass_rate, 5 / 6);
+
+  const html = readFileSync(writeHtmlReport(out), 'utf8');
+  assert.ok(html.includes('Test files (1)'));
+  assert.ok(html.includes('Production context (2 files)'));
+  assert.ok(html.includes('rover/MarsRoverTest.kt'));
+  assert.ok(html.includes('rover/Direction.kt'));
+  assert.ok(html.includes('Target <strong>test_code</strong>'));
+});
+
+test('judgeTests supports custom tests/judge-tests.json, TypeScript tests, dry-run, missing test files, and rejects review tasks', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'code-change-judge-tests-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const customTask = join(root, 'custom-task');
+  mkdirSync(join(customTask, 'tests'), { recursive: true });
+  writeFileSync(join(customTask, 'instruction.md'), 'Build a widget.');
+  writeFileSync(join(customTask, 'tests/judge.json'), JSON.stringify({ extends: 'readability', source_root: 'src' }));
+  writeFileSync(join(customTask, 'tests/judge-tests.json'), JSON.stringify({
+    extends: ['testing-core'],
+    rubric: 'custom-testing-v1',
+    test_source_root: 'tests',
+    questions: {
+      extra_test_check: {
+        type: 'choice',
+        instructions: 'Extra test check?',
+        criteria: { pass: 'Yes.', fail: 'No.' },
+      },
+    },
+  }));
+
+  const tsTestDir = join(root, 'tests');
+  mkdirSync(tsTestDir, { recursive: true });
+  writeFileSync(join(tsTestDir, 'widget.spec.ts'), 'export const test = () => true;\n');
+  writeFileSync(join(tsTestDir, 'helpers.ts'), 'export const helper = () => 1;\n');
+  writeFileSync(join(tsTestDir, 'types.d.ts'), 'export type Ignored = string;\n');
+
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  t.after(() => { if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = prevKey; });
+
+  const dryOut = join(root, 'dry');
+  const dry = await judgeTests({ task: customTask, testDir: tsTestDir, model: 'liquid/d1.2-ultra', out: dryOut, dryRun: true });
+  assert.equal(dry.status, 'dry_run');
+  assert.equal(dry.rubric, 'custom-testing-v1');
+  assert.equal(dry.file_count, 2);
+  assert.equal(dry.context_file_count, 0);
+  const request = JSON.parse(readFileSync(join(dryOut, 'request.json'), 'utf8'));
+  assert.deepEqual(Object.keys(request.state.test_files), ['helpers.ts', 'widget.spec.ts']);
+  assert.equal(request.state.production_files_context, undefined);
+  assert.ok(request.questions.extra_test_check);
+  assert.deepEqual(Object.keys(dry.rubric_groups ?? {}), ['testing-core', 'task']);
+
+  const emptyDir = join(root, 'empty-tests');
+  mkdirSync(emptyDir);
+  const missing = await judgeTests({ task: customTask, testDir: emptyDir, model: 'liquid/d1.2-ultra', out: join(root, 'missing') });
+  assert.equal(missing.status, 'missing_report');
+  assert.equal(missing.target, 'test_code');
+  assert.equal(missing.file_count, 0);
+
+  await assert.rejects(
+    judgeTests({ task: join(ROOT, 'evals/code-change/tasks/canary'), testDir: tsTestDir, model: 'liquid/d1.2-ultra', out: join(root, 'bad'), dryRun: true }),
+    /targets review/,
+  );
 });

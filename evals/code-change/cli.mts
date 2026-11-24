@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /** Terminal entry point for code-change evals. Run pnpm eval --help for commands. */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { judgeReview, taskTarget } from './lib/judge_review.mts';
-import { judgeCode, type JudgeScope } from './lib/judge_code.mts';
+import { judgeReview, taskTarget, type RubricTarget } from './lib/judge_review.mts';
+import { judgeCode, judgeTests, type JudgeScope } from './lib/judge_code.mts';
 import { latestCodexRun, reportsFromRun } from './lib/run_reports.mts';
 import { latestJudgment, writeHtmlReport } from './lib/html_report.mts';
 import { DEFAULT_RUN_CONCURRENCY, countRunningDockerContainers, resolveRunConcurrency } from './lib/docker_concurrency.mts';
@@ -48,7 +48,9 @@ Lock option (smoke, canary, run):
 Judge options:
   --latest              Use the latest completed Codex run (default without a report)
   --run DIRECTORY       Use a specific saved Harbor run
+  --resume DIRECTORY    Resume an interrupted batch judge directory (skips scored trials)
   --judge NAME          d1 (default), jev, or a full OpenRouter model ID
+  --target MODE         default (task default) or tests (test_code for implementation tasks)
   --scope MODE          whole (default) or per-file (production_code tasks)
   --out DIRECTORY       New output directory (default: a unique saved run)
   --open                Open the HTML report in your browser
@@ -64,7 +66,7 @@ All commands:
 
 Harbor commands serialize via a host-wide lock (EVAL_LOCK_PATH or ~/.cache/agent-tooling-evals/harbor.lock).
 Reports are exported automatically. Results: eval-results/
-Judging needs OPENROUTER_API_KEY in your shell.
+Judging needs OPENROUTER_API_KEY in your shell; transient HTTP 429/502/503/504 responses retry with backoff.
 `;
 
 /** Reject non-task paths before passing names to Harbor or loading judge context. */
@@ -201,6 +203,181 @@ function showReport(path: string, open: boolean): Promise<number> {
   return run(opener, [path], process.env, false);
 }
 
+/** Resolve test directory and optional read-only production context directory from a manual path. */
+function resolveManualTestPaths(inputPath: string): { testDir: string; productionDir?: string } {
+  const resolved = resolve(inputPath);
+  const stat = statSync(resolved, { throwIfNoEntry: false });
+  if (stat?.isDirectory()) {
+    const nestedKotlinTests = join(resolved, 'test/kotlin');
+    if (statSync(nestedKotlinTests, { throwIfNoEntry: false })?.isDirectory()) {
+      const nestedKotlinMain = join(resolved, 'main/kotlin');
+      return {
+        testDir: nestedKotlinTests,
+        productionDir: statSync(nestedKotlinMain, { throwIfNoEntry: false })?.isDirectory() ? nestedKotlinMain : undefined,
+      };
+    }
+    const siblingKotlinMain = resolve(resolved, '../../main/kotlin');
+    if (resolved.replaceAll('\\', '/').endsWith('/src/test/kotlin')
+      && statSync(siblingKotlinMain, { throwIfNoEntry: false })?.isDirectory()) {
+      return { testDir: resolved, productionDir: siblingKotlinMain };
+    }
+    const siblingSrc = resolve(resolved, '../src');
+    if (/(?:^|\/)tests?$/.test(resolved.replaceAll('\\', '/'))
+      && statSync(siblingSrc, { throwIfNoEntry: false })?.isDirectory()) {
+      return { testDir: resolved, productionDir: siblingSrc };
+    }
+    return { testDir: resolved };
+  }
+  if (stat?.isFile()) {
+    const normalized = resolved.replaceAll('\\', '/');
+    const kotlinTestMarker = '/src/test/kotlin/';
+    const markerIndex = normalized.lastIndexOf(kotlinTestMarker);
+    if (markerIndex !== -1) {
+      const mainCandidate = `${normalized.slice(0, markerIndex)}/src/main/kotlin`;
+      if (statSync(mainCandidate, { throwIfNoEntry: false })?.isDirectory()) {
+        return { testDir: resolved, productionDir: mainCandidate };
+      }
+    }
+  }
+  return { testDir: resolved };
+}
+
+interface BatchSummaryReport {
+  trial: string;
+  task: string;
+  target: RubricTarget;
+  report: string;
+  contextDir?: string;
+  rewardPath?: string;
+  status: string;
+  result_dir: string;
+  quality_pass_rate: number | null;
+  error: string | null;
+}
+
+interface BatchSummary {
+  source_run: string;
+  model: string;
+  scope: JudgeScope;
+  target?: 'test_code';
+  reports: BatchSummaryReport[];
+}
+
+function loadResumeSummary(directory: string): { out: string; summary: BatchSummary } {
+  const out = resolve(directory);
+  const summaryPath = join(out, 'summary.json');
+  if (!statSync(out, { throwIfNoEntry: false })?.isDirectory() || !statSync(summaryPath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`No saved batch judge summary in ${out}. Pass a batch judge output directory containing summary.json.`);
+  }
+  const raw = JSON.parse(readFileSync(summaryPath, 'utf8'));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`Invalid summary.json in ${out}.`);
+  }
+  if (typeof raw.source_run !== 'string' || !raw.source_run.trim()) {
+    throw new Error(`Invalid summary.json in ${out}: missing source_run.`);
+  }
+  if (typeof raw.model !== 'string' || !raw.model.trim()) {
+    throw new Error(`Invalid summary.json in ${out}: missing model.`);
+  }
+  const scope: JudgeScope = raw.scope ?? 'whole';
+  if (scope !== 'whole' && scope !== 'per-file') {
+    throw new Error(`Invalid summary.json in ${out}: unsupported scope ${String(raw.scope)}.`);
+  }
+  if (!Array.isArray(raw.reports) || raw.reports.length === 0) {
+    throw new Error(`Invalid summary.json in ${out}: reports must be a nonempty array.`);
+  }
+  const reports: BatchSummaryReport[] = raw.reports.map((entry: unknown, index: number) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`Invalid summary.json in ${out}: reports[${index}] must be an object.`);
+    }
+    const item = entry as Record<string, unknown>;
+    if (typeof item.trial !== 'string' || !item.trial.trim()
+      || typeof item.task !== 'string' || !item.task.trim()
+      || typeof item.report !== 'string' || !item.report.trim()
+      || typeof item.result_dir !== 'string' || !item.result_dir.trim()
+      || typeof item.status !== 'string' || !item.status.trim()) {
+      throw new Error(`Invalid summary.json in ${out}: reports[${index}] is missing required fields.`);
+    }
+    const taskDir = taskDirectory(item.task);
+    const target: RubricTarget = item.target === 'review' || item.target === 'production_code' || item.target === 'test_code'
+      ? item.target
+      : raw.target === 'test_code'
+        ? 'test_code'
+        : taskTarget(taskDir);
+    return {
+      ...(item as unknown as BatchSummaryReport),
+      target,
+    };
+  });
+  return {
+    out,
+    summary: {
+      source_run: raw.source_run,
+      model: raw.model,
+      scope,
+      ...(raw.target === 'test_code' ? { target: 'test_code' as const } : {}),
+      reports,
+    },
+  };
+}
+
+async function runBatchJudge(
+  out: string,
+  summary: BatchSummary,
+  dryRun: boolean,
+  open: boolean,
+  isResume: boolean,
+): Promise<number> {
+  const resolvedOut = resolve(out);
+  const saveSummary = () => {
+    writeFileSync(join(resolvedOut, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
+    writeHtmlReport(resolvedOut);
+  };
+  saveSummary();
+  for (const entry of summary.reports) {
+    if (isResume && entry.status !== 'error' && entry.status !== 'pending') {
+      continue;
+    }
+    if (isResume) {
+      const resolvedTrialDir = resolve(entry.result_dir);
+      if (resolvedTrialDir !== resolvedOut && !resolvedTrialDir.startsWith(`${resolvedOut}${sep}`)) {
+        throw new Error(`Refusing to clear trial result directory outside ${resolvedOut}: ${resolvedTrialDir}`);
+      }
+      if (existsSync(resolvedTrialDir)) {
+        rmSync(resolvedTrialDir, { recursive: true, force: true });
+      }
+    }
+    try {
+      const result = entry.target === 'test_code'
+        ? await judgeTests({ task: taskDirectory(entry.task), testDir: entry.report,
+            productionDir: entry.contextDir, model: summary.model, out: entry.result_dir,
+            rewardPath: entry.rewardPath, dryRun })
+        : entry.target === 'production_code'
+          ? await judgeCode({ task: taskDirectory(entry.task), sourceDir: entry.report,
+              model: summary.model, out: entry.result_dir, scope: summary.scope,
+              rewardPath: entry.rewardPath, dryRun })
+          : await judgeReview({ task: taskDirectory(entry.task), report: entry.report,
+              model: summary.model, out: entry.result_dir, dryRun });
+      entry.status = result.status;
+      entry.quality_pass_rate = result.quality?.pass_rate ?? null;
+      entry.error = result.error ?? null;
+    } catch (error) {
+      entry.status = 'error';
+      entry.error = error instanceof Error ? error.message : 'Judging failed';
+    }
+    saveSummary();
+    if (entry.status === 'error' || entry.status === 'missing_report') {
+      if (entry.error) console.error(entry.error);
+      if (entry.status === 'error') {
+        console.error(`Resume remaining trials with: pnpm eval judge --resume ${resolvedOut}`);
+      }
+      await showReport(join(resolvedOut, 'report.html'), open);
+      return 1;
+    }
+  }
+  return showReport(join(resolvedOut, 'report.html'), open);
+}
+
 async function main(): Promise<number> {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === '--help' || command === '-h' || args.includes('--help')) {
@@ -236,30 +413,61 @@ async function main(): Promise<number> {
   }
   if (command === 'judge') {
     const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-      ...common, judge: { type: 'string', default: 'd1' }, out: { type: 'string' },
-      scope: { type: 'string', default: 'whole' },
+      ...common, judge: { type: 'string' }, out: { type: 'string' },
+      scope: { type: 'string' },
+      target: { type: 'string' },
       latest: { type: 'boolean', default: false }, run: { type: 'string' },
+      resume: { type: 'string' },
       open: { type: 'boolean', default: false },
     } });
-    if (positionals.length > 2) throw new Error('Usage: pnpm eval judge [task] [report] [--latest | --run DIRECTORY] [--judge d1|jev|MODEL] [--scope whole|per-file]');
+    if (values.resume !== undefined) {
+      if (!values.resume.trim()) throw new Error('--resume must name a saved batch judge directory.');
+      if (positionals.length > 0 || values.latest || values.run !== undefined || values.out !== undefined
+        || values.judge !== undefined || values.target !== undefined || values.scope !== undefined) {
+        throw new Error('--resume uses settings saved in summary.json; omit task/report paths, --latest, --run, --out, --judge, --target, and --scope.');
+      }
+      const { out, summary } = loadResumeSummary(values.resume);
+      const remaining = summary.reports.filter((entry) => entry.status === 'error' || entry.status === 'pending');
+      const alreadyScored = summary.reports.filter((entry) => entry.status === 'scored').length;
+      if (remaining.length === 0) {
+        console.log(`Resuming: ${out}`);
+        console.log(`All ${summary.reports.length} trials are already settled (${alreadyScored} scored); regenerating report.`);
+        return showReport(writeHtmlReport(out), values.open);
+      }
+      if (!values['dry-run'] && !process.env.OPENROUTER_API_KEY?.trim()) {
+        throw new Error('Set OPENROUTER_API_KEY before judging.');
+      }
+      console.log(`Resuming: ${out}`);
+      console.log(`Run: ${summary.source_run}`);
+      console.log(`Judge: ${summary.model} (${summary.scope}${summary.target === 'test_code' ? ', test_code' : ''}); remaining: ${remaining.length}/${summary.reports.length} (${alreadyScored} already scored)`);
+      return runBatchJudge(out, summary, values['dry-run'], values.open, true);
+    }
+    const judgeValue = values.judge ?? 'd1';
+    const scopeValue = values.scope ?? 'whole';
+    const targetValue = values.target ?? 'default';
+    if (positionals.length > 2) throw new Error('Usage: pnpm eval judge [task] [report] [--latest | --run DIRECTORY | --resume DIRECTORY] [--judge d1|jev|MODEL] [--target default|tests] [--scope whole|per-file]');
     if (positionals.some((value) => value.length === 0)) throw new Error('Task and report arguments must not be empty.');
     if (values.run !== undefined && !values.run.trim()) throw new Error('--run must name a saved run directory.');
-    if (values.scope !== 'whole' && values.scope !== 'per-file') {
+    if (scopeValue !== 'whole' && scopeValue !== 'per-file') {
       throw new Error('--scope must be whole or per-file');
     }
-    const scope: JudgeScope = values.scope;
+    if (targetValue !== 'default' && targetValue !== 'tests' && targetValue !== 'test_code') {
+      throw new Error('--target must be default or tests');
+    }
+    const isTestsTarget = targetValue === 'tests' || targetValue === 'test_code';
+    const scope: JudgeScope = scopeValue;
     if ((values.latest && values.run) || (positionals.length === 2 && (values.latest || values.run))) {
       throw new Error('Choose one report source: a report path, --latest, or --run DIRECTORY.');
     }
     const [task, report] = positionals;
     const directory = task ? taskDirectory(task) : undefined;
-    const model = Object.hasOwn(JUDGES, values.judge) ? JUDGES[values.judge] : values.judge;
+    const model = Object.hasOwn(JUDGES, judgeValue) ? JUDGES[judgeValue] : judgeValue;
     if (!model.trim()) throw new Error('--judge must name a model');
-    const modelSlug = `${model.replace(/[^a-zA-Z0-9.-]/g, '-')}${scope === 'per-file' ? '-per-file' : ''}`;
+    const modelSlug = `${model.replace(/[^a-zA-Z0-9.-]/g, '-')}${isTestsTarget ? '-tests' : ''}${scope === 'per-file' ? '-per-file' : ''}`;
     if (!report) {
       const source = values.run ? resolve(values.run) : latestCodexRun(join(RESULTS, 'harbor'));
-      const reports = reportsFromRun(source, TASKS, task);
-      if (scope === 'per-file' && reports.some((entry) => entry.target !== 'production_code')) {
+      const reports = reportsFromRun(source, TASKS, task, isTestsTarget ? 'test_code' : undefined);
+      if (scope === 'per-file' && (isTestsTarget || reports.some((entry) => entry.target !== 'production_code'))) {
         throw new Error('--scope per-file applies only to production_code tasks.');
       }
       if (!values['dry-run'] && !process.env.OPENROUTER_API_KEY?.trim()) throw new Error('Set OPENROUTER_API_KEY before judging.');
@@ -267,62 +475,49 @@ async function main(): Promise<number> {
         : join(RESULTS, 'judges', basename(source), `${modelSlug}-${randomUUID()}`);
       mkdirSync(dirname(out), { recursive: true });
       mkdirSync(out);
-      const summary = {
+      const summary: BatchSummary = {
         source_run: source, model, scope,
+        ...(isTestsTarget ? { target: 'test_code' as const } : {}),
         reports: reports.map((entry) => ({ ...entry, status: 'pending', result_dir: join(out, entry.trial),
           quality_pass_rate: null as number | null, error: null as string | null })),
       };
-      const saveSummary = () => {
-        writeFileSync(join(out, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
-        writeHtmlReport(out);
-      };
-      saveSummary();
       console.log(`Run: ${source}`);
-      console.log(`Judge: ${model} (${scope}); reports: ${reports.length}`);
+      console.log(`Judge: ${model} (${scope}${isTestsTarget ? ', test_code' : ''}); reports: ${reports.length}`);
       console.log(`Results: ${out}`);
-      for (const entry of summary.reports) {
-        try {
-          const result = entry.target === 'production_code'
-            ? await judgeCode({ task: taskDirectory(entry.task), sourceDir: entry.report,
-                model, out: entry.result_dir, scope, rewardPath: entry.rewardPath, dryRun: values['dry-run'] })
-            : await judgeReview({ task: taskDirectory(entry.task), report: entry.report,
-                model, out: entry.result_dir, dryRun: values['dry-run'] });
-          entry.status = result.status;
-          entry.quality_pass_rate = result.quality?.pass_rate ?? null;
-          entry.error = result.error ?? null;
-        } catch (error) {
-          entry.status = 'error';
-          entry.error = error instanceof Error ? error.message : 'Judging failed';
-        }
-        saveSummary();
-        if (entry.status === 'error' || entry.status === 'missing_report') {
-          if (entry.error) console.error(entry.error);
-          await showReport(join(out, 'report.html'), values.open);
-          return 1;
-        }
-      }
-      return showReport(join(out, 'report.html'), values.open);
+      return runBatchJudge(out, summary, values['dry-run'], values.open, false);
     }
-    const target = taskTarget(directory!);
-    if (target === 'review' && scope === 'per-file') {
+    const baseTarget = taskTarget(directory!);
+    const target = isTestsTarget ? 'test_code' : baseTarget;
+    if (isTestsTarget && baseTarget === 'review') {
+      throw new Error(`Task ${task} is a review task and has no test suite to judge.`);
+    }
+    if (target !== 'production_code' && scope === 'per-file') {
       throw new Error('--scope per-file applies only to production_code tasks.');
     }
     const reportStat = statSync(report, { throwIfNoEntry: false });
-    if (target === 'production_code' ? !(reportStat?.isDirectory() || reportStat?.isFile()) : !reportStat?.isFile()) {
+    if (target === 'production_code' || target === 'test_code'
+      ? !(reportStat?.isDirectory() || reportStat?.isFile())
+      : !reportStat?.isFile()) {
       throw new Error(`Report file is missing: ${report}. Omit the path to judge this task in the latest run.`);
     }
     const out = values.out ? resolve(values.out)
       : join(RESULTS, 'judges', task, `${modelSlug}-${randomUUID()}`);
-    const result = target === 'production_code'
-      ? await judgeCode({ task: directory!, sourceDir: report, model, out, scope, dryRun: values['dry-run'] })
-      : await judgeReview({ task: directory!, report, model, out, dryRun: values['dry-run'] });
-    console.log(`Judge: ${model} (${scope})`);
-    console.log(`Status: ${result.status}`);
-    if (result.quality) console.log(`Quality checks passed: ${Object.values(result.quality.checks).filter((v) => v.choice === 'pass').length}/${Object.keys(result.quality.checks).length}`);
+    const result = target === 'test_code'
+      ? (() => {
+        const { testDir, productionDir } = resolveManualTestPaths(report);
+        return judgeTests({ task: directory!, testDir, productionDir, model, out, dryRun: values['dry-run'] });
+      })()
+      : target === 'production_code'
+        ? judgeCode({ task: directory!, sourceDir: report, model, out, scope, dryRun: values['dry-run'] })
+        : judgeReview({ task: directory!, report, model, out, dryRun: values['dry-run'] });
+    const resolvedResult = await result;
+    console.log(`Judge: ${model} (${scope}${target === 'test_code' ? ', test_code' : ''})`);
+    console.log(`Status: ${resolvedResult.status}`);
+    if (resolvedResult.quality) console.log(`Quality checks passed: ${Object.values(resolvedResult.quality.checks).filter((v) => v.choice === 'pass').length}/${Object.keys(resolvedResult.quality.checks).length}`);
     console.log(`Results: ${out}`);
-    if (result.error) console.error(result.error);
+    if (resolvedResult.error) console.error(resolvedResult.error);
     const reportStatus = await showReport(writeHtmlReport(out), values.open);
-    return result.status === 'error' ? 1 : reportStatus;
+    return resolvedResult.status === 'error' ? 1 : reportStatus;
   }
   if (command === 'smoke') {
     const { values } = parseArgs({ args, options: {

@@ -32,7 +32,9 @@ Score the latest completed Codex run after setting `OPENROUTER_API_KEY` in your 
 pnpm eval judge --latest                                      # All tasks and attempts, d1 Ultra
 pnpm eval judge review-seeded-bug --latest                    # Only this task's attempts
 pnpm eval judge implement-mars-rover --latest --scope per-file # Score each production Kotlin file separately
+pnpm eval judge implement-meeting-room-booking --latest --target tests # Score exported test suites against task tests/judge-tests.json facets
 pnpm eval judge --latest --judge jev                          # Same reports, Jev
+pnpm eval judge --resume eval-results/judges/<run>/<batch>    # Resume an interrupted batch, skipping already-scored trials
 ```
 
 Each judge run creates a standalone `report.html` with a Check × Trial matrix (sorted worst-first,
@@ -60,8 +62,15 @@ saved Harbor run. To score one review file or an exported production source dire
 Judge runs get a unique directory under `eval-results/judges/`. Batch runs contain one
 directory per trial and a `summary.json` with the source run and each trial's status and score.
 Every selected artifact is checked before API calls begin. Missing artifacts cause an error;
-they are not silently skipped. Judging stops at the first API error and leaves later trials
-marked `pending`, with earlier results retained. `eval-results/` and Harbor's
+they are not silently skipped. Transient OpenRouter HTTP errors (`429`, `502`, `503`, `504`)
+retry automatically up to 4 times with bounded exponential backoff and jitter (honoring
+`Retry-After` when present), while non-retryable errors (`400`, `401`, `403`, `404`, network
+timeouts, refusals, or malformed responses) fail immediately. If a trial still fails after
+retries, judging stops, leaves later trials marked `pending`, retains earlier results, and
+prints a `pnpm eval judge --resume <judge-dir>` command to continue in-place. Resuming loads
+the saved `summary.json`, keeps all already-`scored` trials untouched, re-runs only `error`
+and `pending` trials with the original run, model, target, and scope settings, and regenerates
+`summary.json` and `report.html`. `eval-results/` and Harbor's
 older `jobs/` directory are ignored by Git; existing results are retained. OpenRouter keys
 are used only for host-side judging and are not passed to Harbor by this wrapper.
 
@@ -99,6 +108,7 @@ passed, it keeps `N` and still prints a short warning.
 | `review-seeded-bug` | Review | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
 | `implement-mars-rover` | Implementation | Implements `rover.MarsRover.execute(inputFile: Path): String` in Kotlin, passes its own and hidden black-box JUnit 5 contract tests, and keeps production code clean and modular. |
 | `implement-meeting-room-booking` | Implementation | Builds a Kotlin Spring Boot API from a Gradle-only starter, using JDBC and in-memory H2 for booking, rescheduling, cancellation, and listing. Hidden tests check HTTP behavior, persisted rows, and concurrent conflicts. |
+| `extend-invoice-disputes` | Implementation | Extends an existing working Kotlin Spring Boot + JDBC + H2 invoice billing service with an invoice dispute workflow, validation matrix, 30-day cutoff, outbound notifications, and concurrent open/resolve conflict protection. |
 | `implement-react-router-todo` | Implementation | Builds a TypeScript React Router todo app with pnpm, route-based filters, and browser-local persistence. Hidden Playwright tests exercise the production build. |
 
 Review tasks ask the agent to write `/output/REVIEW.md` and grade report structure and finding
@@ -130,6 +140,10 @@ rubrics/
   module-design.json       shared facet: file-level modular organization and avoiding speculative abstraction
   solid.json               shared facet: pragmatic SOLID principles (SRP, OCP, LSP, ISP, DIP)
   fowler-smells.json       shared facet: Martin Fowler Refactoring code smells (duplication, long functions, feature envy, primitive obsession, repeated switches, etc.)
+  testing-core.json        shared `test_code` facet: independent coverage, non-duplication, observable diagnostic assertions, owner-boundary testing
+  testing-unit.json        shared `test_code` facet: single-behavior AAA in unit tests and disciplined unit test doubles
+  testing-integration.json shared `test_code` facet: right execution tier, cohesive integration scope, shared fixtures without inline raw DB in API bodies, real internal wiring
+  testing-e2e.json         shared `test_code` facet: user-visible locators, deterministic web-first waiting and isolation, focused user journeys
 tasks/<task>/
   instruction.md           the prompt; never mentions the skill or the report format
   task.toml                Harbor configuration; skills go to /skills
@@ -265,10 +279,14 @@ Every run needs a new output directory to prevent overwriting earlier scores. It
   batch reports as results arrive and preserves error/pending states if judging stops early.
 
 Add `--dry-run` to save and inspect a request without credentials or a network call. Missing
-reports return `missing_report` and no model score. Network, HTTP, refusal, or malformed-answer
-failures return `error`, save no quality score, and exit nonzero. Setup errors also exit nonzero.
-Requests time out after 30 seconds and are not retried automatically. A failed request can be
-rerun with a new output directory. Host-side scores do not replace Harbor's `reward.json`.
+reports return `missing_report` and no model score. Transient HTTP `429`, `502`, `503`, and `504`
+responses retry up to 4 times with bounded exponential backoff and jitter (respecting
+`Retry-After` when present). Hard HTTP errors (`400`, `401`, `403`, `404`), network/timeout
+failures (30 seconds per attempt), refusals, or malformed-answer failures fail immediately with
+no retry, return `error`, save no quality score, and exit nonzero. Setup errors also exit
+nonzero. Interrupted batch runs can be continued in-place with `pnpm eval judge --resume DIRECTORY`
+without re-scoring already-`scored` trials; single-report runs can be rerun into a new output
+directory. Host-side scores do not replace Harbor's `reward.json`.
 
 Judge accuracy and confidence thresholds are **not yet calibrated**. First label sample reviews
 by hand, including correct paraphrases, missed bugs, wrong claims at the expected line, and

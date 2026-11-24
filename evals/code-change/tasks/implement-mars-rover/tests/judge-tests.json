@@ -1,0 +1,6 @@
+{
+  "extends": [
+    "testing-core",
+    "testing-unit"
+  ]
+}
