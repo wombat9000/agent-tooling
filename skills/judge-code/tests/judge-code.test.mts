@@ -104,6 +104,7 @@ test('list-rubrics prints bundled slugs, versioned IDs, and check IDs', (t) => {
   const { run } = setup(t);
   const proc = run('preview', ['--list-rubrics']);
   assert.equal(proc.status, 0, proc.stderr);
+  assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels/);
   assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state/);
   assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination/);
   assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules/);
@@ -189,6 +190,13 @@ test('supports --all, --exclude, --conventions precedence, and repo-local JSON r
   assert.ok(result.rubric.includes('team-api-v1'));
   assert.ok(result.rubric.includes('repo-conventions'));
   assert.deepEqual(result.rubric_groups.conventions, ['follows_repo_conventions']);
+  assert.deepEqual(result.rubric_groups['api-design'], [
+    'no_rigid_enums_for_editorial_labels',
+    'cohesive_resource_boundaries',
+    'single_canonical_representation',
+    'clean_server_owned_contracts_and_opaque_ids',
+    'minimal_standard_http_surface',
+  ]);
   assert.ok(!result.rubric_groups['domain-modelling'].includes('immutable_state'));
 });
 
