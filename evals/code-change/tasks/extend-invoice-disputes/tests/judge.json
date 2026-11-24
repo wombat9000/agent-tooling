@@ -1,0 +1,9 @@
+{
+  "extends": [
+    "domain-modelling",
+    "readability",
+    "module-design",
+    "solid",
+    "fowler-smells"
+  ]
+}

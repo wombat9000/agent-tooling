@@ -100,6 +100,7 @@ passed, it keeps `N` and still prints a short warning.
 | `review-seeded-bug` | Review | Reports the `>=` threshold bug as **Blocking** correctness at `PricingPolicy.kt:18`. |
 | `implement-mars-rover` | Implementation | Implements `rover.MarsRover.execute(inputFile: Path): String` in Kotlin, passes its own and hidden black-box JUnit 5 contract tests, and keeps production code clean and modular. |
 | `implement-meeting-room-booking` | Implementation | Builds a Kotlin Spring Boot API from a Gradle-only starter, using JDBC and in-memory H2 for booking, rescheduling, cancellation, and listing. Hidden tests check HTTP behavior, persisted rows, and concurrent conflicts. |
+| `extend-invoice-disputes` | Implementation | Extends an existing working Kotlin Spring Boot + JDBC + H2 invoice billing service with an invoice dispute workflow, validation matrix, 30-day cutoff, outbound notifications, and concurrent open/resolve conflict protection. |
 | `implement-react-router-todo` | Implementation | Builds a TypeScript React Router todo app with pnpm, route-based filters, and browser-local persistence. Hidden Playwright tests exercise the production build. |
 
 Review tasks ask the agent to write `/output/REVIEW.md` and grade report structure and finding

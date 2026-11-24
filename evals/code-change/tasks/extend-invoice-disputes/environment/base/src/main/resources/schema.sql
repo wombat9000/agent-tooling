@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS invoices (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL,
+    amount_cents BIGINT NOT NULL,
+    currency VARCHAR(3) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    issued_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    paid_at TIMESTAMP WITH TIME ZONE
+);
