@@ -316,3 +316,127 @@ test('rejects invalid inputs, bad exclusions, mismatched versions, and heuristic
   assert.match(leaked.stderr, /OPENROUTER_API_KEY appears/);
   assert.ok(!leaked.stderr.includes('fixture-api-key'));
 });
+
+test('structure mode builds a compact manifest including .server/.client, exports, imports, and rejects mixed rubrics', (t) => {
+  const { run, root, project } = setup(t);
+  const feature = join(project, 'onboarding');
+  mkdirSync(join(feature, '.server'), { recursive: true });
+  mkdirSync(join(feature, 'components'), { recursive: true });
+  writeFileSync(
+    join(feature, '.server/decisions.ts'),
+    "import { loadState } from './firestore';\nimport { z } from 'zod';\nexport interface Decision {}\nexport function evaluateDecisions() { return loadState(z); }\n",
+  );
+  writeFileSync(
+    join(feature, '.server/firestore.ts'),
+    "import { Firestore } from '@google-cloud/firestore';\nexport function loadState(x: unknown) { return [Firestore, x]; }\n",
+  );
+  writeFileSync(
+    join(feature, '.server/decisions.test.ts'),
+    "import { evaluateDecisions } from './decisions';\nconsole.log(evaluateDecisions);\n",
+  );
+  writeFileSync(
+    join(feature, 'components/language-picker.tsx'),
+    "import { LanguageChip } from './language-chip';\nexport function LanguagePicker() { return LanguageChip; }\n",
+  );
+  writeFileSync(
+    join(feature, 'components/language-chip.tsx'),
+    'export const LanguageChip = () => null;\n',
+  );
+  writeFileSync(join(feature, '.server/data.json'), '{"ok":true}\n');
+
+  // --mode structure defaults to project-structure rubric
+  const out = join(root, 'structure-preview');
+  const proc = run('preview', [
+    '--source', 'onboarding',
+    '--mode', 'structure',
+    '--out', out,
+    '--dry-run',
+  ]);
+  assert.equal(proc.status, 0, proc.stderr);
+  const result = JSON.parse(proc.stdout);
+  const request = JSON.parse(readFileSync(join(out, 'request.json'), 'utf8'));
+
+  assert.equal(result.mode, 'structure');
+  assert.equal(result.rubric, 'project-structure-v1');
+  assert.equal(result.file_count, 6);
+  assert.equal('production_files' in request.state, false);
+  const manifest = request.state.project_structure;
+  assert.equal(manifest.root_name, 'onboarding');
+  assert.deepEqual(manifest.directory_summary['.server'], {
+    source_files: 2,
+    test_files: 1,
+    other_files: 1,
+    subdirs: 0,
+  });
+  assert.deepEqual(manifest.files['.server/decisions.ts'].exports, ['Decision', 'evaluateDecisions']);
+  assert.deepEqual(manifest.files['.server/decisions.ts'].local_imports, ['./firestore']);
+  assert.deepEqual(manifest.files['.server/decisions.ts'].external_imports, ['zod']);
+  assert.equal(manifest.files['.server/decisions.test.ts'].kind, 'test');
+  assert.deepEqual(manifest.other_files, ['.server/data.json']);
+
+  // Code mode also includes .server/ files
+  const codeOut = join(root, 'dot-server-code');
+  const codeProc = run('preview', [
+    '--source', 'onboarding',
+    '--rubric', 'readability',
+    '--out', codeOut,
+    '--dry-run',
+  ]);
+  assert.equal(codeProc.status, 0, codeProc.stderr);
+  const codeReq = JSON.parse(readFileSync(join(codeOut, 'request.json'), 'utf8'));
+  assert.ok('.server/decisions.ts' in codeReq.state.production_files);
+  assert.equal('.server/decisions.test.ts' in codeReq.state.production_files, false);
+
+  // Mixing production_code and project_structure rubrics is rejected
+  const mixProc = run('reject', [
+    '--source', 'onboarding',
+    '--rubric', 'readability',
+    '--rubric', 'project-structure',
+    '--out', join(root, 'mix'),
+    '--dry-run',
+  ]);
+  assert.equal(mixProc.status, 1);
+  assert.match(mixProc.stderr, /Cannot mix production_code and project_structure/);
+
+  // --rubric project-structure infers structure mode without --mode and extracts Kotlin metadata
+  const kotlinDir = join(project, 'kt-module');
+  mkdirSync(join(kotlinDir, 'domain'), { recursive: true });
+  writeFileSync(
+    join(kotlinDir, 'domain/Booking.kt'),
+    'package com.example.booking.domain\nimport com.example.shared.Money\nimport org.springframework.stereotype.Service\nimport java.time.Instant\ndata class Booking(val id: String)\nfun createBooking() = Booking("1")\n',
+  );
+  writeFileSync(
+    join(kotlinDir, 'domain/BookingTest.kt'),
+    'package com.example.booking.domain\nclass BookingTest\n',
+  );
+  const ktOut = join(root, 'kt-struct');
+  const ktProc = run('preview', [
+    '--source', 'kt-module',
+    '--rubric', 'project-structure',
+    '--out', ktOut,
+    '--dry-run',
+  ]);
+  assert.equal(ktProc.status, 0, ktProc.stderr);
+  const ktReq = JSON.parse(readFileSync(join(ktOut, 'request.json'), 'utf8'));
+  const bookingMeta = ktReq.state.project_structure.files['domain/Booking.kt'];
+  assert.equal(bookingMeta.package, 'com.example.booking.domain');
+  assert.deepEqual(bookingMeta.exports, ['Booking', 'createBooking']);
+  assert.deepEqual(bookingMeta.local_imports, ['shared.Money']);
+  assert.deepEqual(bookingMeta.external_imports, ['org.springframework.stereotype']);
+  assert.equal(ktReq.state.project_structure.files['domain/BookingTest.kt'].kind, 'test');
+
+  // Single file --source is rejected in structure mode
+  const singleFile = run('reject', [
+    '--source', 'kt-module/domain/Booking.kt',
+    '--mode', 'structure',
+    '--out', join(root, 'single-struct'),
+    '--dry-run',
+  ]);
+  assert.equal(singleFile.status, 1);
+  assert.match(singleFile.stderr, /regular directory/);
+
+  // --list-rubrics tags project-structure as [structure]
+  const listed = run('preview', ['--list-rubrics']);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /project-structure \(project-structure-v1\) \[structure\]: no_junk_drawer_directories/);
+});

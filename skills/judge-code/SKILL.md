@@ -23,13 +23,14 @@ node "$SKILL_DIR/scripts/judge-code.mts" \
 ```
 
 Optional real-repo flags:
-- `--all` — include all bundled rubrics (combine with `--exclude <check_id>` to drop checks that do not fit the codebase).
-- `--rubric path/to/custom.json` — load a repo-local binary rubric using the same `{ rubric, questions }` JSON schema. Bundled rubrics accept short names (`module-design`) or pinned version IDs (`module-design-v2`).
+- `--mode structure` (or `--rubric project-structure`) — score a directory's folder layout, sub-feature grouping, and concern separation using a compact structural manifest (directory counts, file line counts, exports, and imports) instead of sending full file bodies.
+- `--all` — include all bundled rubrics for the active mode (combine with `--exclude <check_id>` to drop checks that do not fit the codebase).
+- `--rubric path/to/custom.json` — load a repo-local binary rubric using the same `{ rubric, questions }` JSON schema (set `"target": "project_structure"` for structure-mode rubrics). Bundled rubrics accept short names (`module-design`, `project-structure`) or pinned version IDs (`module-design-v2`).
 - `--requirements FILE` — optional Markdown or plain text requirements/spec document.
 - `--conventions FILE` — optional Markdown or plain text coding conventions document. Adds `state.conventions` with precedence over conflicting bundled criteria and includes a `follows_repo_conventions` check (which can be suppressed with `--exclude follows_repo_conventions` if you only want precedence).
 - `--allow-credentials` — override the best-effort heuristic credential check after reviewing a false positive (never overrides an embedded `OPENROUTER_API_KEY`).
 
-Select a regular `.kt`, `.ts`, `.tsx`, `.mts`, or `.cts` file or a directory of production sources. Directory selection skips symlinks, hidden entries, and conventional test, build, generated, and dependency directories inside `--source`. A combined 128 KiB input limit applies. Review `request.json` before live runs for secrets or proprietary content.
+Select a regular `.kt`, `.ts`, `.tsx`, `.mts`, or `.cts` file or a directory of production sources (or a directory for `--mode structure`). Directory selection skips symlinks, hidden entries (except React Router's `.server` and `.client` folders), and conventional build, generated, and dependency directories inside `--source` (plus test directories in code mode). A combined 128 KiB input limit applies. Review `request.json` before live runs for secrets or proprietary content.
 
 Live scoring sends a single request to [OpenRouter Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) with `liquid/d1.2-ultra` by default (override with `--model`). Set `OPENROUTER_API_KEY` in the environment.
 

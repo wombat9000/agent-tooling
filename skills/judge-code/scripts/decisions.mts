@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { nonempty, object, type ChoiceQuestion, type ResolvedRubric } from './rubrics.mts';
+import { nonempty, object, type ChoiceQuestion, type JudgeMode, type ResolvedRubric } from './rubrics.mts';
+import type { StructureManifest } from './structure.mts';
 
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const DEFAULT_DECISION_MODEL = 'liquid/d1.2-ultra';
@@ -17,13 +18,15 @@ export interface CodeRequest {
   state: {
     requirement?: string;
     conventions?: string;
-    production_files: Record<string, string>;
+    production_files?: Record<string, string>;
+    project_structure?: StructureManifest;
   };
   questions: Record<string, ChoiceQuestion>;
 }
 
 export interface JudgeResult {
   status: 'scored' | 'dry_run' | 'error';
+  mode: JudgeMode;
   file_count: number;
   requested_model: string;
   returned_model: string | null;
@@ -38,7 +41,8 @@ export interface JudgeResult {
 }
 
 export interface JudgeRunOptions {
-  files: Record<string, string>;
+  files?: Record<string, string>;
+  structure?: StructureManifest;
   requirements?: string;
   conventions?: string;
   rubric: ResolvedRubric;
@@ -130,14 +134,17 @@ function passRate(checks: Record<string, Judgment>): number {
   return values.filter((check) => check.choice === 'pass').length / values.length;
 }
 
-/** Score a production module snapshot through OpenRouter's Decisions API. */
+/** Score a production module or project structure manifest through OpenRouter's Decisions API. */
 export async function runDecisionJudge(
   options: JudgeRunOptions,
   transport: typeof fetch = fetch,
 ): Promise<JudgeResult> {
   nonempty(options.model, 'model');
-  const fileNames = Object.keys(options.files).sort();
-  if (fileNames.length === 0) throw new Error('No production files to score');
+  const isStructure = options.rubric.target === 'project_structure';
+  const fileCount = isStructure
+    ? (options.structure?.total_files ?? 0)
+    : Object.keys(options.files ?? {}).length;
+  if (fileCount === 0) throw new Error('No files to score');
 
   const key = options.dryRun ? '' : process.env.OPENROUTER_API_KEY?.trim() ?? '';
   if (!options.dryRun && !key) {
@@ -151,7 +158,9 @@ export async function runDecisionJudge(
   const state: CodeRequest['state'] = {
     ...(options.requirements !== undefined ? { requirement: options.requirements } : {}),
     ...(options.conventions !== undefined ? { conventions: options.conventions } : {}),
-    production_files: numbered(options.files),
+    ...(isStructure
+      ? { project_structure: options.structure }
+      : { production_files: numbered(options.files!) }),
   };
   const request: CodeRequest = {
     model: options.model,
@@ -162,7 +171,8 @@ export async function runDecisionJudge(
 
   const result: JudgeResult = {
     status: options.dryRun ? 'dry_run' : 'scored',
-    file_count: fileNames.length,
+    mode: isStructure ? 'structure' : 'code',
+    file_count: fileCount,
     requested_model: options.model,
     returned_model: null,
     rubric: options.rubric.rubric,
