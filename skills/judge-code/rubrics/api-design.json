@@ -4,6 +4,7 @@
   "questions": {
     "no_rigid_enums_for_editorial_labels": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Does the supplied API code reserve closed enums, string-union types, and hardcoded allow-lists strictly for true system states or system-interpreted behavior, rather than locking human filing labels, folder names, content categories, or editorial groupings into code?",
       "criteria": {
         "pass": "Closed enums, union types, and hardcoded allow-lists are used only for true system states, protocol/error codes, or behavior-driving discriminators where backend/domain logic branches on them (such as workflow statuses like `queued`/`sent`/`failed`, triage priorities, roles, attempt types, or rubric grades). Human filing labels, template categories, folder names, tags, course/content catalogs, or editorial groupings use free-text strings (e.g. `string | null` or `String?`) or server-managed data rather than hardcoded code enums. Passes when no hardcoded editorial/filing enum or content-catalog allow-list exists in the supplied files—even if other API design flaws (such as BFF validation of system enums, redundant fields, or bespoke tokens) are present.",
@@ -12,6 +13,7 @@
     },
     "cohesive_resource_boundaries": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Does each API resource and DTO model its own cohesive domain concept without bolting on unrelated cross-domain fields, secondary UI-convenience hooks, or speculative unbuilt sub-features?",
       "criteria": {
         "pass": "Each API resource, request DTO, and response DTO stays focused on its own core domain concept and direct domain relationships (read-model summaries and nested aggregates that belong to the endpoint's core resource—such as a case's student/assignment/review or a trainer's workload/cases—are fine). Passes when DTO fields belong to the resource's own domain concept (judge redundant format encodings or UI display labels of the resource's own fields separately under canonical representation) or when the supplied files contain only thin HTTP routes/transport without DTO definitions.",
@@ -20,6 +22,7 @@
     },
     "single_canonical_representation": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Do API payloads return each piece of data once in a single canonical representation, without demanding redundant multi-format encodings of the same content or embedding UI display labels/strings in the API contract?",
       "criteria": {
         "pass": "Each domain value or content field is transmitted once in its canonical representation (such as raw markdown/markup or structured values), leaving presentation formatting and human-readable display labels to the client. Standard aggregate counts (such as `total` or `active` alongside breakdown counts) and distinct domain fields (such as a rubric grade alongside a letter grade) are acceptable. Passes when no content/value is returned in multiple redundant encodings and no server/contract-computed UI display labels are embedded—even if the slice has other API flaws such as predictable IDs, preview tokens, BFF validation, or unrelated fields.",
@@ -28,6 +31,7 @@
     },
     "clean_server_owned_contracts_and_opaque_ids": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Does the backend remain the single authority for domain validation, defaults, and resource IDs—so thin client/BFF proxies forward cleanly without duplicating server validation rules, hardcoding server enum whitelists, inventing domain defaults, or assuming predictable/prefixed ID formats?",
       "criteria": {
         "pass": "Backend HTTP controllers and services own domain validation, default values, and opaque ID generation (such as UUIDs or domain ID types). Thin client or BFF proxy routes only handle transport framing—such as verifying auth/HTTP method, checking that a required path parameter or single required top-level field is present, URL-encoding opaque IDs, and forwarding payloads/errors cleanly without duplicating backend validation schemas, hardcoding backend enum allow-lists, filling in missing domain defaults, or inspecting/assuming sequential or prefixed ID formats. Passes for clean backend controllers, thin transport/BFF layers, and pure DTO/type-definition slices that contain no BFF validation, default-filling, or ID format assumptions.",
@@ -36,6 +40,7 @@
     },
     "minimal_standard_http_surface": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Do endpoints expose standard resource operations and minimal, proportional request/response shapes for current needs—without bloated kitchen-sink super-DTOs or bespoke protocol gymnastics?",
       "criteria": {
         "pass": "Endpoints use standard HTTP verbs and resource operations (such as GET/POST/PATCH/DELETE on resources or focused domain action sub-resources) with minimal, proportional request and response DTOs sized to the operation. Standard HTTP concurrency/idempotency mechanisms (such as `ETag`/`If-Match`, `Idempotency-Key`, or optimistic `version` checks) are fine when protecting a clear domain invariant. Judge ONLY bloated kitchen-sink super-DTOs, catch-all RPC mega-endpoints, and bespoke protocol gymnastics here—passes when the HTTP surface and payload sizes are standard and proportional, even if the slice has other API flaws such as editorial enums, redundant format fields, or BFF validation.",

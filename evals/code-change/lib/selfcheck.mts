@@ -55,13 +55,32 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
   }
 });
 
-test('shared rubrics under rubrics/ parse cleanly and have non-overlapping question IDs per target', () => {
-  const rubricsDir = join(LIB, '../rubrics');
-  const files = readdirSync(rubricsDir).filter((name) => name.endsWith('.json')).sort();
-  assert.ok(files.length > 0);
+test('shared rubrics across evals/ and skills/judge-code/ parse cleanly without duplicate slugs or overlapping question IDs per target', () => {
+  const evalRubricsDir = join(LIB, '../rubrics');
+  const skillRubricsDir = join(LIB, '../../../skills/judge-code/rubrics');
+  const evalSlugs = readdirSync(evalRubricsDir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => name.slice(0, -'.json'.length))
+    .sort();
+  const skillSlugs = readdirSync(skillRubricsDir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => name.slice(0, -'.json'.length))
+    .sort();
+  assert.ok(evalSlugs.length > 0);
+  assert.ok(skillSlugs.length > 0);
+
+  const skillSlugSet = new Set(skillSlugs);
+  for (const slug of evalSlugs) {
+    assert.equal(
+      skillSlugSet.has(slug),
+      false,
+      `Duplicate shared rubric slug ${slug} exists in both evals/code-change/rubrics/ and skills/judge-code/rubrics/`,
+    );
+  }
+
+  const allSlugs = [...evalSlugs, ...skillSlugs].sort();
   const seenByTarget = new Map<string, Map<string, string>>();
-  for (const file of files) {
-    const slug = file.slice(0, -'.json'.length);
+  for (const slug of allSlugs) {
     const parsed = parseSharedRubric(slug);
     const seen = seenByTarget.get(parsed.target) ?? new Map<string, string>();
     seenByTarget.set(parsed.target, seen);

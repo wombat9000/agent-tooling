@@ -4,6 +4,7 @@
   "questions": {
     "immutable_state": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Does the supplied production code avoid mutable domain state and model state transitions immutably?",
       "criteria": {
         "pass": "Domain models represent state with read-only/immutable properties and immutable or defensively-copied collections, and state transitions return new values rather than mutating domain objects or collections in place. Local variables inside parsing loops, fold/loop accumulators holding immutable values, and UI state containers that replace state with new immutable values are acceptable.",
@@ -12,6 +13,7 @@
     },
     "domain_invariants": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Do the domain types or domain construction functions in the supplied production code own and enforce their intrinsic invariants?",
       "criteria": {
         "pass": "Domain concepts with validity rules, constrained sets of states, or domain behavior use dedicated domain types, enums/unions, or validated constructors/factories that enforce their intrinsic invariants (pure enums/unions or value types with no extra validity constraints also pass). Dedicated boundary, parser, formatter, UI, or entry-point code passes when it delegates domain construction or validation to those domain types or factories.",
@@ -20,6 +22,7 @@
     },
     "boundary_separation": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Does the supplied production code keep transport/UI concerns (external I/O, input parsing, output formatting/rendering, and protocol error mapping) and storage mechanics cleanly separated from core domain and application logic?",
       "criteria": {
         "pass": "External I/O, input parsing, output formatting or UI rendering, and transport error mapping (such as HTTP status codes or protocol exceptions) are isolated at the entry-point or UI boundary, and storage mechanics (such as queries, row mapping, or browser-storage serialization) stay in persistence code. Core domain and application logic operates strictly on typed domain values and domain outcomes without reading files or streams, parsing raw external text, formatting protocol output, or throwing transport-specific exceptions.",

@@ -222,9 +222,11 @@ function resolveRawRubric(
   let baseTarget: unknown;
 
   for (const name of names) {
-    const sharedText = reader.readText(`evals/${skill}/rubrics/${name}.json`);
+    const evalPath = `evals/${skill}/rubrics/${name}.json`;
+    const skillPath = `skills/judge-code/rubrics/${name}.json`;
+    const sharedText = reader.readText(evalPath) ?? reader.readText(skillPath);
     if (sharedText === null) {
-      throw new Error(`Missing shared rubric evals/${skill}/rubrics/${name}.json`);
+      throw new Error(`Missing shared rubric ${evalPath} (or ${skillPath})`);
     }
     const base = JSON.parse(sharedText) as Record<string, unknown>;
     baseRubrics.push(String(base.rubric));
@@ -293,12 +295,22 @@ export function resolveRubricForTarget(
     instructions: string;
     criteria: { pass: string; fail: string };
   }>;
+  const normalizedQuestions: ResolvedRubricInfo['questions'] = Object.fromEntries(
+    Object.entries(rawQuestions).map(([id, question]) => [id, {
+      type: question.type,
+      instructions: question.instructions,
+      criteria: {
+        pass: question.criteria.pass,
+        fail: question.criteria.fail,
+      },
+    }]),
+  );
 
   const canonicalPayload = {
     rubric: rubricId,
     target: resolvedTarget,
     ...(loaded.groups ? { groups: loaded.groups } : {}),
-    questions: rawQuestions,
+    questions: normalizedQuestions,
   };
   const hash = createHash('sha256')
     .update(canonicalJson(canonicalPayload), 'utf8')
@@ -310,7 +322,7 @@ export function resolveRubricForTarget(
     target: resolvedTarget,
     hash,
     ...(loaded.groups ? { groups: loaded.groups } : {}),
-    questions: rawQuestions,
+    questions: normalizedQuestions,
   };
 }
 

@@ -78,7 +78,8 @@ async function main(): Promise<void> {
   if (values['list-rubrics']) {
     for (const rubric of bundledRubrics()) {
       const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
-      console.log(`${rubric.slug} (${rubric.id})${tag}: ${rubric.checks.join(', ')}`);
+      const checks = rubric.checks.map((id) => `${id} [${rubric.scopes[id]}]`).join(', ');
+      console.log(`${rubric.slug} (${rubric.id})${tag}: ${checks}`);
     }
     return;
   }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, test, type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { judgeReview, parseRetryAfterMs, type JudgeOptions } from './judge_review.mts';
+import { judgeReview, loadSharedRubric, parseRetryAfterMs, type JudgeOptions } from './judge_review.mts';
 
 const TASKS = fileURLToPath(new URL('../tasks/', import.meta.url));
 const CLI = fileURLToPath(new URL('./judge_review.mts', import.meta.url));
@@ -290,4 +290,19 @@ test('CLI supports dry runs and exits nonzero on bad input', (t) => {
   assert.ifError(invalid.error);
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /Usage:/);
+});
+
+test('loadSharedRubric rejects duplicate slugs across eval and skill rubric directories', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'dup-rubric-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const evalDir = join(root, 'eval-rubrics');
+  const skillDir = join(root, 'skill-rubrics');
+  cpSync(fileURLToPath(new URL('../rubrics', import.meta.url)), evalDir, { recursive: true });
+  cpSync(fileURLToPath(new URL('../../../skills/judge-code/rubrics', import.meta.url)), skillDir, { recursive: true });
+  writeFileSync(join(evalDir, 'readability.json'), readFileSync(join(skillDir, 'readability.json'), 'utf8'));
+
+  assert.throws(
+    () => loadSharedRubric('readability', { evalRubricsDir: evalDir, skillRubricsDir: skillDir }),
+    /Duplicate shared rubric.*readability/,
+  );
 });
