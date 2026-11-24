@@ -35,7 +35,8 @@ export interface LoadedInputs {
 export interface DocReadContext {
   allowCredentials?: boolean;
   key?: string;
-  consumeBudget: (bytes: number) => void;
+  maxBytes?: number;
+  consumeBudget: (bytes: number, label: string) => void;
 }
 
 function isProductionSource(file: string): boolean {
@@ -69,7 +70,10 @@ function readUtf8File(path: string, label: string, ctx: DocReadContext): string 
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error('Selected inputs must be regular files');
-    if (stat.size > MAX_INPUT_BYTES) throw new Error('Selected inputs exceed 128 KiB');
+    const maxBytes = ctx.maxBytes ?? MAX_INPUT_BYTES;
+    if (stat.size > maxBytes) {
+      ctx.consumeBudget(stat.size, label);
+    }
     const buf = Buffer.alloc(stat.size + 1);
     let size = 0;
     while (size < buf.length) {
@@ -77,7 +81,7 @@ function readUtf8File(path: string, label: string, ctx: DocReadContext): string 
       if (!read) break;
       size += read;
     }
-    ctx.consumeBudget(size);
+    ctx.consumeBudget(size, label);
     data = buf.subarray(0, size);
   } finally {
     closeSync(fd);
@@ -112,6 +116,53 @@ export function readOptionalDoc(arg: string, flag: string, label: string, ctx: D
   return text;
 }
 
+function resolveSourceAndOut(options: ReadInputsOptions): {
+  source: string;
+  isDirectory: boolean;
+  out: string;
+} {
+  const sourceInput = resolve(options.source);
+  const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
+  if (!sourceStat?.isDirectory() && !sourceStat?.isFile()) {
+    throw new Error('Select a regular source file or directory with --source');
+  }
+  const source = realpathSync(sourceInput);
+  if (sourceStat.isDirectory() && (source === dirname(source) || source === realpathSync(homedir()))) {
+    throw new Error('Select a specific production module with --source');
+  }
+  const out = resolveOutputOutsideSource(source, sourceStat.isDirectory(), options.out);
+  return { source, isDirectory: sourceStat.isDirectory(), out };
+}
+
+function collectProductionFiles(
+  source: string,
+  isDirectory: boolean,
+  readFile: (path: string, label: string) => string,
+): Record<string, string> {
+  const files: Record<string, string> = {};
+  function collect(dir: string, prefix = '') {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const isAllowedDot = entry.isDirectory() && ALLOWED_DOT_DIRS.has(entry.name);
+      if (entry.name.startsWith('.') && !isAllowedDot) continue;
+      const path = join(dir, entry.name);
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && !EXCLUDED_DIRS.has(entry.name.toLowerCase())) {
+        collect(path, name);
+      } else if (entry.isFile() && isProductionSource(path)) {
+        files[name] = readFile(path, `source file ${name}`);
+      }
+    }
+  }
+  if (isDirectory) collect(source);
+  else if (isProductionSource(source)) files[basename(source)] = readFile(source, 'the selected source file');
+
+  if (Object.keys(files).length === 0) {
+    throw new Error('No supported production Kotlin or TypeScript files in --source');
+  }
+  return files;
+}
+
 export function readInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   let remaining = MAX_INPUT_BYTES;
@@ -124,17 +175,7 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
     },
   };
 
-  const sourceInput = resolve(options.source);
-  const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
-  if (!sourceStat?.isDirectory() && !sourceStat?.isFile()) {
-    throw new Error('Select a regular source file or directory with --source');
-  }
-  const source = realpathSync(sourceInput);
-  if (sourceStat.isDirectory() && (source === dirname(source) || source === realpathSync(homedir()))) {
-    throw new Error('Select a specific production module with --source');
-  }
-
-  const out = resolveOutputOutsideSource(source, sourceStat.isDirectory(), options.out);
+  const { source, isDirectory, out } = resolveSourceAndOut(options);
 
   const requirements = options.requirements !== undefined
     ? readOptionalDoc(options.requirements, '--requirements', 'the requirements document', ctx)
@@ -143,27 +184,58 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
     ? readOptionalDoc(options.conventions, '--conventions', 'the conventions document', ctx)
     : undefined;
 
-  const files: Record<string, string> = {};
-  function collect(dir: string, prefix = '') {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const isAllowedDot = entry.isDirectory() && ALLOWED_DOT_DIRS.has(entry.name);
-      if (entry.name.startsWith('.') && !isAllowedDot) continue;
-      const path = join(dir, entry.name);
-      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory() && !EXCLUDED_DIRS.has(entry.name.toLowerCase())) {
-        collect(path, name);
-      } else if (entry.isFile() && isProductionSource(path)) {
-        files[name] = readUtf8File(path, `source file ${name}`, ctx);
-      }
-    }
-  }
-  if (sourceStat.isDirectory()) collect(source);
-  else if (isProductionSource(source)) files[basename(source)] = readUtf8File(source, 'the selected source file', ctx);
+  const files = collectProductionFiles(source, isDirectory, (path, label) => readUtf8File(path, label, ctx));
 
-  if (Object.keys(files).length === 0) {
-    throw new Error('No supported production Kotlin or TypeScript files in --source');
+  if (key && Object.keys(files).some((path) => path.includes(key))) {
+    throw new Error('OPENROUTER_API_KEY appears in a selected source path');
   }
+
+  return { files, requirements, conventions, out };
+}
+
+/**
+ * Read production files for --mode file, applying the 128 KiB budget per individual file + optional docs.
+ * Validates all selected files up front so oversized, binary, or credential-bearing files fail before any live request.
+ */
+export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
+  const key = process.env.OPENROUTER_API_KEY?.trim();
+  const { source, isDirectory, out } = resolveSourceAndOut(options);
+
+  let docsBytes = 0;
+  const docCtx: DocReadContext = {
+    allowCredentials: options.allowCredentials,
+    key,
+    consumeBudget(bytes) {
+      if (docsBytes + bytes > MAX_INPUT_BYTES) {
+        throw new Error('Selected documents exceed 128 KiB');
+      }
+      docsBytes += bytes;
+    },
+  };
+
+  const requirements = options.requirements !== undefined
+    ? readOptionalDoc(options.requirements, '--requirements', 'the requirements document', docCtx)
+    : undefined;
+  const conventions = options.conventions !== undefined
+    ? readOptionalDoc(options.conventions, '--conventions', 'the conventions document', docCtx)
+    : undefined;
+
+  const perFileBudget = MAX_INPUT_BYTES - docsBytes;
+  const files = collectProductionFiles(source, isDirectory, (path, label) => {
+    const fileCtx: DocReadContext = {
+      allowCredentials: options.allowCredentials,
+      key,
+      maxBytes: perFileBudget,
+      consumeBudget(bytes, fileLabel) {
+        if (bytes > perFileBudget) {
+          const docNote = docsBytes > 0 ? ` + ${docsBytes} bytes documents` : '';
+          throw new Error(`${fileLabel} exceeds 128 KiB per-file budget (${bytes} bytes${docNote})`);
+        }
+      },
+    };
+    return readUtf8File(path, label, fileCtx);
+  });
+
   if (key && Object.keys(files).some((path) => path.includes(key))) {
     throw new Error('OPENROUTER_API_KEY appears in a selected source path');
   }

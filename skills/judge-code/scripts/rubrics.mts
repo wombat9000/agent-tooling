@@ -6,7 +6,7 @@ const RUBRICS_DIR = fileURLToPath(new URL('../rubrics', import.meta.url));
 const CONVENTIONS_CHECK_ID = 'follows_repo_conventions';
 
 export type RubricTarget = 'production_code' | 'project_structure';
-export type JudgeMode = 'code' | 'structure';
+export type JudgeMode = 'code' | 'file' | 'structure';
 export type CheckScope = 'file' | 'module' | 'structure';
 
 export interface ChoiceQuestion {
@@ -30,6 +30,7 @@ export interface ResolvedRubric {
   scopes: Record<string, CheckScope>;
   groups: Record<string, string[]>;
   excluded: string[];
+  skippedModuleChecks: string[];
 }
 
 export interface ResolveRubricsOptions {
@@ -237,7 +238,6 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const rubricRules = buildRubricRules(resolvedTarget, options.hasRequirements, options.hasConventions);
   const baseRules = buildBaseRules(resolvedTarget, options.hasRequirements);
 
-  const rubricIds: string[] = [];
   const seenRubricIds = new Set<string>();
   const questions: Record<string, ChoiceQuestion> = {};
   const scopes: Record<string, CheckScope> = {};
@@ -251,7 +251,6 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     seenRubricIds.add(parsed.id);
 
     const groupName = groups[parsed.group] === undefined ? parsed.group : parsed.id;
-    rubricIds.push(parsed.id);
     const groupIds: string[] = [];
     for (const [id, question] of Object.entries(parsed.questions)) {
       const existingOwner = questionOwner.get(id);
@@ -296,26 +295,48 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     delete questions[id];
     delete scopes[id];
   }
+
+  const skippedModuleChecks: string[] = [];
+  if (options.mode === 'file') {
+    for (const id of Object.keys(questions)) {
+      if (scopes[id] !== 'file') {
+        skippedModuleChecks.push(id);
+        delete questions[id];
+        delete scopes[id];
+      }
+    }
+  }
+
   for (const [group, ids] of Object.entries(groups)) {
     const remaining = ids.filter((id) => id in questions);
     if (remaining.length > 0) groups[group] = remaining;
     else delete groups[group];
   }
 
+  const activeRubricIds = parsedSources
+    .filter((parsed) => Object.keys(parsed.questions).some((id) => id in questions))
+    .map((parsed) => parsed.id);
   if (options.hasConventions && CONVENTIONS_CHECK_ID in questions) {
-    rubricIds.push('repo-conventions');
+    activeRubricIds.push('repo-conventions');
   }
 
   if (Object.keys(questions).length === 0) {
+    if (options.mode === 'file' && skippedModuleChecks.length > 0) {
+      throw new Error(
+        `No file-scoped checks remain for --mode file (skipped module-scoped checks: ${skippedModuleChecks.join(', ')}). `
+        + 'Select a rubric with [file] checks or use --mode code.',
+      );
+    }
     throw new Error('No rubric checks remain after applying --exclude');
   }
 
   return {
-    rubric: rubricIds.join('+'),
+    rubric: activeRubricIds.join('+'),
     target: resolvedTarget,
     questions,
     scopes,
     groups,
     excluded,
+    skippedModuleChecks,
   };
 }
