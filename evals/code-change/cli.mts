@@ -11,6 +11,10 @@ import { judgeReview, taskTarget, type RubricTarget } from './lib/judge_review.m
 import { judgeCode, judgeTests, type JudgeScope } from './lib/judge_code.mts';
 import { latestCodexRun, reportsFromRun } from './lib/run_reports.mts';
 import { latestJudgment, writeHtmlReport } from './lib/html_report.mts';
+import { recordJudgeBatches } from './lib/scorecard_record.mts';
+import { writeScorecardMarkdown } from './lib/scorecard_markdown.mts';
+import { writeScorecardHtml } from './lib/scorecard_html.mts';
+import type { ScorecardCondition } from './lib/scorecard_schema.mts';
 import { DEFAULT_RUN_CONCURRENCY, countRunningDockerContainers, resolveRunConcurrency } from './lib/docker_concurrency.mts';
 import { HarborLockInterruptedError, signalExitCode, withHarborLock } from './lib/harbor_lock.mts';
 
@@ -29,6 +33,7 @@ Commands:
   run                   Run all tasks with the skill (5 attempts, 2 concurrent)
   judge [task] [report]  Score saved reviews or code (default: latest completed Codex run)
   report [DIRECTORY]    Build HTML from saved judge scores; no API call
+  scorecard [subcmd]    Build offline scorecard HTML dashboard, Markdown, or record judge runs
 
 Run options (canary, run):
   --model ID            Codex model (EVAL_MODEL or ${DEFAULT_MODEL})
@@ -59,6 +64,14 @@ Report options:
   --latest              Use the latest saved judge scores (default)
   --out FILE.html       Write HTML to another file
   --open                Open the report in your browser
+
+Scorecard commands & options:
+  scorecard [--out FILE.html] [--open]
+                        Build interactive HTML dashboard (eval-results/scorecard.html) without touching tracked files
+  scorecard build [--out FILE.html] [--open]
+                        Regenerate evals/SCORECARD.md and build the HTML dashboard
+  scorecard record <judge-dir...> [--skill NAME] [--condition skill|baseline] [--git-ref REF] [--agent-model ID] [--task NAME] [--open]
+                        Record saved judge batch(es) into evals/scorecards/<skill>/<task>.json and rebuild outputs
 
 All commands:
   --dry-run             Preview commands; judge saves a request without an API call
@@ -393,8 +406,104 @@ async function main(): Promise<number> {
       'evals/code-change/lib/judge_code.test.mts',
       'evals/code-change/lib/run_reports.test.mts',
       'evals/code-change/lib/html_report.test.mts',
+      'evals/code-change/lib/scorecard.test.mts',
       'evals/code-change/cli.test.mts',
     ], process.env, values['dry-run']);
+  }
+  if (command === 'scorecard') {
+    const subcommand = args[0] && !args[0].startsWith('-') ? args[0] : null;
+    if (subcommand === 'record') {
+      const { values, positionals } = parseArgs({
+        args: args.slice(1),
+        allowPositionals: true,
+        options: {
+          ...common,
+          skill: { type: 'string', default: 'code-change' },
+          condition: { type: 'string' },
+          'git-ref': { type: 'string' },
+          'agent-model': { type: 'string' },
+          task: { type: 'string' },
+          date: { type: 'string' },
+          out: { type: 'string' },
+          open: { type: 'boolean', default: false },
+        },
+      });
+      if (!positionals.length || positionals.some((value) => !value.trim())) {
+        throw new Error('Usage: pnpm eval scorecard record <judge-dir...> [--skill code-change] [--condition skill|baseline] [--git-ref REF] [--agent-model ID] [--task NAME] [--open]');
+      }
+      let condition: ScorecardCondition | undefined;
+      if (values.condition !== undefined) {
+        if (values.condition !== 'skill' && values.condition !== 'baseline') {
+          throw new Error('--condition must be skill or baseline');
+        }
+        condition = values.condition;
+      }
+      if (values.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(values.date)) {
+        throw new Error('--date must be YYYY-MM-DD');
+      }
+      const recorded = recordJudgeBatches({
+        repoRoot: ROOT,
+        judgeDirs: positionals,
+        skill: values.skill,
+        condition,
+        gitRef: values['git-ref'],
+        agentModel: values['agent-model'],
+        taskFilter: values.task,
+        recordedAt: values.date,
+        dryRun: values['dry-run'],
+      });
+      for (const item of recorded) {
+        console.log(`${values['dry-run'] ? 'Would record' : 'Recorded'} ${item.skill}/${item.task} (${item.condition}, ${item.target}): ${Math.round(item.entry.quality.pass_rate * 1000) / 10}% -> ${item.path}`);
+      }
+      if (values['dry-run']) return 0;
+      const md = writeScorecardMarkdown(ROOT);
+      console.log(`Markdown scorecard: ${md.path}`);
+      const html = writeScorecardHtml(ROOT, values.out);
+      return showReport(html.path, values.open);
+    }
+    if (subcommand === 'build') {
+      const { values, positionals } = parseArgs({
+        args: args.slice(1),
+        allowPositionals: true,
+        options: {
+          ...common,
+          out: { type: 'string' },
+          open: { type: 'boolean', default: false },
+        },
+      });
+      if (positionals.length > 0) {
+        throw new Error('Usage: pnpm eval scorecard build [--out FILE.html] [--open]');
+      }
+      if (values['dry-run']) {
+        console.log(`Would build ${join(ROOT, 'evals/SCORECARD.md')} and ${values.out ? resolve(values.out) : join(ROOT, 'eval-results/scorecard.html')}`);
+        return 0;
+      }
+      const md = writeScorecardMarkdown(ROOT);
+      console.log(`Markdown scorecard: ${md.path}`);
+      const html = writeScorecardHtml(ROOT, values.out);
+      return showReport(html.path, values.open);
+    }
+    if (subcommand !== null) {
+      throw new Error(`Unknown scorecard subcommand: ${subcommand}. Choose build, record, or omit for HTML dashboard.`);
+    }
+    const { values, positionals } = parseArgs({
+      args,
+      allowPositionals: true,
+      options: {
+        ...common,
+        out: { type: 'string' },
+        open: { type: 'boolean', default: false },
+      },
+    });
+    if (positionals.length > 0) {
+      throw new Error('Usage: pnpm eval scorecard [--out FILE.html] [--open]');
+    }
+    if (values['dry-run']) {
+      console.log(`Would build ${values.out ? resolve(values.out) : join(ROOT, 'eval-results/scorecard.html')}`);
+      return 0;
+    }
+    const html = writeScorecardHtml(ROOT, values.out);
+    return showReport(html.path, values.open);
   }
   if (command === 'report') {
     const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {

@@ -16,7 +16,9 @@ Reusable agent skills live under `skills/`. Each skill has an entry-point docume
 
 ## Evaluations
 
-[evals/code-change](<evals/code-change/README.md>) measures whether the `code-change` skill makes agents' reviews correct and consistent. The tasks depend on no harness and run with [Harbor](https://github.com/harbor-framework/harbor).
+[evals/code-change](<evals/code-change/README.md>) measures whether the `code-change` skill makes agents' reviews and implementations better and more consistent. The tasks depend on no harness and run with [Harbor](https://github.com/harbor-framework/harbor).
+
+See the checked-in [eval scorecard](<evals/SCORECARD.md>) for current skill coverage, baseline-vs-skill scores, and content-hash freshness across all tasks. Run `pnpm eval scorecard --open` to open the interactive offline HTML dashboard (`eval-results/scorecard.html`), `pnpm eval scorecard build` to regenerate `evals/SCORECARD.md` and the HTML dashboard, or `pnpm eval scorecard record <judge-dir...>` to record new judge runs.
 
 Run `pnpm eval check` for offline checks, `pnpm eval canary` for one Codex trial, or
 `pnpm eval --help` for all terminal commands. See the [eval quick start](evals/code-change/README.md#quick-start)
