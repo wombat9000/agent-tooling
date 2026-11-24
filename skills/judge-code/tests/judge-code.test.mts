@@ -17,27 +17,43 @@ import { join } from 'node:path';
 
 const mode = process.env.JUDGE_TEST_MODE;
 const out = process.argv[process.argv.indexOf('--out') + 1];
+const isFileMode = process.argv.includes('--mode') && process.argv[process.argv.indexOf('--mode') + 1] === 'file';
 let calls = 0;
 
 globalThis.fetch = async (endpoint, init) => {
   calls += 1;
-  assert.equal(calls, 1);
+  if (!isFileMode) assert.equal(calls, 1);
   assert.equal(endpoint, 'https://openrouter.ai/api/alpha/decisions');
   assert.equal(init.redirect, 'error');
   assert.equal(init.headers.Authorization, 'Bearer fixture-api-key');
-  assert.equal(init.body, readFileSync(join(out, 'request.json'), 'utf8'));
+  if (!isFileMode) assert.equal(init.body, readFileSync(join(out, 'request.json'), 'utf8'));
 
   if (mode === 'http-error') return new Response('rate limit', { status: 429 });
   if (mode === 'key-echo') return new Response('echo fixture-api-key', { status: 500 });
 
   const json = JSON.parse(init.body);
+  const fileNames = Object.keys(json.state.production_files ?? {});
+  const singleFile = isFileMode && fileNames.length === 1 ? fileNames[0] : null;
   const answers = Object.fromEntries(Object.keys(json.questions).map((id) => {
-    const fail = ['direct_readability', 'modular_organization'].includes(id) && mode !== 'pass';
-    const borderline = id === 'no_unnecessary_abstraction' && mode !== 'pass';
-    const passProb = fail ? 0.2 : borderline ? 0.65 : 0.9;
+    let passProb = 0.92;
+    let choice = 'pass';
+    if (mode === 'pass') {
+      passProb = 0.92;
+      choice = 'pass';
+    } else if (singleFile === 'Booking.kt') {
+      if (id === 'no_long_functions') { passProb = 0.15; choice = 'fail'; }
+      else if (id === 'no_primitive_obsession') { passProb = 0.45; choice = 'fail'; }
+    } else if (singleFile === 'Room.kt') {
+      if (id === 'no_long_functions') { passProb = 0.65; choice = 'pass'; }
+    } else if (!isFileMode) {
+      const fail = ['direct_readability', 'modular_organization'].includes(id);
+      const borderline = id === 'no_unnecessary_abstraction';
+      passProb = fail ? 0.2 : borderline ? 0.65 : 0.9;
+      choice = fail ? 'fail' : 'pass';
+    }
     return [id, {
       type: 'choice',
-      choice: fail ? 'fail' : 'pass',
+      choice,
       probabilities: { pass: passProb, fail: Number((1 - passProb).toFixed(4)) },
       confidence: Number(Math.abs(2 * passProb - 1).toFixed(4)),
     }];
@@ -46,8 +62,13 @@ globalThis.fetch = async (endpoint, init) => {
 };
 
 process.on('exit', () => {
-  const expected = ['preview', 'reject'].includes(mode) ? 0 : 1;
-  assert.equal(calls, expected);
+  if (['preview', 'reject'].includes(mode)) {
+    assert.equal(calls, 0);
+  } else if (!isFileMode) {
+    assert.equal(calls, 1);
+  } else {
+    assert.ok(calls >= 1);
+  }
 });
 `;
 
@@ -693,4 +714,437 @@ console.log(JSON.stringify({
   ]);
   assert.equal(badBackend.status, 1);
   assert.match(badBackend.stderr, /Invalid --backend/);
+});
+
+test('file mode filters to file-scoped checks, records skipped_module_checks, and rejects empty-after-filter rubrics', (t) => {
+  const { run, root } = setup(t);
+
+  // fowler-smells + conventions: keeps 5 file checks + follows_repo_conventions, records 4 module checks as skipped.
+  const out = join(root, 'file-dry');
+  const proc = run('preview', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'fowler-smells',
+    '--conventions', 'conventions.md',
+    '--out', out,
+    '--dry-run',
+  ]);
+  assert.equal(proc.status, 0, proc.stderr);
+  const result = JSON.parse(proc.stdout);
+  assert.equal(result.status, 'dry_run');
+  assert.equal(result.mode, 'file');
+  assert.equal(result.file_count, 4);
+  assert.equal(typeof result.elapsed_ms, 'number');
+  assert.deepEqual(result.rubric_groups['fowler-smells'], [
+    'no_long_functions',
+    'no_long_parameter_lists_or_data_clumps',
+    'no_message_chains',
+    'no_primitive_obsession',
+    'no_comment_deodorant_or_dead_code',
+  ]);
+  assert.deepEqual(result.rubric_groups.conventions, ['follows_repo_conventions']);
+  assert.deepEqual(result.skipped_module_checks, [
+    'no_duplicated_code',
+    'no_feature_envy_or_data_class_anemia',
+    'no_repeated_switches',
+    'no_speculative_or_middle_man',
+  ]);
+  assert.equal(result.file_results.length, 4);
+  assert.deepEqual(
+    result.file_results.map((entry: { file: string }) => entry.file),
+    ['Booking.kt', 'env.ts', 'password.ts', 'Room.kt'].sort((a, b) => a.localeCompare(b)),
+  );
+  assert.equal(existsSync(join(out, 'request.json')), false);
+  for (const entry of result.file_results) {
+    const reqPath = join(out, entry.result_dir, 'request.json');
+    const resPath = join(out, entry.result_dir, 'result.json');
+    assert.ok(existsSync(reqPath));
+    assert.ok(existsSync(resPath));
+    assert.equal(existsSync(join(out, entry.result_dir, 'response.txt')), false);
+    const req = JSON.parse(readFileSync(reqPath, 'utf8'));
+    assert.deepEqual(Object.keys(req.state.production_files), [entry.file]);
+    assert.equal(Object.keys(req.questions).length, 6);
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(join(out, entry.result_dir)).mode & 0o077, 0);
+      assert.equal(statSync(reqPath).mode & 0o077, 0);
+    }
+  }
+
+  // module-design has only module-scoped checks -> errors clearly in --mode file.
+  const emptyErr = run('reject', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'module-design',
+    '--out', join(root, 'empty-file-mode'),
+    '--dry-run',
+  ]);
+  assert.equal(emptyErr.status, 1);
+  assert.match(emptyErr.stderr, /No file-scoped checks remain for --mode file/);
+  assert.match(emptyErr.stderr, /modular_organization/);
+  assert.equal(existsSync(join(root, 'empty-file-mode')), false);
+});
+
+test('file mode allows >128 KiB multi-file directories while rejecting any single file exceeding 128 KiB', (t) => {
+  const { run, root, project } = setup(t);
+  const largeDir = join(project, 'large-repo');
+  mkdirSync(largeDir, { recursive: true });
+  const chunk = `${'export const line = "1234567890abcdef";\n'.repeat(1200)}`; // ~48 KiB each
+  for (const name of ['a.ts', 'b.ts', 'c.ts', 'd.ts']) {
+    writeFileSync(join(largeDir, name), chunk); // ~192 KiB total
+  }
+
+  // Whole-module code mode rejects >128 KiB total.
+  const codeReject = run('reject', [
+    '--source', 'large-repo',
+    '--mode', 'code',
+    '--rubric', 'readability',
+    '--out', join(root, 'large-code'),
+    '--dry-run',
+  ]);
+  assert.equal(codeReject.status, 1);
+  assert.match(codeReject.stderr, /exceed 128 KiB/);
+
+  // Per-file mode succeeds cleanly across all 4 files (~192 KiB total).
+  const fileOut = join(root, 'large-file-dry');
+  const fileOk = run('preview', [
+    '--source', 'large-repo',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--out', fileOut,
+    '--dry-run',
+  ]);
+  assert.equal(fileOk.status, 0, fileOk.stderr);
+  const fileResult = JSON.parse(fileOk.stdout);
+  assert.equal(fileResult.file_count, 4);
+
+  // Oversized single file fails fast with its path before creating --out or calling API.
+  writeFileSync(join(largeDir, 'huge.ts'), 'x'.repeat(130 * 1024));
+  const hugeReject = run('reject', [
+    '--source', 'large-repo',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--out', join(root, 'huge-out'),
+    '--dry-run',
+  ]);
+  assert.equal(hugeReject.status, 1);
+  assert.match(hugeReject.stderr, /huge\.ts/);
+  assert.match(hugeReject.stderr, /128 KiB/);
+  assert.equal(existsSync(join(root, 'huge-out')), false);
+});
+
+test('file mode scores concurrently with OpenRouter, aggregates metrics, formats summary, and honors --fail-on-violation', (t) => {
+  const { run, root } = setup(t);
+
+  // Live file-mode run with --format json (default exit 0 even with violations).
+  const jsonOut = join(root, 'file-scored-json');
+  const jsonProc = run('scored', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'fowler-smells',
+    '--concurrency', '2',
+    '--out', jsonOut,
+  ]);
+  assert.equal(jsonProc.status, 0, jsonProc.stderr);
+  const result = JSON.parse(jsonProc.stdout);
+  assert.equal(result.status, 'scored');
+  assert.equal(result.mode, 'file');
+  assert.equal(result.file_count, 4);
+  assert.equal(result.returned_model, 'decisions-mock');
+  assert.deepEqual(
+    result.file_results.map((entry: { file: string }) => entry.file),
+    ['Booking.kt', 'env.ts', 'password.ts', 'Room.kt'].sort((a, b) => a.localeCompare(b)),
+  );
+  // 4 files x 5 file-scoped checks: Booking.kt fails 2 (no_long_functions 0.15, no_primitive_obsession 0.45),
+  // Room.kt fails 1 due to threshold (no_long_functions 0.65 < 0.8), env.ts & password.ts pass all 5.
+  assert.equal(result.quality.checks.no_long_functions.choice, 'fail');
+  assert.equal(result.quality.checks.no_long_functions.files_passed, 2);
+  assert.equal(result.quality.checks.no_long_functions.files_total, 4);
+  assert.equal(result.quality.checks.no_long_functions.min_pass_probability, 0.15);
+  assert.equal(result.quality.checks.no_primitive_obsession.choice, 'fail');
+  assert.equal(result.quality.checks.no_primitive_obsession.files_passed, 3);
+  assert.equal(result.quality.checks.no_primitive_obsession.min_pass_probability, 0.45);
+  assert.equal(result.quality.checks.no_message_chains.choice, 'pass');
+  assert.equal(result.quality.checks.no_message_chains.files_passed, 4);
+  assert.equal(result.quality.all_files_pass_rate, 3 / 5);
+  assert.ok(Math.abs(result.quality.pass_rate - (17 / 20)) < 1e-9);
+  for (const entry of result.file_results) {
+    assert.ok(existsSync(join(jsonOut, entry.result_dir, 'response.txt')));
+    assert.ok(existsSync(join(jsonOut, entry.result_dir, 'result.json')));
+  }
+
+  // --format summary + --fail-on-violation exits 1 on violations and prints worst-first failing files.
+  const summaryOut = join(root, 'file-scored-summary');
+  const summaryProc = run('scored', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'fowler-smells',
+    '--format', 'summary',
+    '--fail-on-violation',
+    '--out', summaryOut,
+  ]);
+  assert.equal(summaryProc.status, 1, summaryProc.stderr);
+  assert.match(summaryProc.stdout, /judge-code \(file\)/);
+  assert.match(summaryProc.stdout, /4 scored \(2 passed, 2 failed\)/);
+  assert.match(summaryProc.stdout, /FAIL\s+no_long_functions\s+2\/4\s+min P\(pass\)=0\.15/);
+  assert.match(summaryProc.stdout, /PASS\s+no_message_chains\s+4\/4\s+min P\(pass\)=0\.92/);
+  assert.match(summaryProc.stdout, /Skipped module checks \(4\): no_duplicated_code/);
+  assert.match(summaryProc.stdout, /Failing files \(2\):/);
+  const bookingIdx = summaryProc.stdout.indexOf('Booking.kt (2 failed)');
+  const roomIdx = summaryProc.stdout.indexOf('Room.kt (1 failed)');
+  assert.ok(bookingIdx !== -1 && roomIdx !== -1 && bookingIdx < roomIdx, 'worst failing file must appear first');
+
+  // --fail-on-violation exits 0 when every check passes.
+  const passOut = join(root, 'file-pass');
+  const passProc = run('pass', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'fowler-smells',
+    '--fail-on-violation',
+    '--out', passOut,
+  ]);
+  assert.equal(passProc.status, 0, passProc.stderr);
+
+  // Invalid --concurrency and --format are rejected.
+  for (const [flag, val, pat] of [
+    ['--concurrency', '0', /Invalid --concurrency/],
+    ['--concurrency', 'abc', /Invalid --concurrency/],
+    ['--format', 'yaml', /Invalid --format/],
+    ['--mode', 'bogus', /Invalid --mode/],
+  ] as const) {
+    const bad = run('reject', ['--source', 'booking', '--rubric', 'readability', flag, val, '--out', join(root, 'bad-arg'), '--dry-run']);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, pat);
+  }
+});
+
+test('decisions.mts retries 429/5xx with backoff and Retry-After, tracks concurrency bounds, and fails fast on 4xx', async (t) => {
+  const { root } = setup(t);
+  const { parseRetryAfterMs, runDecisionJudge } = await import('../scripts/decisions.mts');
+  const { resolveRubrics } = await import('../scripts/rubrics.mts');
+
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'unit-test-key';
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  });
+
+  // parseRetryAfterMs unit checks
+  const nowMs = Date.parse('2026-11-25T00:00:00Z');
+  assert.equal(parseRetryAfterMs('5', nowMs), 5_000);
+  assert.equal(parseRetryAfterMs('180', nowMs, 60_000), 60_000);
+  assert.equal(parseRetryAfterMs('Wed, 25 Nov 2026 00:00:12 GMT', nowMs), 12_000);
+  assert.equal(parseRetryAfterMs('invalid', nowMs), null);
+
+  const rubric = resolveRubrics({
+    mode: 'file',
+    rubrics: ['readability'],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+
+  // Retry recovery across 429 -> 502 -> 503 (with Retry-After) -> 200.
+  const sleeps: number[] = [];
+  let retryCalls = 0;
+  const recovered = await runDecisionJudge(
+    {
+      mode: 'code',
+      files: { 'a.ts': 'export const a = 1;\n' },
+      rubric,
+      model: 'liquid/d1.2-ultra',
+      out: join(root, 'retry-recover'),
+    },
+    async () => {
+      retryCalls += 1;
+      if (retryCalls === 1) return new Response('rate limited', { status: 429 });
+      if (retryCalls === 2) return new Response('bad gateway', { status: 502 });
+      if (retryCalls === 3) return new Response('unavailable', { status: 503, headers: { 'Retry-After': '7' } });
+      return Response.json({
+        model: 'mock-retry',
+        answers: {
+          direct_readability: { type: 'choice', choice: 'pass', probabilities: { pass: 0.9, fail: 0.1 }, confidence: 0.8 },
+          named_domain_expressions: { type: 'choice', choice: 'pass', probabilities: { pass: 0.95, fail: 0.05 }, confidence: 0.9 },
+        },
+      });
+    },
+    {
+      sleep: async (ms) => { sleeps.push(ms); },
+      random: () => 0.5,
+      onRetry: () => {},
+    },
+  );
+  assert.equal(retryCalls, 4);
+  assert.deepEqual(sleeps, [4_000, 8_000, 7_000]);
+  assert.equal(recovered.status, 'scored');
+  assert.equal(recovered.retries, 3);
+
+  // Non-retryable HTTP 400 fails immediately with zero retries.
+  let nonRetryCalls = 0;
+  const badReq = await runDecisionJudge(
+    {
+      mode: 'code',
+      files: { 'a.ts': 'export const a = 1;\n' },
+      rubric,
+      model: 'liquid/d1.2-ultra',
+      out: join(root, 'retry-400'),
+    },
+    async () => {
+      nonRetryCalls += 1;
+      return new Response('bad request', { status: 400 });
+    },
+    {
+      sleep: async () => { throw new Error('must not sleep on 400'); },
+      onRetry: () => {},
+    },
+  );
+  assert.equal(nonRetryCalls, 1);
+  assert.equal(badReq.status, 'error');
+  assert.match(badReq.error!, /HTTP 400/);
+
+  // Exhausting retries on 429 records error after maxRetries + 1 attempts.
+  let exhaustCalls = 0;
+  const exhausted = await runDecisionJudge(
+    {
+      mode: 'code',
+      files: { 'a.ts': 'export const a = 1;\n' },
+      rubric,
+      model: 'liquid/d1.2-ultra',
+      out: join(root, 'retry-exhaust'),
+    },
+    async () => {
+      exhaustCalls += 1;
+      return new Response('still rate limited', { status: 429 });
+    },
+    {
+      maxRetries: 2,
+      sleep: async () => {},
+      onRetry: () => {},
+    },
+  );
+  assert.equal(exhaustCalls, 3);
+  assert.equal(exhausted.status, 'error');
+  assert.match(exhausted.error!, /HTTP 429 after 3 attempts/);
+
+  // Bounded concurrency in --mode file: 5 files with concurrency 2 never exceeds 2 in-flight and preserves sorted order.
+  let inFlight = 0;
+  let peakInFlight = 0;
+  const concurrent = await runDecisionJudge(
+    {
+      mode: 'file',
+      files: {
+        'z.ts': 'export const z = 1;\n',
+        'a.ts': 'export const a = 1;\n',
+        'm.ts': 'export const m = 1;\n',
+        'b.ts': 'export const b = 1;\n',
+        'c.ts': 'export const c = 1;\n',
+      },
+      rubric,
+      model: 'liquid/d1.2-ultra',
+      concurrency: 2,
+      out: join(root, 'concurrent-file'),
+    },
+    async (_url, init) => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 15));
+      inFlight -= 1;
+      const body = JSON.parse(String(init?.body));
+      const file = Object.keys(body.state.production_files)[0];
+      const passProb = file === 'm.ts' ? 0.4 : 0.9;
+      return Response.json({
+        model: 'mock-concurrent',
+        answers: {
+          direct_readability: { type: 'choice', choice: passProb >= 0.5 ? 'pass' : 'fail', probabilities: { pass: passProb, fail: Number((1 - passProb).toFixed(4)) }, confidence: 0.8 },
+          named_domain_expressions: { type: 'choice', choice: 'pass', probabilities: { pass: 0.95, fail: 0.05 }, confidence: 0.9 },
+        },
+      });
+    },
+  );
+  assert.equal(peakInFlight, 2);
+  assert.equal(concurrent.status, 'scored');
+  assert.deepEqual(concurrent.file_results!.map((f) => f.file), ['a.ts', 'b.ts', 'c.ts', 'm.ts', 'z.ts']);
+  assert.equal(concurrent.quality!.checks.direct_readability.files_passed, 4);
+  assert.equal(concurrent.quality!.checks.direct_readability.min_pass_probability, 0.4);
+  assert.equal(concurrent.quality!.all_files_pass_rate, 0.5);
+});
+
+test('file mode works with codex and claude CLI backends concurrently', (t) => {
+  const { run, root } = setup(t);
+  const fakeBin = join(root, 'fake-bin-file');
+  mkdirSync(fakeBin, { recursive: true });
+
+  const codexStub = join(fakeBin, 'codex');
+  writeFileSync(codexStub, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const outIdx = args.indexOf('-o');
+const schemaIdx = args.indexOf('--output-schema');
+const stdin = fs.readFileSync(0, 'utf8');
+const schema = JSON.parse(fs.readFileSync(args[schemaIdx + 1], 'utf8'));
+const ids = schema.properties.checks.items.properties.id.enum;
+const isBooking = stdin.includes('Booking.kt');
+const payload = {
+  checks: ids.map((id) => ({
+    id,
+    note: isBooking && id === 'direct_readability' ? 'Opaque names.' : 'Clean.',
+    choice: isBooking && id === 'direct_readability' ? 'fail' : 'pass',
+  })),
+};
+fs.writeFileSync(args[outIdx + 1], JSON.stringify(payload));
+`);
+  chmodSync(codexStub, 0o755);
+
+  const claudeStub = join(fakeBin, 'claude');
+  writeFileSync(claudeStub, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const schemaIdx = args.indexOf('--json-schema');
+const schema = JSON.parse(args[schemaIdx + 1]);
+const ids = schema.properties.checks.items.properties.id.enum;
+console.log(JSON.stringify({
+  modelUsage: { 'claude-haiku-file': { inputTokens: 10 } },
+  structured_output: {
+    checks: ids.map((id) => ({ id, note: 'All good.', choice: 'pass' })),
+  },
+}));
+`);
+  chmodSync(claudeStub, 0o755);
+
+  const stubEnv = { PATH: `${fakeBin}:${process.env.PATH ?? ''}` };
+
+  const codexOut = join(root, 'codex-file');
+  const codexProc = run('preview', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--backend', 'codex',
+    '--concurrency', '2',
+    '--fail-on-violation',
+    '--out', codexOut,
+  ], stubEnv);
+  assert.equal(codexProc.status, 1, codexProc.stderr);
+  const codexRes = JSON.parse(codexProc.stdout);
+  assert.equal(codexRes.status, 'scored');
+  assert.equal(codexRes.mode, 'file');
+  assert.equal(codexRes.backend, 'codex');
+  assert.equal(codexRes.quality.checks.direct_readability.choice, 'fail');
+  assert.equal(codexRes.quality.checks.direct_readability.files_passed, 3);
+  assert.equal(codexRes.quality.checks.direct_readability.files_total, 4);
+  assert.equal(codexRes.quality.checks.direct_readability.pass_probability, null);
+  assert.equal(codexRes.quality.checks.direct_readability.min_pass_probability, null);
+
+  const claudeOut = join(root, 'claude-file');
+  const claudeProc = run('preview', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--backend', 'claude',
+    '--concurrency', '2',
+    '--format', 'summary',
+    '--fail-on-violation',
+    '--out', claudeOut,
+  ], stubEnv);
+  assert.equal(claudeProc.status, 0, claudeProc.stderr);
+  assert.match(claudeProc.stdout, /4 scored \(4 passed, 0 failed\)/);
+  assert.match(claudeProc.stdout, /min P\(pass\)=n\/a/);
 });
