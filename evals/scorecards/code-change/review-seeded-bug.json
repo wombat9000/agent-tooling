@@ -5,94 +5,91 @@
   "entries": {
     "skill": {
       "review": {
-        "recorded_at": "2026-11-21",
+        "recorded_at": "2026-11-24",
         "agent_model": "openai/gpt-6.1-terra",
         "judge_model": "liquid/d1.2-ultra",
         "scope": "whole",
         "rubric": "seeded-bug-1",
         "trials": {
-          "total": 5,
-          "scored": 5,
+          "total": 3,
+          "scored": 3,
           "errored": 0
         },
         "deterministic": {
-          "passed": 5,
-          "total": 5,
+          "passed": 3,
+          "total": 3,
           "pass_rate": 1,
           "metrics": {
             "category": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "format": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "found": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "guideline": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "report_exists": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "restraint": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "severity": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             },
             "verdict": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1
             }
           }
         },
         "quality": {
           "pass_rate": 1,
-          "mean_pass_probability": 0.9985,
+          "mean_pass_probability": 0.9984,
           "checks": {
             "defect_identified": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.999
+              "mean_pass_probability": 0.9991
             },
             "evidence_supported": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1,
               "mean_pass_probability": 0.9989
             },
             "restraint": {
-              "passed": 5,
-              "total": 5,
+              "passed": 3,
+              "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9975
+              "mean_pass_probability": 0.9971
             }
           }
         },
         "hashes": {
-          "skill_hash": "0430d1b05280",
-          "task_hash": "a845f6d60c75",
+          "skill_hash": "4f22cf92820e",
+          "task_hash": "df6614a31e20",
           "rubric_hash": "16ef7859205a"
-        },
-        "source": {
-          "git_ref": "10a6459"
         }
       }
     }

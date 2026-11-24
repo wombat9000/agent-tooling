@@ -20,32 +20,32 @@ Run `pnpm eval scorecard --open` to explore this data in the interactive local H
 
 ## `code-change` Eval Summary
 
-Recorded entries: **6/15 current**. Quality scores report mean trial pass rate and mean check `P(pass)` across scored trials.
+Recorded entries: **16/16 current**. Quality scores report mean trial pass rate and mean check `P(pass)` across scored trials.
 
 | Task | Target | Reward | Baseline | Skill | Lift | Weakest Check(s) | n | Agent / Judge | Date | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `canary` | `review` | 5/5 | — | 60.0% (P=66.9%) | — | `duplicated_rule` (1/5) | 5 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-21 | Stale (skill, task) |
+| `canary` | `review` | 3/3 | — | 83.3% (P=75.5%) | — | `duplicated_rule` (2/3) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
 | `extend-invoice-disputes` | `production_code` | 3/3 (base 3/3) | 76.2% (P=70.3%) | 82.5% (P=77.9%) | +6.3pp | `no_long_parameter_lists_or_data_clumps` (0/3), `named_domain_expressions` (1/3) +3 more | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
 | `extend-invoice-disputes` | `test_code` | 3/3 (base 3/3) | 76.7% (P=74.9%) | 93.3% (P=86.3%) | +16.7pp | `shared_fixtures_no_raw_db_in_api` (2/3), `observable_diagnostic_assertions` (2/3) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
 | `implement-mars-rover` | `production_code` | 3/3 | — | 97.2% (P=94.2%) | — | `named_domain_expressions` (2/3) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
 | `implement-mars-rover` | `test_code` | 3/3 | — | 100.0% (P=97.8%) | — | All 100% (min `unit_single_behavior_aaa` P=94.2%) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
-| `implement-meeting-room-booking` | `production_code` | 5/5 (base 5/5) | 57.1% (P=58.8%) | 79.0% (P=75.8%) | +21.9pp | `no_primitive_obsession` (1/5), `no_repeated_switches` (1/5) +6 more | 5 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 (base 2026-11-22) | Skill: Stale (skill); Base: Stale (task, rubric) |
-| `implement-meeting-room-booking` | `test_code` | 5/5 (base 4/5) | 66.0% (P=65.4%) | 98.0% (P=88.3%) | +32.0pp | `right_execution_tier` (4/5) | 5 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 (base 2026-11-23) | Skill: Stale (skill, rubric); Base: Stale (rubric) |
-| `implement-react-router-todo` | `production_code` | 3/3 (base 1/5) | 48.3% (P=58.9%) | 86.1% (P=80.0%) | +37.8pp | `dependency_inversion` (1/3), `named_domain_expressions` (1/3) +1 more | 3 / base 5 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 (base 2026-11-23) | Skill: Stale (skill); Base: Stale (task) |
-| `implement-react-router-todo` | `test_code` | 3/3 | — | 100.0% (P=91.1%) | — | All 100% (min `focused_user_journeys` P=60.3%) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Stale (skill) |
-| `review-seeded-bug` | `review` | 5/5 | — | 100.0% (P=99.9%) | — | All 100% (min `restraint` P=99.8%) | 5 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-21 | Stale (skill, task) |
+| `implement-meeting-room-booking` | `production_code` | 3/3 (base 3/3) | 58.7% (P=59.7%) | 90.5% (P=80.7%) | +31.8pp | `no_repeated_switches` (0/3), `no_primitive_obsession` (1/3) +1 more | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
+| `implement-meeting-room-booking` | `test_code` | 3/3 (base 3/3) | 70.0% (P=63.6%) | 100.0% (P=93.5%) | +30.0pp | All 100% (min `integration_cohesive_scope` P=80.4%) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
+| `implement-react-router-todo` | `production_code` | 3/3 (base 3/3) | 50.0% (P=58.9%) | 91.7% (P=78.2%) | +41.7pp | `domain_invariants` (1/3), `open_closed` (2/3) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
+| `implement-react-router-todo` | `test_code` | 3/3 (base 3/3) | 100.0% (P=92.6%) | 100.0% (P=91.7%) | 0.0pp | All 100% (min `focused_user_journeys` P=65.7%) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
+| `review-seeded-bug` | `review` | 3/3 | — | 100.0% (P=99.8%) | — | All 100% (min `restraint` P=99.7%) | 3 | `openai/gpt-6.1-terra` / `liquid/d1.2-ultra` | 2026-11-24 | Current |
 
 ### `code-change` Check-by-Check Breakdowns
 
 <details>
-<summary><strong><code>canary</code></strong> · <code>review</code> — Skill 60.0% · Stale (skill, task)</summary>
+<summary><strong><code>canary</code></strong> · <code>review</code> — Skill 83.3% · Current</summary>
 
-- **Skill** (Stale (skill, task)): 60.0% pass rate, P(pass)=66.9%, reward 5/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `canary-1`, date 2026-11-21 · ref `10a6459` (skill=`0430d1b05280`, task=`86417d6730c7`, rubric=`5e6731a4f1c0`)
+- **Skill** (Current): 83.3% pass rate, P(pass)=75.5%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `canary-1`, date 2026-11-24 (skill=`4f22cf92820e`, task=`09ad7d0a8d54`, rubric=`5e6731a4f1c0`)
 
 | Check | Baseline | Skill | Lift |
 |---|---|---|---|
-| `duplicated_rule` | — | 1/5 (20% · P=33.8%) | — |
-| `weak_test` | — | 5/5 (100% · P=99.9%) | — |
+| `duplicated_rule` | — | 2/3 (67% · P=51.2%) | — |
+| `weak_test` | — | 3/3 (100% · P=99.8%) | — |
 
 </details>
 
@@ -141,107 +141,108 @@ Recorded entries: **6/15 current**. Quality scores report mean trial pass rate a
 </details>
 
 <details>
-<summary><strong><code>implement-meeting-room-booking</code></strong> · <code>production_code</code> — Skill 79.0% · Baseline 57.1% · Lift +21.9pp · Skill: Stale (skill); Base: Stale (task, rubric)</summary>
+<summary><strong><code>implement-meeting-room-booking</code></strong> · <code>production_code</code> — Skill 90.5% · Baseline 58.7% · Lift +31.8pp · Current</summary>
 
-- **Skill** (Stale (skill)): 79.0% pass rate, P(pass)=75.8%, reward 5/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3+fowler-smells-v1`, date 2026-11-24 · ref `3647b02` (skill=`1879638622c1`, task=`7949498ec049`, rubric=`a41cc3058637`)
-- **Baseline** (Stale (task, rubric)): 57.1% pass rate, P(pass)=58.8%, reward 5/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v2+readability-v1+module-design-v1+solid-v1+fowler-smells-v1`, date 2026-11-22 · ref `ffdf60c` (task=`edaafee4ba8e`, rubric=`78a0369e7ff9`)
+- **Skill** (Current): 90.5% pass rate, P(pass)=80.7%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3+fowler-smells-v1`, date 2026-11-24 (skill=`4f22cf92820e`, task=`7949498ec049`, rubric=`a41cc3058637`)
+- **Baseline** (Current): 58.7% pass rate, P(pass)=59.7%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3+fowler-smells-v1`, date 2026-11-24 (task=`7949498ec049`, rubric=`a41cc3058637`)
 
 | Check | Facet | Baseline | Skill | Lift |
 |---|---|---|---|---|
-| `no_primitive_obsession` | `fowler-smells` | 0/5 (0% · P=10.3%) | 1/5 (20% · P=26.9%) | +20.0pp |
-| `no_repeated_switches` | `fowler-smells` | 0/5 (0% · P=23.2%) | 1/5 (20% · P=35.4%) | +20.0pp |
-| `no_feature_envy_or_data_class_anemia` | `fowler-smells` | 0/5 (0% · P=19.5%) | 1/5 (20% · P=38.1%) | +20.0pp |
-| `domain_invariants` | `domain-modelling` | 0/5 (0% · P=25.5%) | 1/5 (20% · P=46.4%) | +20.0pp |
-| `open_closed` | `solid` | 2/5 (40% · P=47.9%) | 3/5 (60% · P=53.2%) | +20.0pp |
-| `named_domain_expressions` | `readability` | 1/5 (20% · P=41.3%) | 3/5 (60% · P=60.3%) | +40.0pp |
-| `boundary_separation` | `domain-modelling` | 0/5 (0% · P=9.8%) | 4/5 (80% · P=56.6%) | +80.0pp |
-| `dependency_inversion` | `solid` | 0/5 (0% · P=33.0%) | 4/5 (80% · P=77.5%) | +80.0pp |
-| `no_duplicated_code` | `fowler-smells` | 5/5 (100% · P=77.8%) | 5/5 (100% · P=78.5%) | 0.0pp |
-| `single_responsibility` | `solid` | 2/5 (40% · P=54.6%) | 5/5 (100% · P=84.7%) | +60.0pp |
-| `no_long_parameter_lists_or_data_clumps` | `fowler-smells` | 5/5 (100% · P=65.0%) | 5/5 (100% · P=85.7%) | 0.0pp |
-| `direct_readability` | `readability` | 5/5 (100% · P=72.7%) | 5/5 (100% · P=86.4%) | 0.0pp |
-| `modular_organization` | `module-design` | 0/5 (0% · P=2.6%) | 5/5 (100% · P=91.1%) | +100.0pp |
-| `no_speculative_or_middle_man` | `fowler-smells` | 5/5 (100% · P=84.4%) | 5/5 (100% · P=93.5%) | 0.0pp |
-| `no_message_chains` | `fowler-smells` | 5/5 (100% · P=94.8%) | 5/5 (100% · P=93.6%) | 0.0pp |
-| `no_long_functions` | `fowler-smells` | 5/5 (100% · P=87.4%) | 5/5 (100% · P=95.0%) | 0.0pp |
-| `liskov_substitution` | `solid` | 5/5 (100% · P=97.6%) | 5/5 (100% · P=96.4%) | 0.0pp |
-| `interface_segregation` | `solid` | 5/5 (100% · P=96.9%) | 5/5 (100% · P=96.9%) | 0.0pp |
-| `immutable_state` | `domain-modelling` | 5/5 (100% · P=97.0%) | 5/5 (100% · P=98.1%) | 0.0pp |
-| `no_unnecessary_abstraction` | `module-design` | 5/5 (100% · P=97.1%) | 5/5 (100% · P=98.4%) | 0.0pp |
-| `no_comment_deodorant_or_dead_code` | `fowler-smells` | 5/5 (100% · P=97.1%) | 5/5 (100% · P=99.0%) | 0.0pp |
+| `no_repeated_switches` | `fowler-smells` | 0/3 (0% · P=24.8%) | 0/3 (0% · P=38.2%) | 0.0pp |
+| `no_primitive_obsession` | `fowler-smells` | 0/3 (0% · P=11.4%) | 1/3 (33% · P=26.8%) | +33.3pp |
+| `boundary_separation` | `domain-modelling` | 0/3 (0% · P=7.1%) | 2/3 (67% · P=58.0%) | +66.7pp |
+| `open_closed` | `solid` | 3/3 (100% · P=57.0%) | 3/3 (100% · P=56.9%) | 0.0pp |
+| `domain_invariants` | `domain-modelling` | 0/3 (0% · P=24.5%) | 3/3 (100% · P=67.3%) | +100.0pp |
+| `named_domain_expressions` | `readability` | 1/3 (33% · P=44.3%) | 3/3 (100% · P=71.9%) | +66.7pp |
+| `no_duplicated_code` | `fowler-smells` | 3/3 (100% · P=85.1%) | 3/3 (100% · P=80.8%) | 0.0pp |
+| `no_feature_envy_or_data_class_anemia` | `fowler-smells` | 0/3 (0% · P=21.1%) | 3/3 (100% · P=81.3%) | +100.0pp |
+| `no_message_chains` | `fowler-smells` | 3/3 (100% · P=93.4%) | 3/3 (100% · P=84.2%) | 0.0pp |
+| `direct_readability` | `readability` | 3/3 (100% · P=73.1%) | 3/3 (100% · P=88.0%) | 0.0pp |
+| `no_long_parameter_lists_or_data_clumps` | `fowler-smells` | 3/3 (100% · P=75.6%) | 3/3 (100% · P=89.8%) | 0.0pp |
+| `single_responsibility` | `solid` | 0/3 (0% · P=39.6%) | 3/3 (100% · P=89.8%) | +100.0pp |
+| `dependency_inversion` | `solid` | 0/3 (0% · P=29.9%) | 3/3 (100% · P=90.6%) | +100.0pp |
+| `modular_organization` | `module-design` | 0/3 (0% · P=2.6%) | 3/3 (100% · P=94.0%) | +100.0pp |
+| `liskov_substitution` | `solid` | 3/3 (100% · P=98.1%) | 3/3 (100% · P=94.3%) | 0.0pp |
+| `no_speculative_or_middle_man` | `fowler-smells` | 3/3 (100% · P=89.0%) | 3/3 (100% · P=94.5%) | 0.0pp |
+| `interface_segregation` | `solid` | 3/3 (100% · P=96.6%) | 3/3 (100% · P=97.1%) | 0.0pp |
+| `no_long_functions` | `fowler-smells` | 3/3 (100% · P=88.7%) | 3/3 (100% · P=97.3%) | 0.0pp |
+| `immutable_state` | `domain-modelling` | 3/3 (100% · P=95.1%) | 3/3 (100% · P=97.8%) | 0.0pp |
+| `no_unnecessary_abstraction` | `module-design` | 3/3 (100% · P=97.5%) | 3/3 (100% · P=98.0%) | 0.0pp |
+| `no_comment_deodorant_or_dead_code` | `fowler-smells` | 3/3 (100% · P=98.2%) | 3/3 (100% · P=98.3%) | 0.0pp |
 
 </details>
 
 <details>
-<summary><strong><code>implement-meeting-room-booking</code></strong> · <code>test_code</code> — Skill 98.0% · Baseline 66.0% · Lift +32.0pp · Skill: Stale (skill, rubric); Base: Stale (rubric)</summary>
+<summary><strong><code>implement-meeting-room-booking</code></strong> · <code>test_code</code> — Skill 100.0% · Baseline 70.0% · Lift +30.0pp · Current</summary>
 
-- **Skill** (Stale (skill, rubric)): 98.0% pass rate, P(pass)=88.3%, reward 5/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-unit-v1+testing-integration-v1`, date 2026-11-24 · ref `3647b02` (skill=`1879638622c1`, task=`7949498ec049`, rubric=`851c7bf3fde4`)
-- **Baseline** (Stale (rubric)): 66.0% pass rate, P(pass)=65.4%, reward 4/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-unit-v1+testing-integration-v1`, date 2026-11-23 · ref `3647b02` (task=`7949498ec049`, rubric=`851c7bf3fde4`)
+- **Skill** (Current): 100.0% pass rate, P(pass)=93.5%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-unit-v1+testing-integration-v1`, date 2026-11-24 (skill=`4f22cf92820e`, task=`7949498ec049`, rubric=`085ecb34b0d6`)
+- **Baseline** (Current): 70.0% pass rate, P(pass)=63.6%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-unit-v1+testing-integration-v1`, date 2026-11-24 (task=`7949498ec049`, rubric=`085ecb34b0d6`)
 
 | Check | Facet | Baseline | Skill | Lift |
 |---|---|---|---|---|
-| `right_execution_tier` | `testing-integration` | 0/5 (0% · P=16.4%) | 4/5 (80% · P=83.3%) | +80.0pp |
-| `integration_cohesive_scope` | `testing-integration` | 1/5 (20% · P=45.6%) | 5/5 (100% · P=77.8%) | +80.0pp |
-| `shared_fixtures_no_raw_db_in_api` | `testing-integration` | 0/5 (0% · P=9.8%) | 5/5 (100% · P=78.0%) | +100.0pp |
-| `observable_diagnostic_assertions` | `testing-core` | 2/5 (40% · P=52.4%) | 5/5 (100% · P=84.0%) | +60.0pp |
-| `unit_single_behavior_aaa` | `testing-unit` | 5/5 (100% · P=65.3%) | 5/5 (100% · P=85.1%) | 0.0pp |
-| `independent_requirement_coverage` | `testing-core` | 5/5 (100% · P=89.8%) | 5/5 (100% · P=90.3%) | 0.0pp |
-| `no_redundant_duplication` | `testing-core` | 5/5 (100% · P=87.7%) | 5/5 (100% · P=93.8%) | 0.0pp |
-| `owner_boundary_no_seams` | `testing-core` | 5/5 (100% · P=97.6%) | 5/5 (100% · P=94.3%) | 0.0pp |
-| `disciplined_test_doubles` | `testing-unit` | 5/5 (100% · P=91.0%) | 5/5 (100% · P=97.9%) | 0.0pp |
-| `real_internal_wiring` | `testing-integration` | 5/5 (100% · P=98.5%) | 5/5 (100% · P=98.8%) | 0.0pp |
+| `integration_cohesive_scope` | `testing-integration` | 1/3 (33% · P=43.0%) | 3/3 (100% · P=80.4%) | +66.7pp |
+| `independent_requirement_coverage` | `testing-core` | 3/3 (100% · P=86.8%) | 3/3 (100% · P=90.3%) | 0.0pp |
+| `observable_diagnostic_assertions` | `testing-core` | 2/3 (67% · P=51.6%) | 3/3 (100% · P=91.7%) | +33.3pp |
+| `unit_single_behavior_aaa` | `testing-unit` | 3/3 (100% · P=65.3%) | 3/3 (100% · P=92.1%) | 0.0pp |
+| `shared_fixtures_no_raw_db_in_api` | `testing-integration` | 0/3 (0% · P=7.1%) | 3/3 (100% · P=93.6%) | +100.0pp |
+| `owner_boundary_no_seams` | `testing-core` | 3/3 (100% · P=96.2%) | 3/3 (100% · P=94.4%) | 0.0pp |
+| `no_redundant_duplication` | `testing-core` | 3/3 (100% · P=84.8%) | 3/3 (100% · P=94.8%) | 0.0pp |
+| `right_execution_tier` | `testing-integration` | 0/3 (0% · P=12.6%) | 3/3 (100% · P=98.7%) | +100.0pp |
+| `real_internal_wiring` | `testing-integration` | 3/3 (100% · P=98.5%) | 3/3 (100% · P=99.1%) | 0.0pp |
+| `disciplined_test_doubles` | `testing-unit` | 3/3 (100% · P=90.2%) | 3/3 (100% · P=99.4%) | 0.0pp |
 
 </details>
 
 <details>
-<summary><strong><code>implement-react-router-todo</code></strong> · <code>production_code</code> — Skill 86.1% · Baseline 48.3% · Lift +37.8pp · Skill: Stale (skill); Base: Stale (task)</summary>
+<summary><strong><code>implement-react-router-todo</code></strong> · <code>production_code</code> — Skill 91.7% · Baseline 50.0% · Lift +41.7pp · Current</summary>
 
-- **Skill** (Stale (skill)): 86.1% pass rate, P(pass)=80.0%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3`, date 2026-11-24 · ref `84a99eb` (skill=`6608b4e772b2`, task=`78d41ae6431e`, rubric=`6f93aab381e7`)
-- **Baseline** (Stale (task)): 48.3% pass rate, P(pass)=58.9%, reward 1/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3`, date 2026-11-23 · ref `1196851` (task=`94620c48636d`, rubric=`6f93aab381e7`)
+- **Skill** (Current): 91.7% pass rate, P(pass)=78.2%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3`, date 2026-11-24 (skill=`4f22cf92820e`, task=`78d41ae6431e`, rubric=`6f93aab381e7`)
+- **Baseline** (Current): 50.0% pass rate, P(pass)=58.9%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `domain-modelling-v3+readability-v2+module-design-v2+solid-v3`, date 2026-11-24 (task=`78d41ae6431e`, rubric=`6f93aab381e7`)
 
 | Check | Facet | Baseline | Skill | Lift |
 |---|---|---|---|---|
-| `dependency_inversion` | `solid` | 0/5 (0% · P=41.4%) | 1/3 (33% · P=48.8%) | +33.3pp |
-| `named_domain_expressions` | `readability` | 0/5 (0% · P=29.7%) | 1/3 (33% · P=50.8%) | +33.3pp |
-| `domain_invariants` | `domain-modelling` | 0/5 (0% · P=27.1%) | 2/3 (67% · P=72.0%) | +66.7pp |
-| `open_closed` | `solid` | 4/5 (80% · P=54.4%) | 3/3 (100% · P=68.1%) | +20.0pp |
-| `modular_organization` | `module-design` | 0/5 (0% · P=4.8%) | 3/3 (100% · P=69.1%) | +100.0pp |
-| `boundary_separation` | `domain-modelling` | 0/5 (0% · P=29.1%) | 3/3 (100% · P=80.8%) | +100.0pp |
-| `single_responsibility` | `solid` | 0/5 (0% · P=42.6%) | 3/3 (100% · P=86.5%) | +100.0pp |
-| `immutable_state` | `domain-modelling` | 5/5 (100% · P=92.2%) | 3/3 (100% · P=91.6%) | 0.0pp |
-| `direct_readability` | `readability` | 5/5 (100% · P=88.5%) | 3/3 (100% · P=95.2%) | 0.0pp |
-| `interface_segregation` | `solid` | 5/5 (100% · P=98.8%) | 3/3 (100% · P=98.3%) | 0.0pp |
-| `liskov_substitution` | `solid` | 5/5 (100% · P=98.7%) | 3/3 (100% · P=98.9%) | 0.0pp |
-| `no_unnecessary_abstraction` | `module-design` | 5/5 (100% · P=99.3%) | 3/3 (100% · P=99.6%) | 0.0pp |
+| `domain_invariants` | `domain-modelling` | 0/3 (0% · P=24.9%) | 1/3 (33% · P=47.7%) | +33.3pp |
+| `open_closed` | `solid` | 2/3 (67% · P=54.9%) | 2/3 (67% · P=54.3%) | 0.0pp |
+| `dependency_inversion` | `solid` | 0/3 (0% · P=38.2%) | 3/3 (100% · P=59.9%) | +100.0pp |
+| `named_domain_expressions` | `readability` | 0/3 (0% · P=29.1%) | 3/3 (100% · P=60.0%) | +100.0pp |
+| `modular_organization` | `module-design` | 0/3 (0% · P=6.2%) | 3/3 (100% · P=70.5%) | +100.0pp |
+| `boundary_separation` | `domain-modelling` | 0/3 (0% · P=31.1%) | 3/3 (100% · P=79.2%) | +100.0pp |
+| `single_responsibility` | `solid` | 1/3 (33% · P=42.8%) | 3/3 (100% · P=85.3%) | +66.7pp |
+| `immutable_state` | `domain-modelling` | 3/3 (100% · P=93.5%) | 3/3 (100% · P=89.7%) | 0.0pp |
+| `direct_readability` | `readability` | 3/3 (100% · P=89.2%) | 3/3 (100% · P=95.1%) | 0.0pp |
+| `interface_segregation` | `solid` | 3/3 (100% · P=98.5%) | 3/3 (100% · P=98.3%) | 0.0pp |
+| `liskov_substitution` | `solid` | 3/3 (100% · P=98.8%) | 3/3 (100% · P=98.8%) | 0.0pp |
+| `no_unnecessary_abstraction` | `module-design` | 3/3 (100% · P=99.4%) | 3/3 (100% · P=99.5%) | 0.0pp |
 
 </details>
 
 <details>
-<summary><strong><code>implement-react-router-todo</code></strong> · <code>test_code</code> — Skill 100.0% · Stale (skill)</summary>
+<summary><strong><code>implement-react-router-todo</code></strong> · <code>test_code</code> — Skill 100.0% · Baseline 100.0% · Lift 0.0pp · Current</summary>
 
-- **Skill** (Stale (skill)): 100.0% pass rate, P(pass)=91.1%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-e2e-v1`, date 2026-11-24 · ref `84a99eb` (skill=`6608b4e772b2`, task=`78d41ae6431e`, rubric=`dc767b5d2d8d`)
+- **Skill** (Current): 100.0% pass rate, P(pass)=91.7%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-e2e-v1`, date 2026-11-24 (skill=`4f22cf92820e`, task=`78d41ae6431e`, rubric=`dc767b5d2d8d`)
+- **Baseline** (Current): 100.0% pass rate, P(pass)=92.6%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `testing-core-v1+testing-e2e-v1`, date 2026-11-24 (task=`78d41ae6431e`, rubric=`dc767b5d2d8d`)
 
 | Check | Facet | Baseline | Skill | Lift |
 |---|---|---|---|---|
-| `focused_user_journeys` | `testing-e2e` | — | 3/3 (100% · P=60.3%) | — |
-| `independent_requirement_coverage` | `testing-core` | — | 3/3 (100% · P=91.0%) | — |
-| `no_redundant_duplication` | `testing-core` | — | 3/3 (100% · P=94.1%) | — |
-| `observable_diagnostic_assertions` | `testing-core` | — | 3/3 (100% · P=96.6%) | — |
-| `deterministic_e2e_waiting_and_isolation` | `testing-e2e` | — | 3/3 (100% · P=97.6%) | — |
-| `resilient_user_visible_locators` | `testing-e2e` | — | 3/3 (100% · P=98.9%) | — |
-| `owner_boundary_no_seams` | `testing-core` | — | 3/3 (100% · P=99.4%) | — |
+| `focused_user_journeys` | `testing-e2e` | 3/3 (100% · P=76.6%) | 3/3 (100% · P=65.7%) | 0.0pp |
+| `independent_requirement_coverage` | `testing-core` | 3/3 (100% · P=84.8%) | 3/3 (100% · P=88.8%) | 0.0pp |
+| `no_redundant_duplication` | `testing-core` | 3/3 (100% · P=96.6%) | 3/3 (100% · P=94.2%) | 0.0pp |
+| `observable_diagnostic_assertions` | `testing-core` | 3/3 (100% · P=96.5%) | 3/3 (100% · P=96.7%) | 0.0pp |
+| `deterministic_e2e_waiting_and_isolation` | `testing-e2e` | 3/3 (100% · P=95.4%) | 3/3 (100% · P=97.9%) | 0.0pp |
+| `resilient_user_visible_locators` | `testing-e2e` | 3/3 (100% · P=98.9%) | 3/3 (100% · P=98.9%) | 0.0pp |
+| `owner_boundary_no_seams` | `testing-core` | 3/3 (100% · P=99.6%) | 3/3 (100% · P=99.6%) | 0.0pp |
 
 </details>
 
 <details>
-<summary><strong><code>review-seeded-bug</code></strong> · <code>review</code> — Skill 100.0% · Stale (skill, task)</summary>
+<summary><strong><code>review-seeded-bug</code></strong> · <code>review</code> — Skill 100.0% · Current</summary>
 
-- **Skill** (Stale (skill, task)): 100.0% pass rate, P(pass)=99.9%, reward 5/5, n=5/5, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `seeded-bug-1`, date 2026-11-21 · ref `10a6459` (skill=`0430d1b05280`, task=`a845f6d60c75`, rubric=`16ef7859205a`)
+- **Skill** (Current): 100.0% pass rate, P(pass)=99.8%, reward 3/3, n=3/3, agent `openai/gpt-6.1-terra`, judge `liquid/d1.2-ultra` (whole), rubric `seeded-bug-1`, date 2026-11-24 (skill=`4f22cf92820e`, task=`df6614a31e20`, rubric=`16ef7859205a`)
 
 | Check | Baseline | Skill | Lift |
 |---|---|---|---|
-| `restraint` | — | 5/5 (100% · P=99.8%) | — |
-| `evidence_supported` | — | 5/5 (100% · P=99.9%) | — |
-| `defect_identified` | — | 5/5 (100% · P=99.9%) | — |
+| `restraint` | — | 3/3 (100% · P=99.7%) | — |
+| `evidence_supported` | — | 3/3 (100% · P=99.9%) | — |
+| `defect_identified` | — | 3/3 (100% · P=99.9%) | — |
 
 </details>
