@@ -41,6 +41,7 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
     assert.ok(Object.keys(rubric.questions).length > 0, `${task}: invalid tests/judge.json`);
     if (rubric.target === 'production_code') {
       assert.ok(taskSourceRoot(dir), `${task}: invalid source_root in tests/judge.json`);
+      assert.ok(existsSync(join(dir, 'tests/judge-tests.json')), `${task}: missing tests/judge-tests.json`);
       assert.ok(taskTestRoot(dir), `${task}: invalid test_source_root`);
       const testRubric = parseTestRubric(dir, '');
       assert.equal(testRubric.target, 'test_code', `${task}: test rubric must target test_code`);
@@ -69,9 +70,15 @@ test('shared rubrics under rubrics/ parse cleanly and have non-overlapping quest
       seen.set(id, slug);
     }
   }
-  const testing = parseSharedRubric('testing');
-  assert.equal(testing.target, 'test_code');
-  assert.ok(Object.keys(testing.questions).length >= 6);
+  for (const [slug, minCount] of [
+    ['testing-core', 4],
+    ['testing-unit', 2],
+    ['testing-integration', 4],
+  ] as const) {
+    const parsed = parseSharedRubric(slug);
+    assert.equal(parsed.target, 'test_code', `${slug} must target test_code`);
+    assert.ok(Object.keys(parsed.questions).length >= minCount, `${slug} question count`);
+  }
 });
 
 test('lowering the seeded bug severity fails', () => {
@@ -121,11 +128,15 @@ test('Unicode decimal line numbers retain the reference scores', () => {
   }
 });
 
-test('Unicode letters do not end verdict words or guideline IDs', () => {
+test('Unicode letters do not end verdict words or guideline IDs, and TU/TI testing IDs are recognized', () => {
   const clean = 'Verdict: readyé\n\nChecks run: traced diff\nNot assessed: none\n';
   assert.equal(grade(clean, { verdicts: ['ready'], must_find: [] }).verdict, 0);
   const canary = referenceReport('canary').replaceAll('M3', 'éM3').replaceAll('T2', 'T2é');
   assert.equal(grade(canary, expected('canary')).guideline, 0);
+  for (const id of ['TU1', 'TI2']) {
+    const withTierId = referenceReport('canary').replaceAll('M3', 'éM3').replaceAll('T2', id);
+    assert.equal(grade(withTierId, expected('canary')).guideline, 1, id);
+  }
 });
 
 test('CLI writes reward.json and stdout for present and missing reports; bad arguments fail', () => {

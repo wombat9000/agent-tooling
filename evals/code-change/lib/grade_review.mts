@@ -59,7 +59,7 @@ const LINE_TOLERANCE = 2;
 const VERDICT_RE = /^verdict:\s*(ready after fixes|needs rework|ready)(?![\p{L}\p{N}_])/imu;
 const HEADING_RE = /^#{2,4}\s*(blocking|should fix|optional)(?![\p{L}\p{N}_])\s*[—–:-]*\s*(.*)$/iu;
 const LOCATION_RE = /([\p{L}\p{N}_./-]+\.[\p{L}\p{N}_]+):(\p{Nd}+)(?:\s*[-–]\s*(\p{Nd}+))?/gu;
-const GUIDELINE_RE = /(?<![\p{L}\p{N}_])[CDKMT]\p{Nd}{1,2}(?![\p{L}\p{N}_])/gu;
+const GUIDELINE_RE = /(?<![\p{L}\p{N}_])(?:[CDKM]|T[IU]?)\p{Nd}{1,2}(?![\p{L}\p{N}_])/gu;
 
 /** Convert Unicode decimal digits, including mixed scripts, as Python int does. */
 function lineNumber(digits: string): number {

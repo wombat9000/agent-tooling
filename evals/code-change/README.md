@@ -32,7 +32,7 @@ Score the latest completed Codex run after setting `OPENROUTER_API_KEY` in your 
 pnpm eval judge --latest                                      # All tasks and attempts, d1 Ultra
 pnpm eval judge review-seeded-bug --latest                    # Only this task's attempts
 pnpm eval judge implement-mars-rover --latest --scope per-file # Score each production Kotlin file separately
-pnpm eval judge implement-meeting-room-booking --latest --target tests # Score exported test suites against rubrics/testing.json
+pnpm eval judge implement-meeting-room-booking --latest --target tests # Score exported test suites against task tests/judge-tests.json facets
 pnpm eval judge --latest --judge jev                          # Same reports, Jev
 ```
 
@@ -131,7 +131,9 @@ rubrics/
   module-design.json       shared facet: file-level modular organization and avoiding speculative abstraction
   solid.json               shared facet: pragmatic SOLID principles (SRP, OCP, LSP, ISP, DIP)
   fowler-smells.json       shared facet: Martin Fowler Refactoring code smells (duplication, long functions, feature envy, primitive obsession, repeated switches, etc.)
-  testing.json             shared `test_code` rubric: execution tier, single behavior per test, non-duplication, clean boundary fixtures, observable assertions, disciplined doubles, independent coverage
+  testing-core.json        shared `test_code` facet: independent coverage, non-duplication, observable diagnostic assertions, owner-boundary testing
+  testing-unit.json        shared `test_code` facet: single-behavior AAA in unit tests and disciplined unit test doubles
+  testing-integration.json shared `test_code` facet: right execution tier, cohesive integration scope, shared fixtures without inline raw DB in API/E2E bodies, real internal wiring
 tasks/<task>/
   instruction.md           the prompt; never mentions the skill or the report format
   task.toml                Harbor configuration; skills go to /skills

@@ -213,7 +213,7 @@ test('collects TypeScript and TSX production modules without including test or d
   assert.ok(readFileSync(writeHtmlReport(out), 'utf8').includes('<span class="tok-ty">&lt;main</span>'));
 });
 
-test('judgeTests sends test_files and read-only production_files_context against rubrics/testing.json', async (t) => {
+test('judgeTests sends test_files and read-only production_files_context against composed test_code facets', async (t) => {
   const { root, src, rewardPath } = sampleSources(t);
   const testDir = join(root, 'src/test/kotlin/rover');
   mkdirSync(testDir, { recursive: true });
@@ -239,7 +239,7 @@ test('judgeTests sends test_files and read-only production_files_context against
       const body = JSON.parse(String(init?.body));
       requests.push(body);
       return decisionResponse('liquid/d1.2-ultra-snap', Object.fromEntries(
-        Object.keys(body.questions).map((id) => [id, id !== 'single_behavior_per_test']),
+        Object.keys(body.questions).map((id) => [id, id !== 'unit_single_behavior_aaa']),
       ));
     }) as typeof fetch,
   );
@@ -248,16 +248,18 @@ test('judgeTests sends test_files and read-only production_files_context against
   assert.equal(requests[0].state.scope, 'whole');
   assert.deepEqual(Object.keys(requests[0].state.test_files), ['rover/MarsRoverTest.kt']);
   assert.deepEqual(Object.keys(requests[0].state.production_files_context ?? {}), ['rover/Direction.kt', 'rover/Rover.kt']);
-  assert.match(requests[0].questions.right_execution_tier.instructions, /production_files_context.*read-only context/);
+  assert.match(requests[0].questions.independent_requirement_coverage.instructions, /production_files_context.*read-only context/);
+  assert.equal(requests[0].questions.right_execution_tier, undefined);
   assert.equal(result.status, 'scored');
   assert.equal(result.target, 'test_code');
   assert.equal(result.file_count, 1);
   assert.equal(result.context_file_count, 2);
-  assert.equal(result.rubric, 'testing-v1');
+  assert.equal(result.rubric, 'testing-core-v1+testing-unit-v1');
+  assert.deepEqual(Object.keys(result.rubric_groups ?? {}), ['testing-core', 'testing-unit']);
   assert.equal(result.deterministic.reward, 1);
-  assert.equal(result.quality?.checks.single_behavior_per_test.choice, 'fail');
-  assert.equal(result.quality?.checks.right_execution_tier.choice, 'pass');
-  assert.equal(result.quality?.pass_rate, 6 / 7);
+  assert.equal(result.quality?.checks.unit_single_behavior_aaa.choice, 'fail');
+  assert.equal(result.quality?.checks.independent_requirement_coverage.choice, 'pass');
+  assert.equal(result.quality?.pass_rate, 5 / 6);
 
   const html = readFileSync(writeHtmlReport(out), 'utf8');
   assert.ok(html.includes('Test files (1)'));
@@ -276,7 +278,7 @@ test('judgeTests supports custom tests/judge-tests.json, TypeScript tests, dry-r
   writeFileSync(join(customTask, 'instruction.md'), 'Build a widget.');
   writeFileSync(join(customTask, 'tests/judge.json'), JSON.stringify({ extends: 'readability', source_root: 'src' }));
   writeFileSync(join(customTask, 'tests/judge-tests.json'), JSON.stringify({
-    extends: ['testing'],
+    extends: ['testing-core'],
     rubric: 'custom-testing-v1',
     test_source_root: 'tests',
     questions: {
@@ -308,7 +310,7 @@ test('judgeTests supports custom tests/judge-tests.json, TypeScript tests, dry-r
   assert.deepEqual(Object.keys(request.state.test_files), ['helpers.ts', 'widget.spec.ts']);
   assert.equal(request.state.production_files_context, undefined);
   assert.ok(request.questions.extra_test_check);
-  assert.deepEqual(Object.keys(dry.rubric_groups ?? {}), ['testing', 'task']);
+  assert.deepEqual(Object.keys(dry.rubric_groups ?? {}), ['testing-core', 'task']);
 
   const emptyDir = join(root, 'empty-tests');
   mkdirSync(emptyDir);

@@ -255,7 +255,7 @@ export function parseRubric(task: string, rulesPrefix: string): JudgeRubric {
   return parseRubricObject(raw, rulesPrefix, groups);
 }
 
-/** Parse a task's test-suite rubric from tests/judge-tests.json, or fall back to shared rubrics/testing.json. */
+/** Parse a task's test-suite rubric from tests/judge-tests.json, or fall back to shared rubrics/testing-core.json. */
 export function parseTestRubric(task: string, rulesPrefix: string): JudgeRubric {
   const customPath = join(task, 'tests/judge-tests.json');
   if (statSync(customPath, { throwIfNoEntry: false })?.isFile()) {
@@ -266,11 +266,11 @@ export function parseTestRubric(task: string, rulesPrefix: string): JudgeRubric 
     }
     return parsed;
   }
-  const shared = parseSharedRubric('testing', rulesPrefix);
+  const shared = parseSharedRubric('testing-core', rulesPrefix);
   if (shared.target !== 'test_code') {
-    throw new Error(`Shared rubric testing targets ${shared.target}, not test_code`);
+    throw new Error(`Shared rubric testing-core targets ${shared.target}, not test_code`);
   }
-  return { ...shared, groups: { testing: Object.keys(shared.questions) } };
+  return { ...shared, groups: { 'testing-core': Object.keys(shared.questions) } };
 }
 
 function readRubric(task: string): JudgeRubric {
