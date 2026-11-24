@@ -4,6 +4,7 @@
   "questions": {
     "single_responsibility": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Does each module, type, and function in the supplied production code have a single cohesive responsibility and reason to change?",
       "criteria": {
         "pass": "Each module, type, and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same unit.",
@@ -12,6 +13,7 @@
     },
     "open_closed": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Does the supplied production code attach variant-specific behavior cleanly so extensions are localized without fragile scattered conditionals, while avoiding speculative hooks?",
       "criteria": {
         "pass": "Behavior tied to domain variants or types lives with the owning type or an exhaustive dispatch rather than being duplicated across fragile conditional chains in callers. Straightforward code with no real extension point passes without speculative abstraction.",
@@ -20,6 +22,7 @@
     },
     "liskov_substitution": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Do all subtypes, implementations, and overrides honor their supertype's contract without surprising exceptions, weakened guarantees, or caller type-checks?",
       "criteria": {
         "pass": "Every subtype, union/sealed branch, or override upholds its supertype's preconditions, postconditions, and invariants without throwing unsupported-operation errors, silently no-oping required behavior, or forcing callers to branch on concrete runtime types. Code without inheritance or interface hierarchies also passes.",
@@ -28,6 +31,7 @@
     },
     "interface_segregation": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Are interfaces and collaborator contracts small and focused on what their callers actually use?",
       "criteria": {
         "pass": "Interfaces and collaborator contracts expose only cohesive operations needed by their callers, with no bloated catch-all interfaces or stubbed/unused methods. Code that defines no custom interfaces also passes.",
@@ -36,6 +40,7 @@
     },
     "dependency_inversion": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Do domain objects, application services, and workflows depend on domain values or focused abstractions rather than directly invoking concrete infrastructure or ambient system APIs?",
       "criteria": {
         "pass": "Domain objects, application services, and workflows depend on domain types, pure values, or focused abstractions rather than directly calling concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock APIs); concrete infrastructure is read or wired at the entry point, composition root, or infrastructure adapter boundary, without adding speculative single-implementation interfaces where passing domain values or a concrete adapter already decouples the policy.",

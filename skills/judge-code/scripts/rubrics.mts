@@ -7,6 +7,7 @@ const CONVENTIONS_CHECK_ID = 'follows_repo_conventions';
 
 export type RubricTarget = 'production_code' | 'project_structure';
 export type JudgeMode = 'code' | 'structure';
+export type CheckScope = 'file' | 'module' | 'structure';
 
 export interface ChoiceQuestion {
   type: 'choice';
@@ -19,12 +20,14 @@ export interface BundledRubricSummary {
   id: string;
   target: RubricTarget;
   checks: string[];
+  scopes: Record<string, CheckScope>;
 }
 
 export interface ResolvedRubric {
   rubric: string;
   target: RubricTarget;
   questions: Record<string, ChoiceQuestion>;
+  scopes: Record<string, CheckScope>;
   groups: Record<string, string[]>;
   excluded: string[];
 }
@@ -43,6 +46,7 @@ interface ParsedRubricFile {
   group: string;
   target: RubricTarget;
   questions: Record<string, ChoiceQuestion>;
+  scopes: Record<string, CheckScope>;
 }
 
 export function object(value: unknown, label: string): Record<string, unknown> {
@@ -90,30 +94,44 @@ function buildRubricRules(target: RubricTarget, hasRequirements: boolean, hasCon
     + 'state.conventions takes precedence—do not fail the check for following an explicit repository convention. ';
 }
 
+function parseQuestionScope(value: unknown, checkId: string, target: RubricTarget): CheckScope {
+  if (target === 'project_structure') {
+    if (value === undefined || value === 'structure') return 'structure';
+    throw new Error(`Invalid scope for ${checkId}: ${String(value)}. project_structure rubrics do not support "file" or "module" scope.`);
+  }
+  if (value === undefined) return 'module';
+  if (value === 'file' || value === 'module') return value;
+  throw new Error(`Invalid scope for ${checkId}: ${String(value)}. Expected "file" or "module".`);
+}
+
 function parseRubricJson(path: string, group: string, fallbackTarget: RubricTarget): ParsedRubricFile {
   const raw = object(JSON.parse(readFileSync(path, 'utf8')), `Rubric ${group}`);
   const id = nonempty(raw.rubric, `${group}.rubric`);
   const target = parseTarget(raw.target, fallbackTarget);
   const entries = Object.entries(object(raw.questions, `${group}.questions`));
   if (!entries.length) throw new Error(`Rubric ${id} must contain at least one question`);
-  const questions = Object.fromEntries(entries.map(([checkId, value]) => {
+  const questions: Record<string, ChoiceQuestion> = {};
+  const scopes: Record<string, CheckScope> = {};
+  for (const [checkId, value] of entries) {
     if (!/^[a-z][a-z0-9_]*$/.test(checkId)) throw new Error(`Invalid question ID: ${checkId}`);
     const question = object(value, checkId);
     if (question.type !== 'choice') throw new Error(`${checkId} must use type choice`);
+    const scope = parseQuestionScope(question.scope, checkId, target);
     const criteria = object(question.criteria, `${checkId}.criteria`);
     if (Object.keys(criteria).sort().join(',') !== 'fail,pass') {
       throw new Error(`${checkId} must define exactly pass and fail criteria`);
     }
-    return [checkId, {
-      type: 'choice' as const,
+    questions[checkId] = {
+      type: 'choice',
       instructions: nonempty(question.instructions, `${checkId}.instructions`),
       criteria: {
         pass: nonempty(criteria.pass, `${checkId}.pass`),
         fail: nonempty(criteria.fail, `${checkId}.fail`),
       },
-    }];
-  }));
-  return { id, group, target, questions };
+    };
+    scopes[checkId] = scope;
+  }
+  return { id, group, target, questions, scopes };
 }
 
 function bundledSlugs(): string[] {
@@ -147,7 +165,13 @@ function parseBundledSpec(spec: string): { slug: string; expectedVersion?: strin
 export function bundledRubrics(): BundledRubricSummary[] {
   return bundledSlugs().map((slug) => {
     const parsed = loadBundledRubric(slug);
-    return { slug, id: parsed.id, target: parsed.target, checks: Object.keys(parsed.questions) };
+    return {
+      slug,
+      id: parsed.id,
+      target: parsed.target,
+      checks: Object.keys(parsed.questions),
+      scopes: parsed.scopes,
+    };
   });
 }
 
@@ -216,6 +240,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const rubricIds: string[] = [];
   const seenRubricIds = new Set<string>();
   const questions: Record<string, ChoiceQuestion> = {};
+  const scopes: Record<string, CheckScope> = {};
   const questionOwner = new Map<string, string>();
   const groups: Record<string, string[]> = {};
 
@@ -238,6 +263,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         ...question,
         instructions: rubricRules + question.instructions,
       };
+      scopes[id] = parsed.scopes[id];
       groupIds.push(id);
     }
     groups[groupName] = groupIds;
@@ -258,6 +284,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         fail: `The ${subject} violates one or more explicit conventions stated in state.conventions.`,
       },
     };
+    scopes[CONVENTIONS_CHECK_ID] = resolvedTarget === 'project_structure' ? 'structure' : 'file';
     groups.conventions = [CONVENTIONS_CHECK_ID];
   }
 
@@ -267,6 +294,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
       throw new Error(`Unknown check ID in --exclude: ${id}`);
     }
     delete questions[id];
+    delete scopes[id];
   }
   for (const [group, ids] of Object.entries(groups)) {
     const remaining = ids.filter((id) => id in questions);
@@ -286,6 +314,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     rubric: rubricIds.join('+'),
     target: resolvedTarget,
     questions,
+    scopes,
     groups,
     excluded,
   };

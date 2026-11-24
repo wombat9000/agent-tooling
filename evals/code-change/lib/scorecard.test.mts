@@ -185,6 +185,37 @@ test('working-tree content hashes match git HEAD hashes and ignore excluded file
 
   assert.equal(computeSkillHash(tmpRepo, 'demo'), skillHashBefore);
   assert.equal(computeTaskHash(tmpRepo, 'demo', 'task-a'), taskHashBefore);
+
+  // Rubric hashing falls back to skills/judge-code/rubrics/ and strips question scope metadata.
+  const rubricRepo = tempDir(t, 'hash-rubric-scope-');
+  mkdirSync(join(rubricRepo, 'evals/demo/tasks/task-a/tests'), { recursive: true });
+  mkdirSync(join(rubricRepo, 'skills/judge-code/rubrics'), { recursive: true });
+  writeFileSync(join(rubricRepo, 'evals/demo/tasks/task-a/tests/judge.json'), JSON.stringify({ extends: ['readability'] }));
+  const baseRubric = {
+    rubric: 'readability-v2',
+    target: 'production_code',
+    questions: {
+      direct_readability: {
+        type: 'choice',
+        instructions: 'Readable?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+    },
+  };
+  writeFileSync(join(rubricRepo, 'skills/judge-code/rubrics/readability.json'), JSON.stringify(baseRubric));
+  const hashWithoutScope = computeRubricHash(rubricRepo, 'demo', 'task-a', 'production_code');
+  assert.ok(hashWithoutScope);
+  writeFileSync(join(rubricRepo, 'skills/judge-code/rubrics/readability.json'), JSON.stringify({
+    ...baseRubric,
+    questions: {
+      direct_readability: {
+        ...baseRubric.questions.direct_readability,
+        scope: 'file',
+      },
+    },
+  }));
+  const hashWithScope = computeRubricHash(rubricRepo, 'demo', 'task-a', 'production_code');
+  assert.equal(hashWithScope, hashWithoutScope);
 });
 
 test('staleness detection ignores skill_hash on baseline entries and reports exact reasons on skill entries', () => {

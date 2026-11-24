@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { grade, type ExpectedReview } from './grade_review.mts';
 
-const RUBRICS = fileURLToPath(new URL('../rubrics', import.meta.url));
+const EVAL_RUBRICS = fileURLToPath(new URL('../rubrics', import.meta.url));
+const SKILL_RUBRICS = fileURLToPath(new URL('../../../skills/judge-code/rubrics', import.meta.url));
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
 export const DEFAULT_MAX_RETRIES = 4;
@@ -37,10 +38,18 @@ export interface ChoiceQuestion {
 }
 
 export type RubricTarget = 'review' | 'production_code' | 'test_code';
+export type SharedRubricTarget = RubricTarget | 'project_structure';
 
 export interface JudgeRubric {
   rubric: string;
   target: RubricTarget;
+  questions: Record<string, ChoiceQuestion>;
+  groups?: Record<string, string[]>;
+}
+
+export interface SharedJudgeRubric {
+  rubric: string;
+  target: SharedRubricTarget;
   questions: Record<string, ChoiceQuestion>;
   groups?: Record<string, string[]>;
 }
@@ -109,14 +118,24 @@ function parseExtends(value: unknown): string[] {
   throw new Error('extends must be a nonempty string or array of rubric names');
 }
 
-function loadSharedRubric(name: string): Record<string, unknown> {
+export function loadSharedRubric(
+  name: string,
+  dirs: { evalRubricsDir?: string; skillRubricsDir?: string } = {},
+): Record<string, unknown> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
     throw new Error(`Invalid shared rubric name: ${name}`);
   }
-  const sharedPath = join(RUBRICS, `${name}.json`);
-  if (!statSync(sharedPath, { throwIfNoEntry: false })?.isFile()) {
+  const evalPath = join(dirs.evalRubricsDir ?? EVAL_RUBRICS, `${name}.json`);
+  const skillPath = join(dirs.skillRubricsDir ?? SKILL_RUBRICS, `${name}.json`);
+  const inEval = Boolean(statSync(evalPath, { throwIfNoEntry: false })?.isFile());
+  const inSkill = Boolean(statSync(skillPath, { throwIfNoEntry: false })?.isFile());
+  if (inEval && inSkill) {
+    throw new Error(`Duplicate shared rubric exists in both evals/code-change/rubrics and skills/judge-code/rubrics: ${name}`);
+  }
+  if (!inEval && !inSkill) {
     throw new Error(`Unknown shared rubric: ${name}`);
   }
+  const sharedPath = inEval ? evalPath : skillPath;
   const base = object(JSON.parse(readFileSync(sharedPath, 'utf8')), `Shared rubric ${name}`);
   if (base.extends !== undefined) {
     throw new Error(`Shared rubric ${name} must not chain extends`);
@@ -197,6 +216,11 @@ function parseTarget(value: unknown): RubricTarget {
   throw new Error(`Unknown rubric target: ${String(value)}`);
 }
 
+function parseSharedTarget(value: unknown): SharedRubricTarget {
+  if (value === 'project_structure') return 'project_structure';
+  return parseTarget(value);
+}
+
 /** Read a task's judge target from tests/judge.json (defaults to review). */
 export function taskTarget(task: string): RubricTarget {
   const path = join(task, 'tests/judge.json');
@@ -231,16 +255,10 @@ export function taskTestRoot(task: string): string {
   return resolved;
 }
 
-function parseRubricObject(
-  raw: Record<string, unknown>,
-  rulesPrefix: string,
-  groups?: Record<string, string[]>,
-): JudgeRubric {
-  const rubric = nonempty(raw.rubric, 'rubric');
-  const target = parseTarget(raw.target);
-  const entries = Object.entries(object(raw.questions, 'questions'));
+function parseQuestions(rawQuestions: unknown, rulesPrefix: string): Record<string, ChoiceQuestion> {
+  const entries = Object.entries(object(rawQuestions, 'questions'));
   if (!entries.length) throw new Error('Rubric must contain at least one question');
-  const questions = Object.fromEntries(entries.map(([id, value]) => {
+  return Object.fromEntries(entries.map(([id, value]) => {
     if (!/^[a-z][a-z0-9_]*$/.test(id)) throw new Error(`Invalid question ID: ${id}`);
     const question = object(value, id);
     if (question.type !== 'choice') throw new Error(`${id} must use type choice`);
@@ -257,12 +275,26 @@ function parseRubricObject(
       },
     }];
   }));
+}
+
+function parseRubricObject(
+  raw: Record<string, unknown>,
+  rulesPrefix: string,
+  groups?: Record<string, string[]>,
+): JudgeRubric {
+  const rubric = nonempty(raw.rubric, 'rubric');
+  const target = parseTarget(raw.target);
+  const questions = parseQuestions(raw.questions, rulesPrefix);
   return groups ? { rubric, target, questions, groups } : { rubric, target, questions };
 }
 
-/** Parse and validate a single shared rubric under rubrics/<slug>.json. */
-export function parseSharedRubric(slug: string, rulesPrefix = ''): JudgeRubric {
-  return parseRubricObject(loadSharedRubric(slug), rulesPrefix);
+/** Parse and validate a single shared rubric from evals/code-change/rubrics/ or skills/judge-code/rubrics/. */
+export function parseSharedRubric(slug: string, rulesPrefix = ''): SharedJudgeRubric {
+  const raw = loadSharedRubric(slug);
+  const rubric = nonempty(raw.rubric, 'rubric');
+  const target = parseSharedTarget(raw.target);
+  const questions = parseQuestions(raw.questions, rulesPrefix);
+  return { rubric, target, questions };
 }
 
 /** Only binary choice rubrics are supported, so every check has the same score meaning. */
@@ -286,7 +318,12 @@ export function parseTestRubric(task: string, rulesPrefix: string): JudgeRubric 
   if (shared.target !== 'test_code') {
     throw new Error(`Shared rubric testing-core targets ${shared.target}, not test_code`);
   }
-  return { ...shared, groups: { 'testing-core': Object.keys(shared.questions) } };
+  return {
+    rubric: shared.rubric,
+    target: shared.target,
+    questions: shared.questions,
+    groups: { 'testing-core': Object.keys(shared.questions) },
+  };
 }
 
 function readRubric(task: string): JudgeRubric {

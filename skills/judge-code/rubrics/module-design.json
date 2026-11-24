@@ -4,6 +4,7 @@
   "questions": {
     "modular_organization": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Does the supplied production code organize distinct primary types and responsibilities into separate, well-named files and readable high-level workflows?",
       "criteria": {
         "pass": "Distinct primary types, components, and responsibilities (such as entry-point coordination, boundary parsing/formatting, persistence, and domain models) each live in their own well-named file—one primary type or focused responsibility per file by default, allowing narrow exceptions such as a sealed/discriminated-union type hierarchy or tiny tightly coupled supporting types owned exclusively by one file—and entry-point/workflow functions read as clear high-level steps without dense inline mechanics.",
@@ -12,6 +13,7 @@
     },
     "no_unnecessary_abstraction": {
       "type": "choice",
+      "scope": "module",
       "instructions": "Does the supplied production code avoid speculative interfaces, factories, or pass-through layers?",
       "criteria": {
         "pass": "Every type, interface, and function serves a concrete role in the task's requirements without unused interfaces for single implementations, speculative extension hooks, or trivial pass-through wrappers.",

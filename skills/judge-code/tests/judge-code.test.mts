@@ -100,16 +100,104 @@ function setup(t: TestContext, projectSubdir = 'project') {
   return { source, root, project, installed, run };
 }
 
-test('list-rubrics prints bundled slugs, versioned IDs, and check IDs', (t) => {
+test('list-rubrics prints bundled slugs, versioned IDs, check IDs, and per-check scopes', (t) => {
   const { run } = setup(t);
   const proc = run('preview', ['--list-rubrics']);
   assert.equal(proc.status, 0, proc.stderr);
-  assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels/);
-  assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state/);
-  assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination/);
-  assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules/);
-  assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization/);
-  assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility/);
+  assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels \[file\], cohesive_resource_boundaries \[module\]/);
+  assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state \[file\], domain_invariants \[module\], boundary_separation \[file\]/);
+  assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\]/);
+  assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[module\]/);
+  assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
+  assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
+  assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file\]/);
+  assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file\], open_closed \[module\]/);
+});
+
+test('per-criterion scope is validated, defaulted for custom rubrics, exposed on ResolvedRubric, and stripped from request payloads', async (t) => {
+  const { run, root, project } = setup(t);
+  const { resolveRubrics } = await import('../scripts/rubrics.mts');
+
+  // Bundled rubrics expose accurate per-check scopes and strip scope from questions.
+  const resolved = resolveRubrics({
+    rubrics: ['fowler-smells', 'readability'],
+    exclude: ['no_duplicated_code'],
+    hasRequirements: false,
+    hasConventions: true,
+  });
+  assert.equal(resolved.scopes.no_long_functions, 'file');
+  assert.equal(resolved.scopes.no_repeated_switches, 'module');
+  assert.equal(resolved.scopes.direct_readability, 'file');
+  assert.equal(resolved.scopes.follows_repo_conventions, 'file');
+  assert.equal('no_duplicated_code' in resolved.scopes, false);
+  for (const question of Object.values(resolved.questions)) {
+    assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
+  }
+
+  // Custom production_code rubric defaults omitted scope to "module" and preserves explicit "file".
+  const customProd = join(project, 'custom-prod.json');
+  writeFileSync(customProd, JSON.stringify({
+    rubric: 'custom-prod-v1',
+    questions: {
+      defaulted_check: {
+        type: 'choice',
+        instructions: 'Defaulted scope?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      explicit_file_check: {
+        type: 'choice',
+        scope: 'file',
+        instructions: 'File scope?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+    },
+  }));
+  const customResolved = resolveRubrics({
+    rubrics: [customProd],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  assert.deepEqual(customResolved.scopes, {
+    defaulted_check: 'module',
+    explicit_file_check: 'file',
+  });
+
+  // Dry-run request.json never leaks scope into question payloads.
+  const out = join(root, 'scope-strip');
+  const proc = run('preview', ['--source', 'booking', '--rubric', 'fowler-smells', '--out', out, '--dry-run']);
+  assert.equal(proc.status, 0, proc.stderr);
+  const request = JSON.parse(readFileSync(join(out, 'request.json'), 'utf8'));
+  for (const question of Object.values(request.questions) as Array<Record<string, unknown>>) {
+    assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
+  }
+
+  // Invalid scope values on production_code and file/module scopes on project_structure are rejected.
+  const badProd = join(project, 'bad-prod-scope.json');
+  writeFileSync(badProd, JSON.stringify({
+    rubric: 'bad-prod-v1',
+    questions: {
+      bad_check: { type: 'choice', scope: 'structure', instructions: 'Bad?', criteria: { pass: 'Yes', fail: 'No' } },
+    },
+  }));
+  assert.throws(
+    () => resolveRubrics({ rubrics: [badProd], hasRequirements: false, hasConventions: false }),
+    /Invalid scope for bad_check/,
+  );
+
+  for (const badScope of ['file', 'module', 'bogus']) {
+    const badStruct = join(project, `bad-struct-${badScope}.json`);
+    writeFileSync(badStruct, JSON.stringify({
+      rubric: `bad-struct-${badScope}-v1`,
+      target: 'project_structure',
+      questions: {
+        bad_struct_check: { type: 'choice', scope: badScope, instructions: 'Bad?', criteria: { pass: 'Yes', fail: 'No' } },
+      },
+    }));
+    assert.throws(
+      () => resolveRubrics({ rubrics: [badStruct], hasRequirements: false, hasConventions: false }),
+      /Invalid scope for bad_struct_check/,
+    );
+  }
 });
 
 test('dry-run works without --requirements, accepts short names, and includes env.ts and password.ts', (t) => {

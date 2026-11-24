@@ -4,6 +4,7 @@
   "questions": {
     "direct_readability": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Is the supplied production code written directly and readably using domain names and explicit domain relationships?",
       "criteria": {
         "pass": "Names reflect the problem domain, control flow is straightforward, and domain relationships or state transitions are stated explicitly (such as with exhaustive branch/switch statements or direct mappings) rather than via clever enum-order/index arithmetic or cryptic encodings. Any regular expression used is justified and descriptively named.",
@@ -12,6 +13,7 @@
     },
     "named_domain_expressions": {
       "type": "choice",
+      "scope": "file",
       "instructions": "Does the supplied production code give non-obvious conditionals, compound checks, and inline boundary or rule expressions clear domain names instead of forcing readers to decipher them inline?",
       "criteria": {
         "pass": "Non-obvious validation checks, compound boolean conditions, and inline conditional expressions encoding domain or boundary rules are given intention-revealing names via local variables/constants, properties, or small domain functions. Simple, self-explanatory single checks (such as emptiness checks or `value > 0`) may remain inline.",
