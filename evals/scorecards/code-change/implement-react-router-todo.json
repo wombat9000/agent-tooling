@@ -301,38 +301,38 @@
           }
         },
         "quality": {
-          "pass_rate": 0.9167,
-          "mean_pass_probability": 0.7818,
+          "pass_rate": 1,
+          "mean_pass_probability": 0.8395,
           "checks": {
             "boundary_separation": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.7924
+              "mean_pass_probability": 0.826
             },
             "dependency_inversion": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.5988
+              "mean_pass_probability": 0.6058
             },
             "direct_readability": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9507
+              "mean_pass_probability": 0.9651
             },
             "domain_invariants": {
-              "passed": 1,
+              "passed": 3,
               "total": 3,
-              "pass_rate": 0.3333,
-              "mean_pass_probability": 0.4767
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9187
             },
             "immutable_state": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.8969
+              "mean_pass_probability": 0.9079
             },
             "interface_segregation": {
               "passed": 3,
@@ -344,42 +344,42 @@
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9881
+              "mean_pass_probability": 0.9454
             },
             "modular_organization": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.7046
+              "mean_pass_probability": 0.6644
             },
             "named_domain_expressions": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.6003
+              "mean_pass_probability": 0.702
             },
             "no_unnecessary_abstraction": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9952
+              "mean_pass_probability": 0.9959
             },
             "open_closed": {
-              "passed": 2,
+              "passed": 3,
               "total": 3,
-              "pass_rate": 0.6667,
-              "mean_pass_probability": 0.5425
+              "pass_rate": 1,
+              "mean_pass_probability": 0.6945
             },
             "single_responsibility": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.853
+              "mean_pass_probability": 0.8653
             }
           }
         },
         "hashes": {
-          "skill_hash": "4f22cf92820e",
+          "skill_hash": "a30a911ea658",
           "task_hash": "78d41ae6431e",
           "rubric_hash": "6f93aab381e7"
         }
@@ -432,54 +432,54 @@
         },
         "quality": {
           "pass_rate": 1,
-          "mean_pass_probability": 0.917,
+          "mean_pass_probability": 0.9305,
           "checks": {
             "deterministic_e2e_waiting_and_isolation": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9794
+              "mean_pass_probability": 0.9724
             },
             "focused_user_journeys": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.6573
+              "mean_pass_probability": 0.7432
             },
             "independent_requirement_coverage": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.8885
+              "mean_pass_probability": 0.9026
             },
             "no_redundant_duplication": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9418
+              "mean_pass_probability": 0.9487
             },
             "observable_diagnostic_assertions": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.967
+              "mean_pass_probability": 0.9656
             },
             "owner_boundary_no_seams": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9957
+              "mean_pass_probability": 0.9955
             },
             "resilient_user_visible_locators": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9894
+              "mean_pass_probability": 0.9855
             }
           }
         },
         "hashes": {
-          "skill_hash": "4f22cf92820e",
+          "skill_hash": "a30a911ea658",
           "task_hash": "78d41ae6431e",
           "rubric_hash": "dc767b5d2d8d"
         }

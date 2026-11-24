@@ -23,7 +23,8 @@ writing code, and follow them while writing, not only afterwards.
 - Keep scope tight: change only what is needed to satisfy the requirements, and
   leave unrelated improvements out (mention them in the handoff instead). Do not
   treat tight scope as a reason to collapse distinct responsibilities into one
-  file or dense function (`M5`, `M8`, `M11`).
+  file or dense procedural handler (`M5`, `M8`, `M11`), or to bypass dedicated
+  domain types, owning behavior, and cohesive parameter objects (`D2`, `D5`, `M2`).
 - Write a general solution, not one shaped to pass specific tests. If a test
   looks wrong, report it rather than working around it.
 - When a refactoring is needed, first make the behavior-preserving change and

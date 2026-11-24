@@ -15,13 +15,16 @@ finding. **Default**: preferred; a departure is at most Optional.
 
 ## Conditions and validation
 
-- **C3 (Rule)** Give compound boolean conditions (`&&`, `||`), boundary or index
-  checks (such as `index < lastIndex` or `value == limit - 1`), and inline
-  conditional expressions (`if`/`else`, ternaries) an intention-revealing domain
-  name—as a local constant/variable, property, or focused helper—instead of
-  embedding them directly inside guards/assertions, branch conditions, lambdas,
-  or call arguments, even when the inline expression is short. Leave a single
-  self-explanatory check (such as an emptiness check, `value > 0`, or
+- **C3 (Rule)** Give compound boolean conditions (`&&`, `||`), multi-part range,
+  state, or validity checks (including inside constructors, guards, and domain
+  methods), boundary or index checks (such as `index < lastIndex` or
+  `value == limit - 1`), and inline conditional expressions (`if`/`else`,
+  ternaries) an intention-revealing domain name—as a local constant/variable,
+  property, or focused helper—instead of embedding them directly inside
+  guards/assertions, branch conditions, lambdas, or call arguments, even when the
+  inline expression is short. Name non-obvious domain thresholds, limits, or time
+  windows as constants rather than repeating raw magic numbers inline. Leave a
+  single self-explanatory check (such as an emptiness check, `value > 0`, or
   `subtotal > threshold`) inline in a standalone guard or as the direct return
   expression of a small named function whose name states the rule.
 

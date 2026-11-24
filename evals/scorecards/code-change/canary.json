@@ -63,25 +63,25 @@
           }
         },
         "quality": {
-          "pass_rate": 0.8333,
-          "mean_pass_probability": 0.755,
+          "pass_rate": 1,
+          "mean_pass_probability": 0.7919,
           "checks": {
             "duplicated_rule": {
-              "passed": 2,
+              "passed": 3,
               "total": 3,
-              "pass_rate": 0.6667,
-              "mean_pass_probability": 0.5116
+              "pass_rate": 1,
+              "mean_pass_probability": 0.5849
             },
             "weak_test": {
               "passed": 3,
               "total": 3,
               "pass_rate": 1,
-              "mean_pass_probability": 0.9984
+              "mean_pass_probability": 0.9989
             }
           }
         },
         "hashes": {
-          "skill_hash": "4f22cf92820e",
+          "skill_hash": "a30a911ea658",
           "task_hash": "09ad7d0a8d54",
           "rubric_hash": "5e6731a4f1c0"
         }
