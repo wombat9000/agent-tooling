@@ -13,15 +13,19 @@ framework-independent.
   Brief setup calls needed to reach the starting state are fine. Organize larger
   suites into focused files or grouped suites by capability rather than
   appending endlessly to one kitchen-sink file.
-- **TI2 (Rule)** Reuse or extend shared domain fixture builders and client or
-  actor helpers so integration test bodies stay concise and skimmable—never
-  copy-paste private entity-creation helpers or hardcoded magic IDs across
-  sibling test files. Keep high-level API/HTTP integration test method bodies
-  completely free of inline raw database queries or mutations (`SELECT`,
-  `INSERT`, `UPDATE`, row-count queries, or direct table mutations); only a
-  clean-slate reset in a setup or teardown hook belongs there. Put direct
-  database assertions, schema constraint checks, and transaction or concurrency
-  checks in dedicated persistence tests.
+- **TI2 (Rule)** Before writing or adding a new integration or API/HTTP test
+  file, inspect existing test support and sibling test files and reuse or
+  extend the repository's shared domain fixture builders, client or actor
+  helpers, and typed response models—never introduce ad-hoc private setup or
+  request helpers, copy-pasted entity creation, or hardcoded magic IDs in a
+  new sibling test file. Keep high-level API/HTTP integration test method
+  bodies completely free of inline raw database queries or mutations (`SELECT`,
+  `INSERT`, `UPDATE`, row-count queries, or direct table mutations)—even to
+  seed state or verify persisted rows after an HTTP call; only a clean-slate
+  reset in a setup or teardown hook belongs there. Verify API outcomes through
+  public endpoints and typed responses, and place direct storage assertions,
+  schema constraint checks, and transaction-rollback or repository-level
+  concurrency checks in dedicated persistence tests.
 - **TI3 (Rule)** Exercise real internal application wiring inside persistence,
   API/HTTP, and service integration tests—never mock or spy on internal
   services, domain collaborators, or internal repositories inside a full-stack

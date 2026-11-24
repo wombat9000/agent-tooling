@@ -41,10 +41,11 @@ UI end-to-end tests. Language- and framework-independent.
   and key contract fields (not merely status codes, a single status field, or
   collection lengths), observable state, specific error types or codes where
   defined, and state preservation after rejected mutations. For structured API
-  or JSON responses, deserialize into typed response models (a production
-  response type or small test model) or use concise structured response
-  matchers—never repeatedly parse responses through raw untyped tree or node
-  lookups (even behind a helper returning a raw tree node). Identify items in
+  or JSON responses—including in newly created sibling API test files—consistently
+  deserialize into typed response models (existing production or test response
+  types, or small dedicated test models) or use concise structured response
+  matchers; never fall back to raw untyped JSON tree or node parsing (even
+  behind a local helper returning a raw tree node). Identify items in
   multi-item collections by stable key or match the full expected collection
   rather than brittle hardcoded array positions. Use direct diagnostic
   assertions (equality, type checks) rather than lossy boolean wrappers

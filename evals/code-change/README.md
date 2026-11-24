@@ -34,6 +34,7 @@ pnpm eval judge review-seeded-bug --latest                    # Only this task's
 pnpm eval judge implement-mars-rover --latest --scope per-file # Score each production Kotlin file separately
 pnpm eval judge implement-meeting-room-booking --latest --target tests # Score exported test suites against task tests/judge-tests.json facets
 pnpm eval judge --latest --judge jev                          # Same reports, Jev
+pnpm eval judge --resume eval-results/judges/<run>/<batch>    # Resume an interrupted batch, skipping already-scored trials
 ```
 
 Each judge run creates a standalone `report.html` with a Check × Trial matrix (sorted worst-first,
@@ -61,8 +62,15 @@ saved Harbor run. To score one review file or an exported production source dire
 Judge runs get a unique directory under `eval-results/judges/`. Batch runs contain one
 directory per trial and a `summary.json` with the source run and each trial's status and score.
 Every selected artifact is checked before API calls begin. Missing artifacts cause an error;
-they are not silently skipped. Judging stops at the first API error and leaves later trials
-marked `pending`, with earlier results retained. `eval-results/` and Harbor's
+they are not silently skipped. Transient OpenRouter HTTP errors (`429`, `502`, `503`, `504`)
+retry automatically up to 4 times with bounded exponential backoff and jitter (honoring
+`Retry-After` when present), while non-retryable errors (`400`, `401`, `403`, `404`, network
+timeouts, refusals, or malformed responses) fail immediately. If a trial still fails after
+retries, judging stops, leaves later trials marked `pending`, retains earlier results, and
+prints a `pnpm eval judge --resume <judge-dir>` command to continue in-place. Resuming loads
+the saved `summary.json`, keeps all already-`scored` trials untouched, re-runs only `error`
+and `pending` trials with the original run, model, target, and scope settings, and regenerates
+`summary.json` and `report.html`. `eval-results/` and Harbor's
 older `jobs/` directory are ignored by Git; existing results are retained. OpenRouter keys
 are used only for host-side judging and are not passed to Harbor by this wrapper.
 
@@ -271,10 +279,14 @@ Every run needs a new output directory to prevent overwriting earlier scores. It
   batch reports as results arrive and preserves error/pending states if judging stops early.
 
 Add `--dry-run` to save and inspect a request without credentials or a network call. Missing
-reports return `missing_report` and no model score. Network, HTTP, refusal, or malformed-answer
-failures return `error`, save no quality score, and exit nonzero. Setup errors also exit nonzero.
-Requests time out after 30 seconds and are not retried automatically. A failed request can be
-rerun with a new output directory. Host-side scores do not replace Harbor's `reward.json`.
+reports return `missing_report` and no model score. Transient HTTP `429`, `502`, `503`, and `504`
+responses retry up to 4 times with bounded exponential backoff and jitter (respecting
+`Retry-After` when present). Hard HTTP errors (`400`, `401`, `403`, `404`), network/timeout
+failures (30 seconds per attempt), refusals, or malformed-answer failures fail immediately with
+no retry, return `error`, save no quality score, and exit nonzero. Setup errors also exit
+nonzero. Interrupted batch runs can be continued in-place with `pnpm eval judge --resume DIRECTORY`
+without re-scoring already-`scored` trials; single-report runs can be rerun into a new output
+directory. Host-side scores do not replace Harbor's `reward.json`.
 
 Judge accuracy and confidence thresholds are **not yet calibrated**. First label sample reviews
 by hand, including correct paraphrases, missed bugs, wrong claims at the expected line, and

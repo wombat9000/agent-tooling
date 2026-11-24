@@ -308,18 +308,102 @@ test('batch judging stops at the first API error and preserves a summary of pend
   writeFileSync(preload, `import { appendFileSync } from 'node:fs';
 globalThis.fetch = async () => {
   appendFileSync(${JSON.stringify(calls)}, 'called\\n');
-  return new Response('{}', { status: 429 });
+  return new Response('{}', { status: 400 });
 };`);
   const out = join(f.root, 'failed-batch');
   const run = f.run(['judge', '--run', job, '--out', out], {
     NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
   });
   assert.equal(run.status, 1);
-  assert.match(run.stderr, /HTTP 429/);
+  assert.match(run.stderr, /HTTP 400/);
+  assert.match(run.stderr, /--resume/);
   assert.equal(readFileSync(calls, 'utf8'), 'called\n');
   const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
   assert.deepEqual(summary.reports.map((report: { status: string }) => report.status), ['error', 'pending', 'pending']);
-  assert.ok(readFileSync(join(out, 'report.html'), 'utf8').includes('HTTP 429'));
+  assert.ok(readFileSync(join(out, 'report.html'), 'utf8').includes('HTTP 400'));
+});
+
+test('judge --resume skips already-scored trials, re-runs only error/pending trials, and rejects conflicting flags', (t) => {
+  const f = fixture(t);
+  const job = savedRun(f.root);
+  const out = join(f.root, 'resumable-batch');
+  const callLog = join(f.root, 'resume-calls.jsonl');
+  const preload = join(f.root, 'mock-resume-fetch.mjs');
+  writeFileSync(preload, `import { appendFileSync } from 'node:fs';
+let n = 0;
+globalThis.fetch = async (_url, init) => {
+  n += 1;
+  const body = JSON.parse(String(init?.body));
+  appendFileSync(${JSON.stringify(callLog)}, JSON.stringify({ phase: process.env.TEST_PHASE, task: body.state.task, model: body.model }) + '\\n');
+  if (process.env.TEST_PHASE === 'first' && n === 2) {
+    return new Response('{}', { status: 400 });
+  }
+  const answers = Object.fromEntries(Object.keys(body.questions).map((id) => [id, {
+    type: 'choice',
+    choice: 'pass',
+    probabilities: { pass: 0.9, fail: 0.1 },
+    confidence: 0.85,
+  }]));
+  return new Response(JSON.stringify({ model: body.model + '-snap', answers }), { status: 200 });
+};`);
+
+  // Phase 1: trial 1 (canary__one) scores, trial 2 (review-seeded-bug__one) errors, trial 3 remains pending.
+  const first = f.run(['judge', '--run', job, '--judge', 'jev', '--out', out], {
+    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    TEST_PHASE: 'first',
+  });
+  assert.equal(first.status, 1);
+  const partialSummary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+  assert.deepEqual(partialSummary.reports.map((r: { status: string }) => r.status), ['scored', 'error', 'pending']);
+  const firstTrialResultBefore = readFileSync(join(out, 'canary__one/result.json'), 'utf8');
+
+  // Conflicting flags and invalid resume targets fail cleanly before API calls.
+  for (const badArgs of [
+    ['judge', '--resume', ''],
+    ['judge', '--resume', join(f.root, 'missing-dir')],
+    ['judge', '--resume', out, '--run', job],
+    ['judge', '--resume', out, '--latest'],
+    ['judge', '--resume', out, '--out', join(f.root, 'other')],
+    ['judge', '--resume', out, '--judge', 'd1'],
+    ['judge', '--resume', out, '--target', 'tests'],
+    ['judge', '--resume', out, '--scope', 'whole'],
+    ['judge', 'canary', '--resume', out],
+  ]) {
+    const bad = f.run(badArgs, { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, TEST_PHASE: 'bad' });
+    assert.equal(bad.status, 1, JSON.stringify(badArgs));
+  }
+
+  // Phase 2: --resume re-runs ONLY error & pending trials using original model (jev), leaving trial 1 untouched.
+  const resumed = f.run(['judge', '--resume', out], {
+    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    TEST_PHASE: 'resume',
+  });
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.match(resumed.stdout, /remaining: 2\/3 \(1 already scored\)/);
+  assert.equal(readFileSync(join(out, 'canary__one/result.json'), 'utf8'), firstTrialResultBefore);
+
+  const finalSummary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+  assert.deepEqual(finalSummary.reports.map((r: { status: string }) => r.status), ['scored', 'scored', 'scored']);
+  assert.equal(finalSummary.model, 'typesafe/jev-1.14');
+  const html = readFileSync(join(out, 'report.html'), 'utf8');
+  assert.ok(!html.includes('HTTP 400'));
+
+  const recorded = readFileSync(callLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  const resumeCalls = recorded.filter((c) => c.phase === 'resume');
+  assert.equal(resumeCalls.length, 2);
+  assert.deepEqual(resumeCalls.map((c) => c.task), ['review-seeded-bug', 'review-seeded-bug']);
+  assert.ok(resumeCalls.every((c) => c.model === 'typesafe/jev-1.14'));
+
+  // Phase 3: resuming an already-complete directory makes 0 API calls (even without a key) and regenerates report.html.
+  const settled = f.run(['judge', '--resume', out], {
+    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    TEST_PHASE: 'settled',
+    OPENROUTER_API_KEY: '',
+  });
+  assert.equal(settled.status, 0, settled.stderr);
+  assert.match(settled.stdout, /already settled/);
+  const settledCalls = readFileSync(callLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((c) => c.phase === 'settled');
+  assert.equal(settledCalls.length, 0);
 });
 
 test('report rebuilds saved judgments without credentials or network access', (t) => {
@@ -373,6 +457,8 @@ test('help documents default concurrency of 2, --no-wait, and busy-Docker behavi
   assert.match(help.stdout, /5 attempts, 2 concurrent/);
   assert.match(help.stdout, /--concurrency N\s+Concurrent trials \(canary: 1, run: 2; 1 if Docker is busy\)/);
   assert.match(help.stdout, /--no-wait/);
+  assert.match(help.stdout, /--resume DIRECTORY/);
+  assert.match(help.stdout, /429\/502\/503\/504/);
   assert.match(help.stdout, /EVAL_LOCK_PATH/);
 });
 
@@ -648,4 +734,32 @@ test('judge --target tests works on saved implementation runs and manual paths, 
   assert.equal(f.run(['judge', '--run', job, '--target', 'tests', '--scope', 'per-file', '--dry-run']).status, 1);
   assert.equal(f.run(['judge', '--run', job, '--target', 'invalid', '--dry-run']).status, 1);
   assert.equal(f.run(['judge', 'canary', join(trialSrc, 'test/kotlin/rover/MarsRoverTest.kt'), '--target', 'tests', '--dry-run']).status, 1);
+
+  // --resume preserves target: test_code and production context from summary.json.
+  const resumeTestsOut = join(f.root, 'resume-tests');
+  const preload = join(f.root, 'mock-tests-resume.mjs');
+  writeFileSync(preload, `globalThis.fetch = async (_url, init) => {
+  if (process.env.TEST_PHASE === 'fail') return new Response('{}', { status: 400 });
+  const body = JSON.parse(String(init?.body));
+  const answers = Object.fromEntries(Object.keys(body.questions).map((id) => [id, {
+    type: 'choice', choice: 'pass', probabilities: { pass: 0.9, fail: 0.1 }, confidence: 0.85,
+  }]));
+  return new Response(JSON.stringify({ model: body.model + '-snap', answers }), { status: 200 });
+};`);
+  const failedTests = f.run(['judge', '--run', job, '--target', 'tests', '--out', resumeTestsOut], {
+    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    TEST_PHASE: 'fail',
+  });
+  assert.equal(failedTests.status, 1);
+  const resumedTests = f.run(['judge', '--resume', resumeTestsOut], {
+    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    TEST_PHASE: 'pass',
+  });
+  assert.equal(resumedTests.status, 0, resumedTests.stderr);
+  assert.match(resumedTests.stdout, /test_code/);
+  const resumedSummary = JSON.parse(readFileSync(join(resumeTestsOut, 'summary.json'), 'utf8'));
+  assert.equal(resumedSummary.target, 'test_code');
+  assert.equal(resumedSummary.reports[0].status, 'scored');
+  const resumedReq = JSON.parse(readFileSync(join(resumeTestsOut, 'implement-mars-rover__one/request.json'), 'utf8'));
+  assert.deepEqual(Object.keys(resumedReq.state.production_files_context), ['rover/MarsRover.kt']);
 });

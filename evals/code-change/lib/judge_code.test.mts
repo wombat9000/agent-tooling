@@ -114,12 +114,29 @@ test('per-file mode stops on first API error and dry-run/missing make no API cal
 
   const failed = await judgeCode({ task: MARS_ROVER, sourceDir: src, model: 'liquid/d1.2-ultra', out: join(root, 'err'), scope: 'per-file' }, (async () => {
     calls += 1;
-    return new Response('{}', { status: 429 });
+    return new Response('{}', { status: 400 });
   }) as typeof fetch);
   assert.equal(calls, 1);
   assert.equal(failed.status, 'error');
   assert.equal(failed.quality, null);
   assert.deepEqual(failed.file_results?.map((f) => f.status), ['error', 'pending']);
+
+  let retryCalls = 0;
+  const sleeps: number[] = [];
+  const recovered = await judgeCode(
+    { task: MARS_ROVER, sourceDir: src, model: 'liquid/d1.2-ultra', out: join(root, 'recovered'), scope: 'whole' },
+    (async (_url, init) => {
+      retryCalls += 1;
+      if (retryCalls === 1) return new Response('{}', { status: 429, headers: { 'Retry-After': '2' } });
+      const body = JSON.parse(String(init?.body));
+      return decisionResponse('liquid/d1.2-ultra-snap', Object.fromEntries(Object.keys(body.questions).map((id) => [id, true])));
+    }) as typeof fetch,
+    { sleep: async (ms) => { sleeps.push(ms); }, onRetry: () => {} },
+  );
+  assert.equal(retryCalls, 2);
+  assert.deepEqual(sleeps, [2_000]);
+  assert.equal(recovered.status, 'scored');
+  assert.equal(recovered.quality?.pass_rate, 1);
 
   delete process.env.OPENROUTER_API_KEY;
   const dry = await judgeCode({ task: MARS_ROVER, sourceDir: src, model: 'liquid/d1.2-ultra', out: join(root, 'dry'), scope: 'per-file', dryRun: true });

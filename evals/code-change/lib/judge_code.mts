@@ -3,16 +3,15 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
-  ENDPOINT,
   collectSourceFiles,
   nonempty,
   numbered,
   parseRubric,
   parseTestRubric,
-  readAnswers,
+  submitOpenRouterDecision,
   taskTarget,
-  type ChoiceQuestion,
   type Judgment,
+  type RetryOptions,
 } from './judge_review.mts';
 
 const CODE_JUDGE_RULES = 'Evaluate the supplied production code against the task requirement and this rubric criterion. '
@@ -114,32 +113,6 @@ function safeFileDir(index: number, filePath: string): string {
   return `${prefix}-${slug}`;
 }
 
-async function submitDecision(
-  request: unknown,
-  questions: Record<string, ChoiceQuestion>,
-  key: string,
-  outDir: string,
-  transport: typeof fetch,
-): Promise<{ model: string; checks: Record<string, Judgment> }> {
-  let response: Response;
-  try {
-    response = await transport(ENDPOINT, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-      redirect: 'error',
-      signal: AbortSignal.timeout(30_000),
-    });
-    const raw = await response.text();
-    writeFileSync(join(outDir, 'response.txt'), raw);
-  } catch {
-    throw new Error('OpenRouter request failed or timed out; no quality score was recorded');
-  }
-  if (!response.ok) throw new Error(`OpenRouter returned HTTP ${response.status}`);
-  const raw: unknown = JSON.parse(readFileSync(join(outDir, 'response.txt'), 'utf8'));
-  return readAnswers(raw, questions);
-}
-
 function passRate(checks: Record<string, Judgment>): number {
   const values = Object.values(checks);
   return values.filter((check) => check.choice === 'pass').length / values.length;
@@ -182,6 +155,7 @@ function aggregatePerFile(
 export async function judgeCode(
   options: JudgeCodeOptions,
   transport: typeof fetch = fetch,
+  retry?: RetryOptions,
 ): Promise<JudgeCodeResult> {
   const task = resolve(options.task);
   const scope: JudgeScope = options.scope ?? 'whole';
@@ -247,7 +221,7 @@ export async function judgeCode(
   if (scope === 'whole') {
     if (!options.dryRun) {
       try {
-        const judged = await submitDecision(topRequest, questions, key, out, transport);
+        const judged = await submitOpenRouterDecision(topRequest, questions, key, out, transport, retry);
         result.returned_model = judged.model;
         result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
       } catch (error) {
@@ -291,7 +265,7 @@ export async function judgeCode(
       continue;
     }
     try {
-      const judged = await submitDecision(fileRequest, questions, key, entry.result_dir, transport);
+      const judged = await submitOpenRouterDecision(fileRequest, questions, key, entry.result_dir, transport, retry);
       entry.status = 'scored';
       entry.returned_model = judged.model;
       entry.checks = judged.checks;
@@ -324,6 +298,7 @@ export async function judgeCode(
 export async function judgeTests(
   options: JudgeTestsOptions,
   transport: typeof fetch = fetch,
+  retry?: RetryOptions,
 ): Promise<JudgeCodeResult> {
   const task = resolve(options.task);
   nonempty(options.model, 'model');
@@ -402,7 +377,7 @@ export async function judgeTests(
 
   if (!options.dryRun) {
     try {
-      const judged = await submitDecision(request, questions, key, out, transport);
+      const judged = await submitOpenRouterDecision(request, questions, key, out, transport, retry);
       result.returned_model = judged.model;
       result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
     } catch (error) {
