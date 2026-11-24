@@ -11,9 +11,13 @@ function formatPct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatProb(value: number | null | undefined): string {
+function formatProb(value: number | null | undefined, threshold?: number | null): string {
   if (typeof value !== 'number') return 'n/a';
-  return value.toFixed(2);
+  const rounded = value.toFixed(2);
+  if (typeof threshold === 'number' && value < threshold && Number(rounded) >= threshold) {
+    return (Math.floor(value * 1000) / 1000).toFixed(3);
+  }
+  return rounded;
 }
 
 function failedChecksForFile(entry: FileJudgment): Array<[string, Judgment]> {
@@ -97,7 +101,7 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
     for (const [id, check] of checkEntries) {
       const status = check.choice === 'pass' ? 'PASS' : 'FAIL';
       const ratio = `${check.files_passed ?? 0}/${check.files_total ?? result.file_count}`;
-      lines.push(`  ${status}  ${id.padEnd(maxIdLen)}  ${ratio.padStart(7)}  min P(pass)=${formatProb(check.min_pass_probability)}`);
+      lines.push(`  ${status}  ${id.padEnd(maxIdLen)}  ${ratio.padStart(7)}  min P(pass)=${formatProb(check.min_pass_probability, result.pass_threshold)}`);
     }
 
     if (result.skipped_module_checks?.length) {
@@ -111,7 +115,7 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
       for (const entry of failingFiles) {
         const failed = failedChecksForFile(entry);
         const detail = failed.map(([id, check]) => {
-          if (typeof check.pass_probability === 'number') return `${id} (${formatProb(check.pass_probability)})`;
+          if (typeof check.pass_probability === 'number') return `${id} (${formatProb(check.pass_probability, result.pass_threshold)})`;
           return check.note ? `${id} (${check.model_choice ?? 'fail'}: ${check.note})` : `${id} (${check.model_choice ?? 'fail'})`;
         }).join(', ');
         lines.push(`  ${entry.file} (${failed.length} failed): ${detail}`);
@@ -127,7 +131,7 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
     for (const [id, check] of checkEntries) {
       const status = check.choice === 'pass' ? 'PASS' : 'FAIL';
       const detail = typeof check.pass_probability === 'number'
-        ? `P(pass)=${formatProb(check.pass_probability)}`
+        ? `P(pass)=${formatProb(check.pass_probability, result.pass_threshold)}`
         : `${check.model_choice ?? check.choice}${check.note ? ` — ${check.note}` : ''}`;
       lines.push(`  ${status}  ${id.padEnd(maxIdLen)}  ${detail}`);
     }
