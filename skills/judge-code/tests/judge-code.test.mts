@@ -105,6 +105,8 @@ test('list-rubrics prints bundled slugs, versioned IDs, and check IDs', (t) => {
   const proc = run('preview', ['--list-rubrics']);
   assert.equal(proc.status, 0, proc.stderr);
   assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state/);
+  assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination/);
+  assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules/);
   assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization/);
   assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility/);
 });
@@ -353,7 +355,7 @@ test('structure mode builds a compact manifest including .server/.client, export
   );
   writeFileSync(join(feature, '.server/data.json'), '{"ok":true}\n');
 
-  // --mode structure defaults to project-structure rubric
+  // --mode structure defaults to all bundled structure rubrics
   const out = join(root, 'structure-preview');
   const proc = run('preview', [
     '--source', 'onboarding',
@@ -366,7 +368,11 @@ test('structure mode builds a compact manifest including .server/.client, export
   const request = JSON.parse(readFileSync(join(out, 'request.json'), 'utf8'));
 
   assert.equal(result.mode, 'structure');
-  assert.equal(result.rubric, 'project-structure-v1');
+  assert.equal(result.rubric, 'integration-readiness-structure-v1+project-structure-v1');
+  assert.deepEqual(result.rubric_groups['integration-readiness-structure'], [
+    'no_bundled_stub_or_demo_modules',
+    'no_parallel_shadow_directories',
+  ]);
   assert.equal(result.file_count, 6);
   assert.equal('production_files' in request.state, false);
   const manifest = request.state.project_structure;
@@ -444,10 +450,34 @@ test('structure mode builds a compact manifest including .server/.client, export
   assert.equal(singleFile.status, 1);
   assert.match(singleFile.stderr, /regular directory/);
 
-  // --list-rubrics tags project-structure as [structure]
+  // --list-rubrics tags structure rubrics as [structure]
   const listed = run('preview', ['--list-rubrics']);
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, /project-structure \(project-structure-v1\) \[structure\]: no_junk_drawer_directories/);
+  assert.match(listed.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules/);
+
+  // Selecting integration-readiness-structure alone infers structure mode; mixing with integration-readiness is rejected
+  const irStructOut = join(root, 'ir-struct');
+  const irStructProc = run('preview', [
+    '--source', 'onboarding',
+    '--rubric', 'integration-readiness-structure',
+    '--out', irStructOut,
+    '--dry-run',
+  ]);
+  assert.equal(irStructProc.status, 0, irStructProc.stderr);
+  const irStructRes = JSON.parse(irStructProc.stdout);
+  assert.equal(irStructRes.mode, 'structure');
+  assert.equal(irStructRes.rubric, 'integration-readiness-structure-v1');
+
+  const irMixProc = run('reject', [
+    '--source', 'onboarding',
+    '--rubric', 'integration-readiness',
+    '--rubric', 'integration-readiness-structure',
+    '--out', join(root, 'ir-mix'),
+    '--dry-run',
+  ]);
+  assert.equal(irMixProc.status, 1);
+  assert.match(irMixProc.stderr, /Cannot mix production_code and project_structure/);
 });
 
 test('codex and claude backends adapt structured outputs into unified result.json without OPENROUTER_API_KEY', (t) => {
