@@ -1,0 +1,62 @@
+{
+  "rubric": "testing-v1",
+  "target": "test_code",
+  "questions": {
+    "right_execution_tier": {
+      "type": "choice",
+      "instructions": "Does the test suite test behaviors at an appropriate execution tier—covering pure domain logic directly in fast unit tests when the production code contains substantial pure domain logic, and keeping heavyweight integration or end-to-end tests focused on boundary wiring, persistence, and integration concerns?",
+      "criteria": {
+        "pass": "When production code contains substantial pure domain logic, policy rules, state transitions, or parsing/validation modules alongside an application, HTTP, database, or browser boundary, pure logic is covered directly in fast unit tests without booting a heavyweight runtime context. Heavyweight integration or end-to-end tests focus on boundary wiring, persistence, concurrency, or thin vertical slices rather than serving as the sole test layer for pure domain rules, and do not place pure unit-level tests inside a heavyweight integration test class. Suites for small pure-logic or file-I/O libraries with no heavyweight runtime, database, HTTP server, or browser context pass.",
+        "fail": "Production code contains substantial pure domain logic, policy rules, state transitions, or parsing/validation modules, yet the test suite relies exclusively on heavyweight full-stack, HTTP, database, or browser integration tests with no direct unit tests for pure logic; OR pure logic/validation tests needlessly boot a full application context, database, or server; OR a heavyweight end-to-end/HTTP test class mixes in unit-level tests that bypass its boundary to invoke internal domain objects, mocked services, or raw storage constraints directly."
+      }
+    },
+    "single_behavior_per_test": {
+      "type": "choice",
+      "instructions": "Does each test verify one cohesive behavior or invariant with a clear Arrange-Act-Assert flow rather than chaining multiple unrelated workflows, state transitions, or error cases into a single mega-test?",
+      "criteria": {
+        "pass": "Each test focuses on a single cohesive behavior, invariant, or failure condition with a clear Arrange-Act-Assert structure and a focused name. Checking a compact set of related examples for one cohesive rule (such as a loop or table over invalid inputs for one parser rule, or a few directional/boundary cases for one calculation) or executing brief setup steps required to reach the state under test is acceptable.",
+        "fail": "One or more tests chain multiple distinct workflows, endpoints, lifecycle transitions, or unrelated success and error cases into a single multi-phase script (for example, interleaving several independent mutations, queries, conflict checks, validation rejections, and persistence checks in one test method, or combining unrelated behaviors under compound test names)."
+      }
+    },
+    "no_redundant_duplication": {
+      "type": "choice",
+      "instructions": "Does the test suite avoid cross-layer echo testing and repetitive copy-pasted test methods?",
+      "criteria": {
+        "pass": "Each domain rule or validation matrix has one primary test owner rather than being exhaustively re-tested across multiple layers, and repetitive input/expected matrices are expressed concisely (such as via parameterized tests, table-driven loops, or shared helpers) rather than copy-pasting three or more near-identical test methods or cloned test files that differ only in data values. Covering a thin representative happy/failure slice at an integration boundary while unit tests own the full matrix is acceptable.",
+        "fail": "The suite exhaustively echoes the same validation or state-transition matrix across multiple test layers (for example, duplicating full field-by-field validation matrices or identical transition rejections in both unit tests and heavyweight integration tests), OR copy-pastes three or more near-identical test methods or cloned test files that differ only in input/expected values instead of consolidating them."
+      }
+    },
+    "clean_setup_and_boundary_fixtures": {
+      "type": "choice",
+      "instructions": "Does the test suite keep setup clean, reusable, and appropriate to the test boundary without inline raw database plumbing inside high-level test bodies or duplicated fixture boilerplate?",
+      "criteria": {
+        "pass": "Shared helpers or fixture builders keep test bodies skimmable without duplicating private setup helpers or hardcoded fixture IDs across sibling test files. High-level API or end-to-end test methods establish preconditions and assert behavior through public boundaries or dedicated fixture helpers rather than running inline raw database queries inside HTTP/API test bodies (a clean-slate reset between tests in a setup hook is acceptable, and direct database queries belong inside dedicated persistence tests or shared fixture helpers). Suites with no database or multi-file fixture sharing pass when their setup helpers are concise and clean.",
+        "fail": "High-level API or end-to-end test methods run inline raw database queries (such as direct table reads, inserts, or updates) inside test bodies instead of using public boundaries, shared fixture helpers, or dedicated persistence tests; OR sibling test files copy-paste private entity-creation/auth-setup helpers or hardcoded fixture IDs instead of sharing them; OR repetitive low-level request or setup boilerplate obscures test intent."
+      }
+    },
+    "observable_diagnostic_assertions": {
+      "type": "choice",
+      "instructions": "Do the tests assert meaningful observable contract outcomes using typed or structured, diagnostic assertions rather than raw untyped parsing, thin status/length checks, or brittle assertions?",
+      "criteria": {
+        "pass": "Assertions verify meaningful observable outcomes—key returned contract fields (not merely status codes or collection lengths), specific error types or codes where defined, and state preservation after rejected mutations—using typed deserialization or concise structured matchers rather than repeated raw untyped tree parsing, stable key/identifier lookup or full expected-collection matching rather than brittle hardcoded array indices, and direct diagnostic assertions (equality, type checks) rather than lossy boolean wrappers or exact internal exception-message prose. Simple value- or text-output tests that directly assert complete expected outputs pass.",
+        "fail": "Tests repeatedly parse structured API/JSON responses through raw untyped tree lookups (such as repeated raw node/field text extraction) instead of typed deserialization or structured matchers; OR check only status codes or collection lengths on mutation or query responses without verifying key contract fields or confirming that rejected mutations preserve state; OR index multi-item collection responses by brittle hardcoded array positions; OR use lossy boolean-wrapped assertions (such as asserting that a comparison or type check equals true/false) or couple tightly to exact internal exception wording."
+      }
+    },
+    "disciplined_doubles_and_boundaries": {
+      "type": "choice",
+      "instructions": "Do the tests exercise real public or module boundaries without test-only production seams, and use test doubles (mocks, stubs, fakes) with discipline?",
+      "criteria": {
+        "pass": "Tests exercise real public or module boundaries without introducing test-only production seams, test-only flags, or widened visibility solely to reach private helpers. Real domain objects are used directly rather than mocked; where boundary collaborators are mocked or faked, tests stub once and verify observable outcomes or captured arguments without duplicating identical multi-field predicates in both stub and verification, avoid broad wildcard matchers in meaningful verifications, avoid brittle strict call-order assertions unless ordering is an observable contract, and do not write mock-only tests for trivial pass-through wrappers. Suites that use no mocks or fakes and test through real boundaries pass.",
+        "fail": "Tests rely on test-only production seams, widened visibility to test private helpers, or internal implementation hooks; OR mock pure domain value or policy objects unnecessarily; OR double-specify the same multi-field argument predicate in both mock stubbing and verification; OR enforce brittle internal call sequences or broad catch-all wildcards in meaningful verifications; OR write mock-only tests for trivial one-line pass-through wrappers."
+      }
+    },
+    "independent_requirement_coverage": {
+      "type": "choice",
+      "instructions": "Do the tests derive expected outcomes independently from the task requirements and cover the key contracts, boundary conditions, and failure modes with genuine failure-detecting assertions?",
+      "criteria": {
+        "pass": "Expected outcomes are derived independently from the task specification rather than computed by invoking production helpers under test or tautologically comparing values to themselves. Every test has a genuine failure condition that catches a plausible wrong implementation, and the suite covers the core required behaviors, boundary conditions, and rejection/error cases defined in the specification.",
+        "fail": "Tests compute expected values using the production logic under test, perform tautological self-comparisons or assertion-free probes (such as only checking that a call does not throw or returns non-null), rely on negative tests that pass for an unrelated reason, OR omit substantial required behaviors, boundary conditions, or rejection/error paths stated in the task specification."
+      }
+    }
+  }
+}

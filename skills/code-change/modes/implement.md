@@ -28,7 +28,7 @@ writing code, and follow them while writing, not only afterwards.
   looks wrong, report it rather than working around it.
 - When a refactoring is needed, first make the behavior-preserving change and
   verify it with the existing tests, then change behavior.
-- Write tests that follow `T1`–`T4`.
+- Write tests that follow `guidance/testing.md` (`T1`–`T7`).
 
 ## 3. Verify
 

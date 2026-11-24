@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { grade, type ExpectedReview } from './grade_review.mts';
-import { parseRubric, parseSharedRubric, taskSourceRoot } from './judge_review.mts';
+import { parseRubric, parseSharedRubric, parseTestRubric, taskSourceRoot, taskTestRoot } from './judge_review.mts';
 
 const LIB = fileURLToPath(new URL('.', import.meta.url));
 const TASKS = join(LIB, '../tasks');
@@ -41,6 +41,10 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
     assert.ok(Object.keys(rubric.questions).length > 0, `${task}: invalid tests/judge.json`);
     if (rubric.target === 'production_code') {
       assert.ok(taskSourceRoot(dir), `${task}: invalid source_root in tests/judge.json`);
+      assert.ok(taskTestRoot(dir), `${task}: invalid test_source_root`);
+      const testRubric = parseTestRubric(dir, '');
+      assert.equal(testRubric.target, 'test_code', `${task}: test rubric must target test_code`);
+      assert.ok(Object.keys(testRubric.questions).length > 0, `${task}: invalid test rubric`);
     }
     assert.ok(existsSync(join(dir, 'solution/solve.sh')), `${task}: missing solution/solve.sh`);
     if (existsSync(join(dir, 'tests/expected.json'))) {
@@ -65,6 +69,9 @@ test('shared rubrics under rubrics/ parse cleanly and have non-overlapping quest
       seen.set(id, slug);
     }
   }
+  const testing = parseSharedRubric('testing');
+  assert.equal(testing.target, 'test_code');
+  assert.ok(Object.keys(testing.questions).length >= 6);
 });
 
 test('lowering the seeded bug severity fails', () => {

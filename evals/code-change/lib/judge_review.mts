@@ -20,7 +20,7 @@ export interface ChoiceQuestion {
   criteria: { pass: string; fail: string };
 }
 
-export type RubricTarget = 'review' | 'production_code';
+export type RubricTarget = 'review' | 'production_code' | 'test_code';
 
 export interface JudgeRubric {
   rubric: string;
@@ -108,9 +108,9 @@ function loadSharedRubric(name: string): Record<string, unknown> {
   return base;
 }
 
-/** Load a task's tests/judge.json, resolving one or more shared rubrics via `extends`. */
-function loadRawRubric(task: string): { raw: Record<string, unknown>; groups?: Record<string, string[]> } {
-  const raw = object(JSON.parse(readFileSync(join(task, 'tests/judge.json'), 'utf8')), 'Rubric');
+/** Load a task rubric file, resolving one or more shared rubrics via `extends`. */
+function loadRawRubricFile(rubricPath: string): { raw: Record<string, unknown>; groups?: Record<string, string[]> } {
+  const raw = object(JSON.parse(readFileSync(rubricPath, 'utf8')), 'Rubric');
   if (raw.extends === undefined) return { raw };
 
   const names = parseExtends(raw.extends);
@@ -163,15 +163,21 @@ function loadRawRubric(task: string): { raw: Record<string, unknown>; groups?: R
       rubric: raw.rubric ?? baseRubrics.join('+'),
       target: raw.target ?? baseTarget,
       source_root: raw.source_root,
+      test_source_root: raw.test_source_root,
       questions: { ...mergedQuestions, ...taskQuestions },
     },
     groups,
   };
 }
 
+/** Load a task's tests/judge.json, resolving one or more shared rubrics via `extends`. */
+function loadRawRubric(task: string): { raw: Record<string, unknown>; groups?: Record<string, string[]> } {
+  return loadRawRubricFile(join(task, 'tests/judge.json'));
+}
+
 function parseTarget(value: unknown): RubricTarget {
   if (value === undefined || value === 'review') return 'review';
-  if (value === 'production_code') return 'production_code';
+  if (value === 'production_code' || value === 'test_code') return value;
   throw new Error(`Unknown rubric target: ${String(value)}`);
 }
 
@@ -189,6 +195,24 @@ export function taskSourceRoot(task: string): string {
     throw new Error('Rubric source_root must be src or a subdirectory of src');
   }
   return root;
+}
+
+/** Find the test subtree inside exported artifacts (from tests/judge-tests.json, tests/judge.json, or default src/test/kotlin). */
+export function taskTestRoot(task: string): string {
+  const testRubricPath = join(task, 'tests/judge-tests.json');
+  let root: unknown;
+  if (statSync(testRubricPath, { throwIfNoEntry: false })?.isFile()) {
+    const raw = loadRawRubricFile(testRubricPath).raw;
+    root = raw.test_source_root ?? raw.source_root;
+  }
+  if (root === undefined && statSync(join(task, 'tests/judge.json'), { throwIfNoEntry: false })?.isFile()) {
+    root = loadRawRubric(task).raw.test_source_root;
+  }
+  const resolved = root ?? 'src/test/kotlin';
+  if (typeof resolved !== 'string' || /^(?:src|tests?)(?:\/[a-zA-Z0-9_-]+)*$/.test(resolved) === false) {
+    throw new Error('Rubric test_source_root must be src, test, tests, or a subdirectory thereof');
+  }
+  return resolved;
 }
 
 function parseRubricObject(
@@ -229,6 +253,24 @@ export function parseSharedRubric(slug: string, rulesPrefix = ''): JudgeRubric {
 export function parseRubric(task: string, rulesPrefix: string): JudgeRubric {
   const { raw, groups } = loadRawRubric(task);
   return parseRubricObject(raw, rulesPrefix, groups);
+}
+
+/** Parse a task's test-suite rubric from tests/judge-tests.json, or fall back to shared rubrics/testing.json. */
+export function parseTestRubric(task: string, rulesPrefix: string): JudgeRubric {
+  const customPath = join(task, 'tests/judge-tests.json');
+  if (statSync(customPath, { throwIfNoEntry: false })?.isFile()) {
+    const { raw, groups } = loadRawRubricFile(customPath);
+    const parsed = parseRubricObject(raw, rulesPrefix, groups);
+    if (parsed.target !== 'test_code') {
+      throw new Error(`Task ${basename(task)} tests/judge-tests.json targets ${parsed.target}, not test_code`);
+    }
+    return parsed;
+  }
+  const shared = parseSharedRubric('testing', rulesPrefix);
+  if (shared.target !== 'test_code') {
+    throw new Error(`Shared rubric testing targets ${shared.target}, not test_code`);
+  }
+  return { ...shared, groups: { testing: Object.keys(shared.questions) } };
 }
 
 function readRubric(task: string): JudgeRubric {

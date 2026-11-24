@@ -29,6 +29,7 @@ interface SavedResult {
   target?: string;
   scope?: string;
   file_count?: number;
+  context_file_count?: number;
   requested_model: string;
   returned_model: string | null;
   rubric: string;
@@ -46,6 +47,8 @@ interface SavedRequest {
     requirement: string;
     scope?: string;
     production_files?: Record<string, string>;
+    test_files?: Record<string, string>;
+    production_files_context?: Record<string, string>;
   };
   questions: Record<string, Question>;
 }
@@ -609,21 +612,18 @@ function codeLinesHtml(source: string, filePath?: string): string {
   return `<div class="code-viewer" role="region" aria-label="Source code"><div class="code-lines">${rows}</div></div>`;
 }
 
-function productionFilesViewerHtml(trial: Trial, trialIndex: number): string {
-  const productionFiles = trial.request?.state.production_files;
-  const fileResults = trial.result?.file_results;
+function tabbedFilesHtml(
+  files: Record<string, string> | undefined,
+  fileResults: SavedFileResult[] | undefined,
+  tabGroup: string,
+): string {
   const fileMap = new Map<string, SavedFileResult>();
   for (const fr of fileResults ?? []) fileMap.set(fr.file, fr);
 
-  const filePaths = productionFiles && Object.keys(productionFiles).length
-    ? Object.keys(productionFiles)
+  const filePaths = files && Object.keys(files).length
+    ? Object.keys(files)
     : (fileResults ?? []).map((fr) => fr.file);
   if (!filePaths.length) return '';
-
-  const hasPerFile = Boolean(fileResults?.length);
-  const heading = hasPerFile
-    ? `<h3>Per-file scores &amp; Production files (${filePaths.length})</h3>`
-    : `<h3>Production files (${filePaths.length})</h3>`;
 
   const tabs = filePaths.map((filePath, fileIndex) => {
     const fr = fileMap.get(filePath);
@@ -637,14 +637,14 @@ function productionFilesViewerHtml(trial: Trial, trialIndex: number): string {
       pill = `<span class="tab-pill ${cls}">${escape(txt)}</span>`;
     }
     const active = fileIndex === 0 ? ' active' : '';
-    const panelId = `t${trialIndex}-f${fileIndex}`;
-    return `<button type="button" class="file-tab${active}" role="tab" aria-selected="${fileIndex === 0 ? 'true' : 'false'}" data-tab-group="t${trialIndex}" data-tab-target="${panelId}"><span class="tab-name">${escape(filePath)}</span>${pill}</button>`;
+    const panelId = `${tabGroup}-f${fileIndex}`;
+    return `<button type="button" class="file-tab${active}" role="tab" aria-selected="${fileIndex === 0 ? 'true' : 'false'}" data-tab-group="${tabGroup}" data-tab-target="${panelId}"><span class="tab-name">${escape(filePath)}</span>${pill}</button>`;
   }).join('');
 
   const panels = filePaths.map((filePath, fileIndex) => {
     const fr = fileMap.get(filePath);
-    const code = productionFiles?.[filePath];
-    const panelId = `t${trialIndex}-f${fileIndex}`;
+    const code = files?.[filePath];
+    const panelId = `${tabGroup}-f${fileIndex}`;
     const hidden = fileIndex === 0 ? '' : ' hidden';
     let fileChecksHtml = '';
     if (fr) {
@@ -655,13 +655,45 @@ function productionFilesViewerHtml(trial: Trial, trialIndex: number): string {
         .join('');
       fileChecksHtml = `${fr.error ? `<p class="error">${escape(fr.error)}</p>` : ''}${pills ? `<div class="file-checks-strip">${pills}</div>` : ''}`;
     }
-    return `<div class="file-panel" id="${panelId}" data-tab-group="t${trialIndex}" role="tabpanel"${hidden}>${fileChecksHtml}${code !== undefined ? codeLinesHtml(code, filePath) : '<p class="muted">Source not saved.</p>'}</div>`;
+    return `<div class="file-panel" id="${panelId}" data-tab-group="${tabGroup}" role="tabpanel"${hidden}>${fileChecksHtml}${code !== undefined ? codeLinesHtml(code, filePath) : '<p class="muted">Source not saved.</p>'}</div>`;
   }).join('');
 
-  return `<section class="code-section">${heading}<div class="file-tabs" role="tablist">${tabs}</div>${panels}</section>`;
+  return `<div class="file-tabs" role="tablist">${tabs}</div>${panels}`;
+}
+
+function productionFilesViewerHtml(trial: Trial, trialIndex: number): string {
+  const productionFiles = trial.request?.state.production_files;
+  const fileResults = trial.result?.file_results;
+  const count = productionFiles && Object.keys(productionFiles).length
+    ? Object.keys(productionFiles).length
+    : (fileResults ?? []).length;
+  if (!count) return '';
+  const hasPerFile = Boolean(fileResults?.length);
+  const heading = hasPerFile
+    ? `<h3>Per-file scores &amp; Production files (${count})</h3>`
+    : `<h3>Production files (${count})</h3>`;
+  return `<section class="code-section">${heading}${tabbedFilesHtml(productionFiles, fileResults, `t${trialIndex}`)}</section>`;
+}
+
+function testFilesViewerHtml(trial: Trial, trialIndex: number): string {
+  const testFiles = trial.request?.state.test_files;
+  const contextFiles = trial.request?.state.production_files_context;
+  const testCount = testFiles ? Object.keys(testFiles).length : 0;
+  const contextCount = contextFiles ? Object.keys(contextFiles).length : 0;
+  const testSection = testCount
+    ? `<section class="code-section"><h3>Test files (${testCount})</h3>${tabbedFilesHtml(testFiles, undefined, `t${trialIndex}`)}</section>`
+    : '';
+  const contextSection = contextCount
+    ? `<details class="context"><summary>Production context (${contextCount} ${contextCount === 1 ? 'file' : 'files'})</summary><div class="context-code">${tabbedFilesHtml(contextFiles, undefined, `t${trialIndex}-ctx`)}</div></details>`
+    : '';
+  return testSection + contextSection;
 }
 
 function artifactSectionHtml(trial: Trial, index: number): string {
+  const testFiles = trial.request?.state.test_files;
+  if (testFiles && Object.keys(testFiles).length) {
+    return testFilesViewerHtml(trial, index);
+  }
   const productionFiles = trial.request?.state.production_files;
   if ((productionFiles && Object.keys(productionFiles).length) || trial.result?.file_results?.length) {
     return productionFilesViewerHtml(trial, index);
@@ -681,12 +713,15 @@ function trialHtml(trial: Trial, index: number): string {
   const scopeMeta = result?.scope
     ? `<span>Scope <strong>${escape(result.scope)}</strong></span><span>Files <strong>${escape(result.file_count ?? 0)}</strong></span>`
     : '';
+  const contextMeta = result?.context_file_count !== undefined
+    ? `<span>Context files <strong>${escape(result.context_file_count)}</strong></span>`
+    : '';
   const strictMeta = result?.quality?.all_files_pass_rate !== undefined
     ? `<span>All-files-pass checks <strong>${percent(result.quality.all_files_pass_rate)}</strong></span>`
     : '';
   return `<details class="trial" data-task="${escape(trial.task)}" data-state="${state(trial)}" ${index === 0 ? 'open ' : ''}id="trial-${index}">
     <summary><span class="trial-name">${escape(trial.trial)}</span><span class="badge ${state(trial) === 'passed' ? 'pass' : state(trial) === 'attention' ? 'fail' : 'neutral'}">${escape(score)}</span></summary>
-    <div class="trial-body"><div class="trial-meta"><span>Rubric <strong>${escape(result?.rubric ?? 'Pending')}</strong></span><span>Deterministic reward <strong>${deterministic === undefined ? '—' : escape(deterministic)}</strong></span><span>Returned model <strong>${escape(result?.returned_model ?? '—')}</strong></span>${scopeMeta}${strictMeta}</div>
+    <div class="trial-body"><div class="trial-meta"><span>Rubric <strong>${escape(result?.rubric ?? 'Pending')}</strong></span><span>Deterministic reward <strong>${deterministic === undefined ? '—' : escape(deterministic)}</strong></span><span>Returned model <strong>${escape(result?.returned_model ?? '—')}</strong></span>${scopeMeta}${contextMeta}${strictMeta}</div>
     ${trial.error ? `<p class="error">${escape(trial.error)}</p>` : ''}
     <div class="section-bar"><h3>Rubric and scores</h3>${Object.keys(questions).length ? `<button type="button" class="mini-btn" data-toggle-criteria="trial-${index}">Show all criteria</button>` : ''}</div>
     ${checksTableHtml(questions, checks)}
@@ -866,6 +901,7 @@ button:hover{background:#edf2ff;border-color:var(--blue)}
 .context{margin:12px 0;border:1px solid var(--line);border-radius:8px}
 .context>summary{cursor:pointer;padding:10px 14px;font-weight:600;font-size:.875rem;display:flex;align-items:center;justify-content:space-between;gap:10px}
 .context pre{margin:0;padding:14px 16px;border-top:1px solid var(--line);background:#f8fafc;white-space:pre-wrap;overflow-wrap:anywhere;font:.84rem/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+.context-code{padding:12px 14px;border-top:1px solid var(--line);background:white}
 .error{background:#fff0f0;color:#a02b32;padding:12px;border-radius:8px}
 .count{font-size:.8125rem;color:var(--muted);margin-left:auto}
 footer{font-size:.8125rem;color:var(--muted);margin-top:28px}
@@ -1019,7 +1055,8 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
     const deterministic = group.filter((trial) => trial.result?.deterministic?.reward === 1).length;
     return `<tr><td class="task-name">${escape(task)}</td><td class="numeric">${judged.length}/${group.length}</td><td class="numeric">${percent(taskMean)}</td><td class="numeric">${passed}/${checks.length}</td><td class="numeric">${deterministic}/${group.filter((trial) => trial.result).length}</td></tr>`;
   }).join('');
-  const isCode = trials.some((trial) => trial.result?.target === 'production_code' || Boolean(trial.request?.state.production_files));
+  const isTestCode = trials.some((trial) => trial.result?.target === 'test_code' || Boolean(trial.request?.state.test_files));
+  const isCode = isTestCode || trials.some((trial) => trial.result?.target === 'production_code' || Boolean(trial.request?.state.production_files));
   const unitCap = isCode ? 'Trials' : 'Reviews';
   const unitLow = isCode ? 'trials' : 'reviews';
 
@@ -1027,9 +1064,13 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
   const condBadge = meta.condition
     ? `<span class="cond-badge cond-${meta.condition.kind}">${escape(meta.condition.label)}</span>`
     : '';
+  const targetBadge = isTestCode
+    ? '<span class="cond-badge cond-neutral">Tests</span>'
+    : '';
   const metaItems = [
     meta.agent ? `<span class="meta-item">Agent <strong>${escape(meta.agent)}</strong></span>` : '',
     `<span class="meta-item">Judge <strong>${escape(model)}</strong></span>`,
+    isTestCode ? '<span class="meta-item">Target <strong>test_code</strong></span>' : '',
     scope ? `<span class="meta-item">Scope <strong>${escape(scope)}</strong></span>` : '',
     rubrics.length === 1 ? `<span class="meta-item">Rubric <strong>${escape(rubrics[0])}</strong></span>` : '',
     `<span class="meta-item" title="${escape(basename(source))}">Run <strong>${escape(shortRunId(source))}</strong></span>`,
@@ -1046,15 +1087,16 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
         const maxF = Math.max(...fileCounts);
         const range = minF === maxF ? `${minF}` : `${minF}–${maxF}`;
         const noun = maxF === 1 ? 'file' : 'files';
-        return `<div class="kpi"><div class="kpi-label">Production files</div><div class="kpi-value">${range} <span class="muted" style="font-size:1rem;font-weight:500">${noun} / trial</span></div><div class="kpi-note">${scored.length}/${trials.length} scored · 0 errors</div></div>`;
+        const filesLabel = isTestCode ? 'Test files' : 'Production files';
+        return `<div class="kpi"><div class="kpi-label">${filesLabel}</div><div class="kpi-value">${range} <span class="muted" style="font-size:1rem;font-weight:500">${noun} / trial</span></div><div class="kpi-note">${scored.length}/${trials.length} scored · 0 errors</div></div>`;
       })()
       : `<div class="kpi"><div class="kpi-label">${unitCap} scored</div><div class="kpi-value tone-good">${scored.length}<span class="muted"> / ${trials.length}</span></div><div class="kpi-note">0 errors · 0 missing</div></div>`;
 
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
-  <title>${escape(headingTitle)}${meta.condition ? ` (${escape(meta.condition.label)})` : ''} · Eval report</title><style>${STYLE}</style></head><body><main>
+  <title>${escape(headingTitle)}${meta.condition ? ` (${escape(meta.condition.label)})` : ''}${isTestCode ? ' · Tests' : ''} · Eval report</title><style>${STYLE}</style></head><body><main>
   <header>
-    <div class="title-row"><h1>${escape(headingTitle)}</h1>${condBadge}</div>
+    <div class="title-row"><h1>${escape(headingTitle)}</h1>${condBadge}${targetBadge}</div>
     <div class="meta-bar">${metaItems}</div>
   </header>
   <section class="kpi-strip" aria-label="Run overview">

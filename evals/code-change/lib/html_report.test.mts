@@ -459,3 +459,48 @@ test('TypeScript and TSX reports highlight syntax and escape JSX across source l
   }
   assert.doesNotMatch(html, /<script>\{title\}<\/script>/);
 });
+
+test('test_code reports render Test files viewer, collapsible Production context, Test files KPI, and escape XSS', (t) => {
+  const { directory } = fixture(t);
+  const trial = putTrial(directory, 'booking__abc', ['pass', 'fail'], {
+    target: 'test_code',
+    scope: 'whole',
+    file_count: 1,
+    context_file_count: 2,
+    rubric: 'testing-v1',
+  });
+  const request = {
+    ...trial.request,
+    state: {
+      task: 'implement-meeting-room-booking',
+      requirement: 'Spec text',
+      scope: 'whole',
+      test_files: {
+        'booking/BookingApiTest.kt': '1: package booking\n2: class BookingApiTest { val x = "<script>evil()</script>" }',
+      },
+      production_files_context: {
+        'booking/Booking.kt': '1: package booking\n2: data class Booking(val id: String)',
+        'booking/Room.kt': '1: package booking\n2: data class Room(val id: String)',
+      },
+    },
+  };
+  writeFileSync(join(trial.result_dir, 'request.json'), JSON.stringify(request));
+  writeFileSync(join(directory, 'summary.json'), JSON.stringify({
+    model: 'test/judge',
+    source_run: '/saved/source',
+    target: 'test_code',
+    reports: [trial],
+  }));
+
+  const html = readFileSync(writeHtmlReport(directory), 'utf8');
+  assert.ok(html.includes('<span class="cond-badge cond-neutral">Tests</span>'));
+  assert.ok(html.includes('Target <strong>test_code</strong>'));
+  assert.ok(html.includes('<div class="kpi-label">Test files</div>'));
+  assert.ok(html.includes('<h3>Test files (1)</h3>'));
+  assert.ok(html.includes('Production context (2 files)'));
+  assert.ok(html.includes('Context files <strong>2</strong>'));
+  assert.ok(html.includes('data-tab-group="t0"'));
+  assert.ok(html.includes('data-tab-group="t0-ctx"'));
+  assert.ok(!html.includes('<script>evil()</script>'));
+  assert.ok(html.includes('&lt;script&gt;evil()&lt;/script&gt;'));
+});

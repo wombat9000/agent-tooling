@@ -70,15 +70,4 @@ finding. **Default**: preferred; a departure is at most Optional.
 
 ## Tests
 
-- **T1 (Rule)** Derive expected values from the requirements, not from running the
-  implementation. Expected values copied from the output only confirm what the
-  code already does.
-- **T2 (Rule)** Assert observable results, such as returned values, persisted
-  state or emitted output, rather than only that the code ran or which internal
-  calls it made.
-- **T3 (Rule)** Test through the module's interface so that internal
-  reorganization does not require rewriting assertions. Do not widen visibility to
-  test private helpers.
-- **T4 (Rule)** Add a test when it would fail for a specific, plausible wrong
-  implementation that the existing tests would not catch. Do not add tests only to
-  increase their number.
+See [testing.md](testing.md) (`T1`–`T7`) when writing, changing, or reviewing tests.

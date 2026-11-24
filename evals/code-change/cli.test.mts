@@ -604,3 +604,48 @@ test('--dry-run bypasses Harbor lock acquisition and Docker container checks', (
   assert.equal(f.calls().length, 0, '--dry-run must not invoke harbor');
   assert.ok(existsSync(f.lockPath), '--dry-run must leave an existing lock untouched');
 });
+
+test('judge --target tests works on saved implementation runs and manual paths, and rejects incompatible options', (t) => {
+  const f = fixture(t);
+  const job = join(f.root, 'impl-run');
+  mkdirSync(job);
+  writeFileSync(join(job, 'config.json'), JSON.stringify({ agents: [{ name: 'codex' }] }));
+  writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-01-01T00:00:00', n_total_trials: 1 }));
+  const trialSrc = join(job, 'implement-mars-rover__one/artifacts/workspace/src');
+  mkdirSync(join(trialSrc, 'main/kotlin/rover'), { recursive: true });
+  mkdirSync(join(trialSrc, 'test/kotlin/rover'), { recursive: true });
+  writeFileSync(join(trialSrc, 'main/kotlin/rover/MarsRover.kt'), 'package rover\nobject MarsRover {}\n');
+  writeFileSync(join(trialSrc, 'test/kotlin/rover/MarsRoverTest.kt'), 'package rover\nclass MarsRoverTest {}\n');
+
+  const batchOut = join(f.root, 'batch-tests');
+  const batch = f.run(['judge', '--run', job, '--target', 'tests', '--out', batchOut, '--dry-run'], { OPENROUTER_API_KEY: '' });
+  assert.equal(batch.status, 0, batch.stderr);
+  assert.match(batch.stdout, /test_code/);
+  const batchSummary = JSON.parse(readFileSync(join(batchOut, 'summary.json'), 'utf8'));
+  assert.equal(batchSummary.target, 'test_code');
+  assert.equal(batchSummary.reports.length, 1);
+  assert.equal(batchSummary.reports[0].target, 'test_code');
+  const batchReq = JSON.parse(readFileSync(join(batchOut, 'implement-mars-rover__one/request.json'), 'utf8'));
+  assert.deepEqual(Object.keys(batchReq.state.test_files), ['rover/MarsRoverTest.kt']);
+  assert.deepEqual(Object.keys(batchReq.state.production_files_context), ['rover/MarsRover.kt']);
+
+  // Manual path passing src/ resolves both src/test/kotlin and src/main/kotlin.
+  const manualSrcOut = join(f.root, 'manual-src');
+  const manualSrc = f.run(['judge', 'implement-mars-rover', trialSrc, '--target', 'tests', '--out', manualSrcOut, '--dry-run'], { OPENROUTER_API_KEY: '' });
+  assert.equal(manualSrc.status, 0, manualSrc.stderr);
+  const manualSrcReq = JSON.parse(readFileSync(join(manualSrcOut, 'request.json'), 'utf8'));
+  assert.deepEqual(Object.keys(manualSrcReq.state.test_files), ['rover/MarsRoverTest.kt']);
+  assert.deepEqual(Object.keys(manualSrcReq.state.production_files_context), ['rover/MarsRover.kt']);
+
+  // Manual path passing src/test/kotlin resolves sibling src/main/kotlin automatically.
+  const manualTestOut = join(f.root, 'manual-test');
+  const manualTest = f.run(['judge', 'implement-mars-rover', join(trialSrc, 'test/kotlin'), '--target', 'tests', '--out', manualTestOut, '--dry-run'], { OPENROUTER_API_KEY: '' });
+  assert.equal(manualTest.status, 0, manualTest.stderr);
+  const manualTestReq = JSON.parse(readFileSync(join(manualTestOut, 'request.json'), 'utf8'));
+  assert.deepEqual(Object.keys(manualTestReq.state.production_files_context), ['rover/MarsRover.kt']);
+
+  // Incompatible combinations fail cleanly.
+  assert.equal(f.run(['judge', '--run', job, '--target', 'tests', '--scope', 'per-file', '--dry-run']).status, 1);
+  assert.equal(f.run(['judge', '--run', job, '--target', 'invalid', '--dry-run']).status, 1);
+  assert.equal(f.run(['judge', 'canary', join(trialSrc, 'test/kotlin/rover/MarsRoverTest.kt'), '--target', 'tests', '--dry-run']).status, 1);
+});

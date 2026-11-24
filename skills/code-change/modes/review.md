@@ -35,7 +35,7 @@ required and actual behavior differ.
 Derive the expected results from the requirements. Name plausible wrong
 implementations, such as an off-by-one at a boundary or state left modified
 after a rejected operation, and check whether the tests would fail for them.
-Check the tests against `T1`–`T4`.
+Check the tests against `guidance/testing.md` (`T1`–`T7`).
 
 A test gap is a finding only for in-scope behavior where a named wrong
 implementation would pass. A missing test is not evidence of a defect.
@@ -55,6 +55,7 @@ Check each applicable Rule group in the guide files you read:
 - [ ] Domain invariants and immutability (`D1`, `D2`; in Kotlin `K2`, `K3`).
 - [ ] Boundaries, layering, and information hiding (`D4`, `M1`–`M3`, `M5`–`M8`, `M10`).
 - [ ] File layout and visibility (`M11`, `M12`).
+- [ ] Test layering, single-behavior focus, typed/observable assertions, boundary-clean fixtures, and disciplined doubles (`T1`–`T6`) when tests are in scope (full scope only).
 
 Check relevant Defaults as well. For design, use the review questions and the
 three-part test in `guidance/module-design.md`. With design-only scope, skip
