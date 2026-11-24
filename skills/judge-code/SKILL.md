@@ -32,6 +32,8 @@ Optional real-repo flags:
 
 Select a regular `.kt`, `.ts`, `.tsx`, `.mts`, or `.cts` file or a directory of production sources (or a directory for `--mode structure`). Directory selection skips symlinks, hidden entries (except React Router's `.server` and `.client` folders), and conventional build, generated, and dependency directories inside `--source` (plus test directories in code mode). A combined 128 KiB input limit applies. Review `request.json` before live runs for secrets or proprietary content.
 
-Live scoring sends a single request to [OpenRouter Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) with `liquid/d1.2-ultra` by default (override with `--model`). Set `OPENROUTER_API_KEY` in the environment.
+Live scoring defaults to [OpenRouter Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) with `liquid/d1.2-ultra` (override with `--model`) and `OPENROUTER_API_KEY` in the environment.
+
+When `OPENROUTER_API_KEY` is unavailable, pass `--backend codex` (uses `gpt-6-luna` at `low` reasoning effort) or `--backend claude` (uses `haiku` with thinking disabled via `MAX_THINKING_TOKENS=0`) explicitly to score through the locally authenticated CLI using structured outputs (`pass` / `borderline` / `fail` with a 1-sentence `note` per check, adapted to the same `result.json` shape with `pass_probability: null` and `borderline` mapped to `choice: "fail"`). Keep the same `--backend` across before-and-after runs so scores remain comparable.
 
 The CLI writes only into a new private output directory (`0700` dir, `0600` files): `request.json`, `response.txt` (redacting the API key if echoed), and `result.json`. Keep these artifacts private because they contain source code. Dry runs write `request.json` and an unscored `result.json` locally.

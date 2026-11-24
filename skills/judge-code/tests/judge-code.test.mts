@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -448,4 +448,123 @@ test('structure mode builds a compact manifest including .server/.client, export
   const listed = run('preview', ['--list-rubrics']);
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, /project-structure \(project-structure-v1\) \[structure\]: no_junk_drawer_directories/);
+});
+
+test('codex and claude backends adapt structured outputs into unified result.json without OPENROUTER_API_KEY', (t) => {
+  const { run, root } = setup(t);
+  const fakeBin = join(root, 'fake-bin');
+  mkdirSync(fakeBin, { recursive: true });
+
+  const codexStub = join(fakeBin, 'codex');
+  writeFileSync(codexStub, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const outIdx = args.indexOf('-o');
+const schemaIdx = args.indexOf('--output-schema');
+const modelIdx = args.indexOf('-m');
+if (args[0] !== 'exec' || outIdx === -1 || schemaIdx === -1 || args[modelIdx + 1] !== 'gpt-6-luna') process.exit(2);
+const schema = JSON.parse(fs.readFileSync(args[schemaIdx + 1], 'utf8'));
+const ids = schema.properties.checks.items.properties.id.enum;
+const payload = {
+  checks: ids.map((id) => ({
+    id,
+    note: id === 'direct_readability' ? 'Clear domain names.' : 'Mixed concern in one check.',
+    choice: id === 'direct_readability' ? 'pass' : 'borderline',
+  })),
+};
+fs.writeFileSync(args[outIdx + 1], JSON.stringify(payload));
+`);
+  chmodSync(codexStub, 0o755);
+
+  const claudeStub = join(fakeBin, 'claude');
+  writeFileSync(claudeStub, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const schemaIdx = args.indexOf('--json-schema');
+const modelIdx = args.indexOf('--model');
+if (args[0] !== '-p' || schemaIdx === -1 || args[modelIdx + 1] !== 'haiku' || process.env.MAX_THINKING_TOKENS !== '0') process.exit(2);
+const schema = JSON.parse(args[schemaIdx + 1]);
+const ids = schema.properties.checks.items.properties.id.enum;
+console.log(JSON.stringify({
+  modelUsage: { 'claude-haiku-test': { inputTokens: 10 } },
+  structured_output: {
+    checks: ids.map((id) => ({
+      id,
+      note: id === 'direct_readability' ? 'Looks clean.' : 'Violates rule.',
+      choice: id === 'direct_readability' ? 'pass' : 'fail',
+    })),
+  },
+}));
+`);
+  chmodSync(claudeStub, 0o755);
+
+  const stubEnv = { PATH: `${fakeBin}:${process.env.PATH ?? ''}` };
+
+  const codexOut = join(root, 'codex-scored');
+  const codexProc = run('preview', [
+    '--source', 'booking',
+    '--rubric', 'readability',
+    '--backend', 'codex',
+    '--out', codexOut,
+  ], stubEnv);
+  assert.equal(codexProc.status, 0, codexProc.stderr);
+  const codexRes = JSON.parse(codexProc.stdout);
+  assert.equal(codexRes.status, 'scored');
+  assert.equal(codexRes.backend, 'codex');
+  assert.equal(codexRes.pass_threshold, null);
+  assert.equal(codexRes.requested_model, 'gpt-6-luna');
+  assert.equal(codexRes.returned_model, 'gpt-6-luna');
+  assert.equal(codexRes.quality.pass_rate, 0.5);
+  assert.deepEqual(codexRes.quality.checks.direct_readability, {
+    choice: 'pass',
+    model_choice: 'pass',
+    pass_probability: null,
+    confidence: null,
+    note: 'Clear domain names.',
+  });
+  assert.deepEqual(codexRes.quality.checks.named_domain_expressions, {
+    choice: 'fail',
+    model_choice: 'borderline',
+    pass_probability: null,
+    confidence: null,
+    note: 'Mixed concern in one check.',
+  });
+
+  const claudeOut = join(root, 'claude-scored');
+  const claudeProc = run('preview', [
+    '--source', 'booking',
+    '--rubric', 'readability',
+    '--backend', 'claude',
+    '--out', claudeOut,
+  ], stubEnv);
+  assert.equal(claudeProc.status, 0, claudeProc.stderr);
+  const claudeRes = JSON.parse(claudeProc.stdout);
+  assert.equal(claudeRes.status, 'scored');
+  assert.equal(claudeRes.backend, 'claude');
+  assert.equal(claudeRes.requested_model, 'haiku');
+  assert.equal(claudeRes.returned_model, 'claude-haiku-test');
+  assert.equal(claudeRes.pass_threshold, null);
+  assert.equal(claudeRes.quality.pass_rate, 0.5);
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.choice, 'fail');
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.model_choice, 'fail');
+
+  const modelOnCodex = run('reject', [
+    '--source', 'booking',
+    '--rubric', 'readability',
+    '--backend', 'codex',
+    '--model', 'gpt-6.2-sol',
+    '--out', join(root, 'codex-model'),
+    '--dry-run',
+  ]);
+  assert.equal(modelOnCodex.status, 1);
+  assert.match(modelOnCodex.stderr, /only supported with --backend openrouter/);
+
+  const badBackend = run('reject', [
+    '--source', 'booking',
+    '--rubric', 'readability',
+    '--backend', 'unknown',
+    '--out', join(root, 'bad-backend'),
+    '--dry-run',
+  ]);
+  assert.equal(badBackend.status, 1);
+  assert.match(badBackend.stderr, /Invalid --backend/);
 });
