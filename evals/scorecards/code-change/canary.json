@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "skill": "code-change",
+  "task": "canary",
+  "entries": {
+    "skill": {
+      "review": {
+        "recorded_at": "2026-11-24",
+        "agent_model": "openai/gpt-6.1-terra",
+        "judge_model": "liquid/d1.2-ultra",
+        "scope": "whole",
+        "rubric": "canary-1",
+        "trials": {
+          "total": 3,
+          "scored": 3,
+          "errored": 0
+        },
+        "deterministic": {
+          "passed": 3,
+          "total": 3,
+          "pass_rate": 1,
+          "metrics": {
+            "category": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "format": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "found": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "guideline": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "report_exists": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "restraint": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "severity": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "verdict": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            }
+          }
+        },
+        "quality": {
+          "pass_rate": 0.8333,
+          "mean_pass_probability": 0.755,
+          "checks": {
+            "duplicated_rule": {
+              "passed": 2,
+              "total": 3,
+              "pass_rate": 0.6667,
+              "mean_pass_probability": 0.5116
+            },
+            "weak_test": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9984
+            }
+          }
+        },
+        "hashes": {
+          "skill_hash": "4f22cf92820e",
+          "task_hash": "09ad7d0a8d54",
+          "rubric_hash": "5e6731a4f1c0"
+        }
+      }
+    }
+  }
+}

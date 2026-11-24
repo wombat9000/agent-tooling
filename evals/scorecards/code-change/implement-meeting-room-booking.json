@@ -1,0 +1,685 @@
+{
+  "schema_version": 1,
+  "skill": "code-change",
+  "task": "implement-meeting-room-booking",
+  "entries": {
+    "baseline": {
+      "production_code": {
+        "recorded_at": "2026-11-24",
+        "agent_model": "openai/gpt-6.1-terra",
+        "judge_model": "liquid/d1.2-ultra",
+        "scope": "whole",
+        "rubric": "domain-modelling-v3+readability-v2+module-design-v2+solid-v3+fowler-smells-v1",
+        "rubric_groups": {
+          "domain-modelling": [
+            "immutable_state",
+            "domain_invariants",
+            "boundary_separation"
+          ],
+          "fowler-smells": [
+            "no_duplicated_code",
+            "no_long_functions",
+            "no_long_parameter_lists_or_data_clumps",
+            "no_feature_envy_or_data_class_anemia",
+            "no_message_chains",
+            "no_primitive_obsession",
+            "no_repeated_switches",
+            "no_speculative_or_middle_man",
+            "no_comment_deodorant_or_dead_code"
+          ],
+          "module-design": [
+            "modular_organization",
+            "no_unnecessary_abstraction"
+          ],
+          "readability": [
+            "direct_readability",
+            "named_domain_expressions"
+          ],
+          "solid": [
+            "single_responsibility",
+            "open_closed",
+            "liskov_substitution",
+            "interface_segregation",
+            "dependency_inversion"
+          ]
+        },
+        "trials": {
+          "total": 3,
+          "scored": 3,
+          "errored": 0
+        },
+        "deterministic": {
+          "passed": 3,
+          "total": 3,
+          "pass_rate": 1,
+          "metrics": {
+            "agent_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "contract_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_production_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_tests": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            }
+          }
+        },
+        "quality": {
+          "pass_rate": 0.5873,
+          "mean_pass_probability": 0.5966,
+          "checks": {
+            "boundary_separation": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.0709
+            },
+            "dependency_inversion": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.299
+            },
+            "direct_readability": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.7311
+            },
+            "domain_invariants": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.2448
+            },
+            "immutable_state": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9512
+            },
+            "interface_segregation": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.966
+            },
+            "liskov_substitution": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9813
+            },
+            "modular_organization": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.0261
+            },
+            "named_domain_expressions": {
+              "passed": 1,
+              "total": 3,
+              "pass_rate": 0.3333,
+              "mean_pass_probability": 0.4428
+            },
+            "no_comment_deodorant_or_dead_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9822
+            },
+            "no_duplicated_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8513
+            },
+            "no_feature_envy_or_data_class_anemia": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.2114
+            },
+            "no_long_functions": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8867
+            },
+            "no_long_parameter_lists_or_data_clumps": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.7557
+            },
+            "no_message_chains": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9339
+            },
+            "no_primitive_obsession": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.1144
+            },
+            "no_repeated_switches": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.2482
+            },
+            "no_speculative_or_middle_man": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8896
+            },
+            "no_unnecessary_abstraction": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9755
+            },
+            "open_closed": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.5698
+            },
+            "single_responsibility": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.3963
+            }
+          }
+        },
+        "hashes": {
+          "skill_hash": null,
+          "task_hash": "7949498ec049",
+          "rubric_hash": "a41cc3058637"
+        }
+      },
+      "test_code": {
+        "recorded_at": "2026-11-24",
+        "agent_model": "openai/gpt-6.1-terra",
+        "judge_model": "liquid/d1.2-ultra",
+        "scope": "whole",
+        "rubric": "testing-core-v1+testing-unit-v1+testing-integration-v1",
+        "rubric_groups": {
+          "testing-core": [
+            "independent_requirement_coverage",
+            "no_redundant_duplication",
+            "observable_diagnostic_assertions",
+            "owner_boundary_no_seams"
+          ],
+          "testing-integration": [
+            "right_execution_tier",
+            "integration_cohesive_scope",
+            "shared_fixtures_no_raw_db_in_api",
+            "real_internal_wiring"
+          ],
+          "testing-unit": [
+            "unit_single_behavior_aaa",
+            "disciplined_test_doubles"
+          ]
+        },
+        "trials": {
+          "total": 3,
+          "scored": 3,
+          "errored": 0
+        },
+        "deterministic": {
+          "passed": 3,
+          "total": 3,
+          "pass_rate": 1,
+          "metrics": {
+            "agent_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "contract_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_production_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_tests": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            }
+          }
+        },
+        "quality": {
+          "pass_rate": 0.7,
+          "mean_pass_probability": 0.6359,
+          "checks": {
+            "disciplined_test_doubles": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9018
+            },
+            "independent_requirement_coverage": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.868
+            },
+            "integration_cohesive_scope": {
+              "passed": 1,
+              "total": 3,
+              "pass_rate": 0.3333,
+              "mean_pass_probability": 0.4302
+            },
+            "no_redundant_duplication": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8477
+            },
+            "observable_diagnostic_assertions": {
+              "passed": 2,
+              "total": 3,
+              "pass_rate": 0.6667,
+              "mean_pass_probability": 0.5156
+            },
+            "owner_boundary_no_seams": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9618
+            },
+            "real_internal_wiring": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9846
+            },
+            "right_execution_tier": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.1263
+            },
+            "shared_fixtures_no_raw_db_in_api": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.0707
+            },
+            "unit_single_behavior_aaa": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.6526
+            }
+          }
+        },
+        "hashes": {
+          "skill_hash": null,
+          "task_hash": "7949498ec049",
+          "rubric_hash": "085ecb34b0d6"
+        }
+      }
+    },
+    "skill": {
+      "production_code": {
+        "recorded_at": "2026-11-24",
+        "agent_model": "openai/gpt-6.1-terra",
+        "judge_model": "liquid/d1.2-ultra",
+        "scope": "whole",
+        "rubric": "domain-modelling-v3+readability-v2+module-design-v2+solid-v3+fowler-smells-v1",
+        "rubric_groups": {
+          "domain-modelling": [
+            "immutable_state",
+            "domain_invariants",
+            "boundary_separation"
+          ],
+          "fowler-smells": [
+            "no_duplicated_code",
+            "no_long_functions",
+            "no_long_parameter_lists_or_data_clumps",
+            "no_feature_envy_or_data_class_anemia",
+            "no_message_chains",
+            "no_primitive_obsession",
+            "no_repeated_switches",
+            "no_speculative_or_middle_man",
+            "no_comment_deodorant_or_dead_code"
+          ],
+          "module-design": [
+            "modular_organization",
+            "no_unnecessary_abstraction"
+          ],
+          "readability": [
+            "direct_readability",
+            "named_domain_expressions"
+          ],
+          "solid": [
+            "single_responsibility",
+            "open_closed",
+            "liskov_substitution",
+            "interface_segregation",
+            "dependency_inversion"
+          ]
+        },
+        "trials": {
+          "total": 3,
+          "scored": 3,
+          "errored": 0
+        },
+        "deterministic": {
+          "passed": 3,
+          "total": 3,
+          "pass_rate": 1,
+          "metrics": {
+            "agent_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "contract_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_production_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_tests": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            }
+          }
+        },
+        "quality": {
+          "pass_rate": 0.9048,
+          "mean_pass_probability": 0.8071,
+          "checks": {
+            "boundary_separation": {
+              "passed": 2,
+              "total": 3,
+              "pass_rate": 0.6667,
+              "mean_pass_probability": 0.5798
+            },
+            "dependency_inversion": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9063
+            },
+            "direct_readability": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8798
+            },
+            "domain_invariants": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.6728
+            },
+            "immutable_state": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9777
+            },
+            "interface_segregation": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9713
+            },
+            "liskov_substitution": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9432
+            },
+            "modular_organization": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9404
+            },
+            "named_domain_expressions": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.7189
+            },
+            "no_comment_deodorant_or_dead_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.983
+            },
+            "no_duplicated_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8081
+            },
+            "no_feature_envy_or_data_class_anemia": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8133
+            },
+            "no_long_functions": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9726
+            },
+            "no_long_parameter_lists_or_data_clumps": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8976
+            },
+            "no_message_chains": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8415
+            },
+            "no_primitive_obsession": {
+              "passed": 1,
+              "total": 3,
+              "pass_rate": 0.3333,
+              "mean_pass_probability": 0.268
+            },
+            "no_repeated_switches": {
+              "passed": 0,
+              "total": 3,
+              "pass_rate": 0,
+              "mean_pass_probability": 0.3824
+            },
+            "no_speculative_or_middle_man": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9453
+            },
+            "no_unnecessary_abstraction": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9797
+            },
+            "open_closed": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.5692
+            },
+            "single_responsibility": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8976
+            }
+          }
+        },
+        "hashes": {
+          "skill_hash": "4f22cf92820e",
+          "task_hash": "7949498ec049",
+          "rubric_hash": "a41cc3058637"
+        }
+      },
+      "test_code": {
+        "recorded_at": "2026-11-24",
+        "agent_model": "openai/gpt-6.1-terra",
+        "judge_model": "liquid/d1.2-ultra",
+        "scope": "whole",
+        "rubric": "testing-core-v1+testing-unit-v1+testing-integration-v1",
+        "rubric_groups": {
+          "testing-core": [
+            "independent_requirement_coverage",
+            "no_redundant_duplication",
+            "observable_diagnostic_assertions",
+            "owner_boundary_no_seams"
+          ],
+          "testing-integration": [
+            "right_execution_tier",
+            "integration_cohesive_scope",
+            "shared_fixtures_no_raw_db_in_api",
+            "real_internal_wiring"
+          ],
+          "testing-unit": [
+            "unit_single_behavior_aaa",
+            "disciplined_test_doubles"
+          ]
+        },
+        "trials": {
+          "total": 3,
+          "scored": 3,
+          "errored": 0
+        },
+        "deterministic": {
+          "passed": 3,
+          "total": 3,
+          "pass_rate": 1,
+          "metrics": {
+            "agent_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "contract_tests_pass": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_production_code": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            },
+            "has_tests": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1
+            }
+          }
+        },
+        "quality": {
+          "pass_rate": 1,
+          "mean_pass_probability": 0.9345,
+          "checks": {
+            "disciplined_test_doubles": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9939
+            },
+            "independent_requirement_coverage": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9026
+            },
+            "integration_cohesive_scope": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.8038
+            },
+            "no_redundant_duplication": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.948
+            },
+            "observable_diagnostic_assertions": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9173
+            },
+            "owner_boundary_no_seams": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9437
+            },
+            "real_internal_wiring": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9914
+            },
+            "right_execution_tier": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9873
+            },
+            "shared_fixtures_no_raw_db_in_api": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.936
+            },
+            "unit_single_behavior_aaa": {
+              "passed": 3,
+              "total": 3,
+              "pass_rate": 1,
+              "mean_pass_probability": 0.9211
+            }
+          }
+        },
+        "hashes": {
+          "skill_hash": "4f22cf92820e",
+          "task_hash": "7949498ec049",
+          "rubric_hash": "085ecb34b0d6"
+        }
+      }
+    }
+  }
+}

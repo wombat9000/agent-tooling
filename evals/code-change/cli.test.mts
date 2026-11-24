@@ -763,3 +763,37 @@ test('judge --target tests works on saved implementation runs and manual paths, 
   const resumedReq = JSON.parse(readFileSync(join(resumeTestsOut, 'implement-mars-rover__one/request.json'), 'utf8'));
   assert.deepEqual(Object.keys(resumedReq.state.production_files_context), ['rover/MarsRover.kt']);
 });
+
+test('scorecard CLI supports HTML dashboard, dry-run, help, and rejects bad subcommands or flags', (t) => {
+  const f = fixture(t);
+  const help = f.run(['--help']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /scorecard \[subcmd\]/);
+  assert.match(help.stdout, /scorecard build/);
+  assert.match(help.stdout, /scorecard record/);
+
+  const customOut = join(f.root, 'scorecard.html');
+  const dryHtml = f.run(['scorecard', '--out', customOut, '--dry-run']);
+  assert.equal(dryHtml.status, 0, dryHtml.stderr);
+  assert.ok(!existsSync(customOut));
+
+  const dryBuild = f.run(['scorecard', 'build', '--out', customOut, '--dry-run']);
+  assert.equal(dryBuild.status, 0, dryBuild.stderr);
+  assert.match(dryBuild.stdout, /SCORECARD\.md/);
+
+  const buildHtml = f.run(['scorecard', '--out', customOut]);
+  assert.equal(buildHtml.status, 0, buildHtml.stderr);
+  assert.ok(existsSync(customOut));
+  assert.ok(readFileSync(customOut, 'utf8').includes('Eval Scorecard'));
+
+  for (const badArgs of [
+    ['scorecard', 'unknown-sub'],
+    ['scorecard', 'record'],
+    ['scorecard', 'record', '/nonexistent', '--condition', 'invalid'],
+    ['scorecard', 'record', '/nonexistent', '--date', 'not-a-date'],
+    ['scorecard', '--out', join(f.root, 'not-html.txt')],
+  ]) {
+    const res = f.run(badArgs);
+    assert.equal(res.status, 1, JSON.stringify(badArgs));
+  }
+});

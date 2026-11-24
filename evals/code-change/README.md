@@ -54,6 +54,18 @@ pnpm eval report --latest --open
 all content is embedded, so the HTML works offline. Scores and rubric text come from the saved
 request/result files, not the task rubric as it exists today.
 
+### Eval scorecard and offline dashboard
+
+Checked-in per-task scorecards live under `evals/scorecards/<skill>/<task>.json` and drive both the GitHub-previewable [evals/SCORECARD.md](../SCORECARD.md) and a self-contained interactive offline HTML dashboard (`eval-results/scorecard.html`):
+
+```bash
+pnpm eval scorecard --open                                      # Build & open interactive HTML dashboard (leaves tracked Git files untouched)
+pnpm eval scorecard build                                       # Regenerate evals/SCORECARD.md and eval-results/scorecard.html
+pnpm eval scorecard record <judge-dir...> [--condition skill|baseline] [--git-ref REF] [--agent-model ID] [--open]
+```
+
+Freshness is computed from deterministic SHA-256 content hashes (`skill_hash`, `task_hash`, and resolved `rubric_hash`) against the current working tree. Skill entries are **Current** only when all three match; baseline entries check `task_hash` and `rubric_hash` only, so editing a skill does not falsely mark baseline runs stale. Passing `--git-ref <commit>` computes content hashes from that historical commit so archived runs preserve accurate provenance. `pnpm eval check` validates all checked-in scorecard JSON schemas without failing on informational staleness.
+
 No artifact paths are needed for saved runs. The latest run is selected by its completion time;
 unfinished runs and oracle/nop jobs are excluded. Use `--run DIRECTORY` to choose a specific
 saved Harbor run. To score one review file or an exported production source directory manually, use
@@ -134,6 +146,13 @@ lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, 
 lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighting
 lib/highlight_typescript.mts  zero-dependency build-time TypeScript and TSX syntax highlighting
 lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
+lib/scorecard_schema.mts   per-task scorecard JSON schema, canonical serialization, and strict validation
+lib/scorecard_hashes.mts   working-tree and git-ref content hashing (skill/task/rubric) and staleness rules
+lib/scorecard_discovery.mts repo skill/eval coverage discovery and live scorecard staleness evaluation
+lib/scorecard_record.mts   records saved judge batches into evals/scorecards/<skill>/<task>.json
+lib/scorecard_markdown.mts deterministic GitHub-previewable Markdown generator for evals/SCORECARD.md
+lib/scorecard_html.mts     self-contained interactive offline HTML scorecard dashboard generator
+lib/scorecard.test.mts     offline tests for scorecard schema, hashing, staleness, recording, Markdown, and HTML
 rubrics/
   domain-modelling.json    shared facet: immutability, domain invariants, boundary separation
   readability.json         shared facet: direct readability and named domain expressions
