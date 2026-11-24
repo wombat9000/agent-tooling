@@ -5,10 +5,12 @@ import type { StructureManifest } from './structure.mts';
 
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const DEFAULT_DECISION_MODEL = 'liquid/d1.2-ultra';
+export const PASS_THRESHOLD = 0.8;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export interface Judgment {
   choice: 'pass' | 'fail';
+  model_choice: 'pass' | 'fail';
   pass_probability: number;
   confidence: number;
 }
@@ -33,6 +35,7 @@ export interface JudgeResult {
   rubric: string;
   rubric_groups: Record<string, string[]>;
   excluded_checks?: string[];
+  pass_threshold: number;
   quality: {
     pass_rate: number;
     checks: Record<string, Judgment>;
@@ -121,7 +124,8 @@ export function readAnswers(raw: unknown, questions: Record<string, ChoiceQuesti
       throw new Error(`Answer ${id} has inconsistent probabilities`);
     }
     return [id, {
-      choice: answer.choice,
+      choice: pass >= PASS_THRESHOLD ? 'pass' : 'fail',
+      model_choice: answer.choice,
       pass_probability: pass,
       confidence: probability(answer.confidence, `${id}.confidence`),
     }];
@@ -178,6 +182,7 @@ export async function runDecisionJudge(
     rubric: options.rubric.rubric,
     rubric_groups: options.rubric.groups,
     ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+    pass_threshold: PASS_THRESHOLD,
     quality: null,
   };
 

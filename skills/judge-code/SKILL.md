@@ -7,7 +7,7 @@ description: Score a production Kotlin or TypeScript module against binary code-
 
 1. Select the smallest production module that still shows the relevant relationships, along with any applicable rubrics (`--rubric`, `--all`, or a local `.json` rubric), optional `--requirements` or `--conventions` documents, and `--exclude` for checks that conflict with the repository's framework or conventions. Confirm the caller has authorization to share the selected contents with OpenRouter and the chosen model provider before a live run.
 2. Run the bundled CLI with `--dry-run`. Inspect `request.json` for the complete numbered files, optional documents, and resolved criteria. Narrow the selection if anything is unrelated or confidential.
-3. Run with the same inputs, a fresh output directory, and `--dry-run` removed. Read `result.json` for pass/fail choices, `P(pass)`, and confidence, and check `request.json` for the exact criteria of any failed checks. Inspect the current source directly to verify whether each failed check reflects a real issue before reporting it or making a change.
+3. Run with the same inputs, a fresh output directory, and `--dry-run` removed. Read `result.json` for pass/fail choices (checks require `P(pass) >= 0.80` to pass; raw `model_choice`, `pass_probability`, and `confidence` are also preserved), and check `request.json` for the exact criteria of any failed checks. Inspect the current source directly to verify whether each failed check reflects a real issue before reporting it or making a change.
 4. If authorized to edit, use verified failures to make small behavior-preserving refactors. Run the project's tests and checks, then re-score with the same rubrics, exclusions, model, and source scope to compare results.
 
 ## Run the CLI

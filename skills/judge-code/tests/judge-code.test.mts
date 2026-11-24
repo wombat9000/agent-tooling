@@ -33,11 +33,13 @@ globalThis.fetch = async (endpoint, init) => {
   const json = JSON.parse(init.body);
   const answers = Object.fromEntries(Object.keys(json.questions).map((id) => {
     const fail = ['direct_readability', 'modular_organization'].includes(id) && mode !== 'pass';
+    const borderline = id === 'no_unnecessary_abstraction' && mode !== 'pass';
+    const passProb = fail ? 0.2 : borderline ? 0.65 : 0.9;
     return [id, {
       type: 'choice',
       choice: fail ? 'fail' : 'pass',
-      probabilities: { pass: fail ? 0.2 : 0.9, fail: fail ? 0.8 : 0.1 },
-      confidence: 0.8,
+      probabilities: { pass: passProb, fail: Number((1 - passProb).toFixed(4)) },
+      confidence: Number(Math.abs(2 * passProb - 1).toFixed(4)),
     }];
   }));
   return Response.json({ model: 'decisions-mock', answers });
@@ -224,8 +226,15 @@ test('live scoring makes a single Decisions call and records errors with credent
   assert.deepEqual(result, JSON.parse(readFileSync(join(scoredOut, 'result.json'), 'utf8')));
   assert.equal(result.status, 'scored');
   assert.equal(result.returned_model, 'decisions-mock');
+  assert.equal(result.pass_threshold, 0.8);
+  assert.equal(result.quality.pass_rate, 0.25);
   assert.equal(result.quality.checks.direct_readability.choice, 'fail');
+  assert.equal(result.quality.checks.direct_readability.model_choice, 'fail');
+  assert.equal(result.quality.checks.no_unnecessary_abstraction.choice, 'fail');
+  assert.equal(result.quality.checks.no_unnecessary_abstraction.model_choice, 'pass');
+  assert.equal(result.quality.checks.no_unnecessary_abstraction.pass_probability, 0.65);
   assert.equal(result.quality.checks.named_domain_expressions.choice, 'pass');
+  assert.equal(result.quality.checks.named_domain_expressions.model_choice, 'pass');
   assert.equal(existsSync(join(scoredOut, 'evidence.json')), false);
 
   const errOut = join(root, 'key-echo');
