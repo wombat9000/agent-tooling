@@ -5,8 +5,8 @@ description: Score a production Kotlin or TypeScript module against binary code-
 
 # Judge production code
 
-1. Select the smallest production module that still shows the relevant relationships, along with any applicable rubrics (`--rubric`, `--all`, or a local `.json` rubric), optional `--requirements` or `--conventions` documents, and `--exclude` for checks that conflict with the repository's framework or conventions. Confirm the caller has authorization to share the selected contents with OpenRouter and the chosen model provider before a live run.
-2. Run the bundled CLI with `--dry-run`. Inspect `request.json` for the complete numbered files, optional documents, and resolved criteria. Narrow the selection if anything is unrelated or confidential.
+1. Select the smallest production module that still shows the relevant relationships, along with any applicable rubrics (`--rubric`, `--all`, or a local `.json` rubric), optional `--requirements` or `--conventions` documents, and `--exclude` for checks that conflict with the repository's framework or conventions.
+2. Run the bundled CLI with `--dry-run`. Inspect `request.json` for the complete numbered files, optional documents, and resolved criteria. Narrow the selection if anything is unrelated or contains secrets.
 3. Run with the same inputs, a fresh output directory, and `--dry-run` removed. Read `result.json` for pass/fail choices (checks require `P(pass) >= 0.80` to pass; raw `model_choice`, `pass_probability`, and `confidence` are also preserved), and check `request.json` for the exact criteria of any failed checks. Inspect the current source directly to verify whether each failed check reflects a real issue before reporting it or making a change.
 4. If authorized to edit, use verified failures to make small behavior-preserving refactors. Run the project's tests and checks, then re-score with the same rubrics, exclusions, model, and source scope to compare results.
 
@@ -34,7 +34,7 @@ Optional real-repo flags:
 - `--concurrency N` — set maximum concurrent per-file requests in `--mode file`.
 - `--allow-credentials` — override the best-effort heuristic credential check after reviewing a false positive (never overrides an embedded `OPENROUTER_API_KEY`).
 
-Select a regular `.kt`, `.ts`, `.tsx`, `.mts`, or `.cts` file or a directory of production sources (or a directory for `--mode structure`). Directory selection skips symlinks, hidden entries (except React Router's `.server` and `.client` folders), and conventional build, generated, and dependency directories inside `--source` (plus test directories in code and file modes). A 128 KiB input limit applies (combined in `code`/`structure` modes; per individual file plus optional documents in `--mode file`). Review `request.json` before live runs for secrets or proprietary content.
+Select a regular `.kt`, `.ts`, `.tsx`, `.mts`, or `.cts` file or a directory of production sources (or a directory for `--mode structure`). Directory selection skips symlinks, hidden entries (except React Router's `.server` and `.client` folders), and conventional build, generated, and dependency directories inside `--source` (plus test directories in code and file modes). A 128 KiB input limit applies (combined in `code`/`structure` modes; per individual file plus optional documents in `--mode file`). Review `request.json` before live runs for secrets.
 
 Live scoring defaults to [OpenRouter Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) with `liquid/d1.2-ultra` for `code` and `structure` modes and `typesafe/jev-1.14` for `--mode file` (override either with `--model`), using `OPENROUTER_API_KEY` in the environment, with bounded exponential backoff retries on transient HTTP `429`/`502`/`503`/`504` responses.
 
