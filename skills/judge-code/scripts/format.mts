@@ -11,6 +11,27 @@ function formatPct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+export function formatThreshold(value: number): string {
+  const fixed2 = value.toFixed(2);
+  if (Math.abs(Number(fixed2) - value) < 1e-9) return fixed2;
+  return String(Number(value.toFixed(4)));
+}
+
+function checkThreshold(result: JudgeResult, id: string, check?: Judgment): number | null {
+  return check?.pass_threshold ?? result.check_thresholds?.[id] ?? result.pass_threshold;
+}
+
+function hasCustomThresholds(result: JudgeResult, checkEntries: Array<[string, Judgment]>): boolean {
+  if (result.pass_threshold === null) return false;
+  if (result.check_thresholds && Object.values(result.check_thresholds).some((t) => t !== result.pass_threshold)) {
+    return true;
+  }
+  return checkEntries.some(([id, check]) => {
+    const threshold = checkThreshold(result, id, check);
+    return typeof threshold === 'number' && threshold !== result.pass_threshold;
+  });
+}
+
 function formatProb(value: number | null | undefined, threshold?: number | null): string {
   if (typeof value !== 'number') return 'n/a';
   const rounded = value.toFixed(2);
@@ -49,7 +70,14 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
   if (result.status === 'dry_run') {
     lines.push(`DRY RUN: ${result.file_count} file(s) prepared in ${formatElapsed(result.elapsed_ms)}`);
     const checks = Object.values(result.rubric_groups).flat();
-    lines.push(`Checks (${checks.length}): ${checks.join(', ')}`);
+    const checkLabels = checks.map((id) => {
+      const threshold = checkThreshold(result, id);
+      if (typeof threshold === 'number' && result.pass_threshold !== null && threshold !== result.pass_threshold) {
+        return `${id} (>=${formatThreshold(threshold)})`;
+      }
+      return id;
+    });
+    lines.push(`Checks (${checks.length}): ${checkLabels.join(', ')}`);
     if (result.skipped_module_checks?.length) {
       lines.push(`Skipped module checks (${result.skipped_module_checks.length}): ${result.skipped_module_checks.join(', ')}`);
     }
@@ -96,12 +124,17 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
 
     const checkEntries = Object.entries(quality.checks);
     const maxIdLen = Math.max(...checkEntries.map(([id]) => id.length), 10);
+    const showThresholds = hasCustomThresholds(result, checkEntries);
     lines.push('');
     lines.push('Checks:');
     for (const [id, check] of checkEntries) {
       const status = check.choice === 'pass' ? 'PASS' : 'FAIL';
       const ratio = `${check.files_passed ?? 0}/${check.files_total ?? result.file_count}`;
-      lines.push(`  ${status}  ${id.padEnd(maxIdLen)}  ${ratio.padStart(7)}  min P(pass)=${formatProb(check.min_pass_probability, result.pass_threshold)}`);
+      const threshold = checkThreshold(result, id, check);
+      const thresholdSuffix = showThresholds && typeof threshold === 'number'
+        ? ` (threshold ${formatThreshold(threshold)})`
+        : '';
+      lines.push(`  ${status}  ${id.padEnd(maxIdLen)}  ${ratio.padStart(7)}  min P(pass)=${formatProb(check.min_pass_probability, threshold)}${thresholdSuffix}`);
     }
 
     if (result.skipped_module_checks?.length) {
@@ -115,7 +148,14 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
       for (const entry of failingFiles) {
         const failed = failedChecksForFile(entry);
         const detail = failed.map(([id, check]) => {
-          if (typeof check.pass_probability === 'number') return `${id} (${formatProb(check.pass_probability, result.pass_threshold)})`;
+          if (typeof check.pass_probability === 'number') {
+            const threshold = checkThreshold(result, id, check);
+            const prob = formatProb(check.pass_probability, threshold);
+            if (typeof threshold === 'number' && result.pass_threshold !== null && threshold !== result.pass_threshold) {
+              return `${id} (${prob} < ${formatThreshold(threshold)})`;
+            }
+            return `${id} (${prob})`;
+          }
           return check.note ? `${id} (${check.model_choice ?? 'fail'}: ${check.note})` : `${id} (${check.model_choice ?? 'fail'})`;
         }).join(', ');
         lines.push(`  ${entry.file} (${failed.length} failed): ${detail}`);
@@ -125,13 +165,18 @@ export function formatSummary(result: JudgeResult, outDir: string): string {
     const checkEntries = Object.entries(quality.checks);
     const passedChecks = checkEntries.filter(([, c]) => c.choice === 'pass').length;
     const maxIdLen = Math.max(...checkEntries.map(([id]) => id.length), 10);
+    const showThresholds = hasCustomThresholds(result, checkEntries);
     lines.push(`Files: ${result.file_count} | Checks: ${passedChecks}/${checkEntries.length} passed (${formatPct(quality.pass_rate)})`);
     lines.push('');
     lines.push('Checks:');
     for (const [id, check] of checkEntries) {
       const status = check.choice === 'pass' ? 'PASS' : 'FAIL';
+      const threshold = checkThreshold(result, id, check);
+      const thresholdSuffix = showThresholds && typeof threshold === 'number'
+        ? ` (threshold ${formatThreshold(threshold)})`
+        : '';
       const detail = typeof check.pass_probability === 'number'
-        ? `P(pass)=${formatProb(check.pass_probability, result.pass_threshold)}`
+        ? `P(pass)=${formatProb(check.pass_probability, threshold)}${thresholdSuffix}`
         : `${check.model_choice ?? check.choice}${check.note ? ` — ${check.note}` : ''}`;
       lines.push(`  ${status}  ${id.padEnd(maxIdLen)}  ${detail}`);
     }

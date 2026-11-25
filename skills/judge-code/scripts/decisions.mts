@@ -1,12 +1,19 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { nonempty, object, type ChoiceQuestion, type JudgeMode, type ResolvedRubric } from './rubrics.mts';
+import {
+  PASS_THRESHOLD,
+  nonempty,
+  object,
+  type ChoiceQuestion,
+  type JudgeMode,
+  type ResolvedRubric,
+} from './rubrics.mts';
 import type { StructureManifest } from './structure.mts';
 
+export { PASS_THRESHOLD };
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const DEFAULT_DECISION_MODEL = 'liquid/d1.2-ultra';
 export const DEFAULT_FILE_MODE_DECISION_MODEL = 'typesafe/jev-1.14';
-export const PASS_THRESHOLD = 0.8;
 export const DEFAULT_OPENROUTER_CONCURRENCY = 16;
 export const DEFAULT_CLI_CONCURRENCY = 4;
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -35,6 +42,7 @@ export interface Judgment {
   model_choice?: 'pass' | 'borderline' | 'fail';
   pass_probability: number | null;
   confidence: number | null;
+  pass_threshold?: number;
   note?: string;
   files_passed?: number;
   files_total?: number;
@@ -77,6 +85,7 @@ export interface JudgeResult {
   excluded_checks?: string[];
   skipped_module_checks?: string[];
   pass_threshold: number | null;
+  check_thresholds?: Record<string, number>;
   quality: {
     pass_rate: number;
     all_files_pass_rate?: number;
@@ -146,9 +155,19 @@ export async function runWithConcurrency<T, R>(
   return results;
 }
 
+function overriddenThresholds(
+  thresholds: Record<string, number>,
+  defaultThreshold: number | null,
+): Record<string, number> | undefined {
+  if (defaultThreshold === null) return undefined;
+  const overrides = Object.entries(thresholds).filter(([, threshold]) => threshold !== defaultThreshold);
+  return overrides.length > 0 ? Object.fromEntries(overrides) : undefined;
+}
+
 export function aggregatePerFile(
   fileResults: FileJudgment[],
   questionIds: string[],
+  thresholds?: Record<string, number>,
 ): { pass_rate: number; all_files_pass_rate: number; checks: Record<string, Judgment> } {
   const totalFiles = fileResults.length;
   const checks: Record<string, Judgment> = {};
@@ -167,6 +186,7 @@ export function aggregatePerFile(
     const meanConf = hasConfidence
       ? perFile.reduce((sum, c) => sum + c.confidence!, 0) / totalFiles
       : null;
+    const threshold = thresholds?.[id];
     checks[id] = {
       choice: filesPassed === totalFiles ? 'pass' : 'fail',
       files_passed: filesPassed,
@@ -174,6 +194,7 @@ export function aggregatePerFile(
       pass_probability: meanProb,
       min_pass_probability: minProb,
       confidence: meanConf,
+      ...(threshold !== undefined && threshold !== PASS_THRESHOLD ? { pass_threshold: threshold } : {}),
     };
   }
 
@@ -214,6 +235,7 @@ export function prepareJudgeRun(
     questions: options.rubric.questions,
   };
   const body = saveJson(join(out, 'request.json'), request);
+  const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
 
   const result: JudgeResult = {
     status: options.dryRun ? 'dry_run' : 'scored',
@@ -226,6 +248,7 @@ export function prepareJudgeRun(
     rubric_groups: options.rubric.groups,
     ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
     pass_threshold: passThreshold,
+    ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: null,
   };
 
@@ -311,6 +334,7 @@ export async function runPerFileJudge(
   const errored = fileResults.filter((entry) => entry.status === 'error');
   const models = [...new Set(fileResults.map((entry) => entry.returned_model).filter((m): m is string => Boolean(m)))];
   const elapsedMs = Math.round(performance.now() - startMs);
+  const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
 
   const result: JudgeResult = {
     status: options.dryRun ? 'dry_run' : errored.length > 0 ? 'error' : 'scored',
@@ -328,8 +352,9 @@ export async function runPerFileJudge(
       ? { skipped_module_checks: options.rubric.skippedModuleChecks }
       : {}),
     pass_threshold: passThreshold,
+    ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: !options.dryRun && errored.length === 0
-      ? aggregatePerFile(fileResults, questionIds)
+      ? aggregatePerFile(fileResults, questionIds, passThreshold !== null ? options.rubric.thresholds : undefined)
       : null,
     file_results: fileResults,
     ...(errored.length > 0
@@ -461,7 +486,11 @@ function probability(value: unknown, label: string): number {
 }
 
 /** Validate every required answer before producing any quality scores. */
-export function readAnswers(raw: unknown, questions: Record<string, ChoiceQuestion>) {
+export function readAnswers(
+  raw: unknown,
+  questions: Record<string, ChoiceQuestion>,
+  thresholds?: Record<string, number>,
+) {
   const response = object(raw, 'OpenRouter response');
   const model = nonempty(response.model, 'Returned model');
   const answers = object(response.answers, 'answers');
@@ -478,11 +507,13 @@ export function readAnswers(raw: unknown, questions: Record<string, ChoiceQuesti
       || (answer.choice === 'pass' ? pass < fail : fail < pass)) {
       throw new Error(`Answer ${id} has inconsistent probabilities`);
     }
+    const threshold = thresholds?.[id] ?? PASS_THRESHOLD;
     return [id, {
-      choice: pass >= PASS_THRESHOLD ? 'pass' : 'fail',
+      choice: pass >= threshold ? 'pass' : 'fail',
       model_choice: answer.choice,
       pass_probability: pass,
       confidence: probability(answer.confidence, `${id}.confidence`),
+      ...(threshold !== PASS_THRESHOLD ? { pass_threshold: threshold } : {}),
     }];
   }));
   return { model, checks };
@@ -508,7 +539,7 @@ export async function runDecisionJudge(
       DEFAULT_OPENROUTER_CONCURRENCY,
       async (_request, body, fileDir) => {
         const { raw, retries } = await postDecisions(body, key, join(fileDir, 'response.txt'), transport, retry);
-        const judged = readAnswers(raw, options.rubric.questions);
+        const judged = readAnswers(raw, options.rubric.questions, options.rubric.thresholds);
         return { ...judged, retries };
       },
     );
@@ -519,7 +550,7 @@ export async function runDecisionJudge(
   if (!options.dryRun) {
     try {
       const { raw, retries } = await postDecisions(body, key, join(out, 'response.txt'), transport, retry);
-      const judged = readAnswers(raw, options.rubric.questions);
+      const judged = readAnswers(raw, options.rubric.questions, options.rubric.thresholds);
       if (retries > 0) result.retries = retries;
       result.returned_model = judged.model;
       result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
