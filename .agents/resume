@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Amp Orb post-wake / snapshot-restore hook: ensures ephemeral runtime state
+# needed for Harbor evals (`pnpm eval`) is ready (Docker daemon running and
+# /var/run/docker.sock accessible to the orb user).
+set -euo pipefail
+
+# Only applies to Linux orbs where Docker is installed.
+if [[ "$(uname -s)" != "Linux" ]] || ! command -v docker >/dev/null 2>&1; then
+  exit 0
+fi
+
+run_root() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "error: sudo is required to run: $*" >&2
+    return 1
+  fi
+}
+
+# Start the Docker daemon when systemd and docker.service are present and inactive.
+started_docker=0
+if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+  if systemctl cat docker.service >/dev/null 2>&1 && ! systemctl is-active --quiet docker; then
+    run_root systemctl start docker
+    started_docker=1
+  fi
+fi
+
+# Wait briefly for the Docker socket if the daemon just started.
+DOCKER_SOCK="/var/run/docker.sock"
+if [[ "$started_docker" -eq 1 ]] && [[ ! -S "$DOCKER_SOCK" ]]; then
+  for _ in $(seq 1 25); do
+    [[ -S "$DOCKER_SOCK" ]] && break
+    sleep 0.2
+  done
+fi
+
+# Ensure the orb user can talk to the Docker daemon without sudo.
+if [[ -S "$DOCKER_SOCK" ]]; then
+  sock_mode="$(stat -L -c '%a' "$DOCKER_SOCK" 2>/dev/null || true)"
+  if [[ "$sock_mode" != "666" ]]; then
+    run_root chmod 666 "$DOCKER_SOCK"
+  fi
+fi
