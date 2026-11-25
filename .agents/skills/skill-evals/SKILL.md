@@ -1,6 +1,6 @@
 ---
 name: skill-evals
-description: "Repository-internal guidance for designing, calibrating, running, and maintaining skill evaluations under evals/. Use when adding or editing eval tasks, task instructions, shared rubrics, judge tooling, or HTML reports, or when iterating on a skill using eval results."
+description: "Repository-internal guidance for running, designing, and maintaining skill evaluations under evals/. Use when running an eval, judging saved runs, editing tasks, rubrics, judge tooling, or reports, or iterating on a skill using eval results."
 metadata:
   internal: true
 ---
@@ -15,6 +15,13 @@ Keep four layers strictly separate:
 - **Skill (`skills/<name>/`):** general engineering guidance under test.
 - **Deterministic verifier (`reward.json`):** black-box correctness and required output compliance.
 - **Qualitative rubric (`rubrics/*.json`, `tests/judge.json`):** craft, design, and reasoning quality scored host-side.
+
+## Running evals: choose the harness for the environment
+
+- **In an Amp orb (`AMP_ORB=1`), use the Amp harness by default.** Follow the [Amp-in-Harbor commands](../../../evals/code-change/README.md#amp-in-harbor), which use `evals/code-change/lib/amp_agent.py`. Amp runs locally inside the task container; do not start another orb. `pnpm eval canary` and `pnpm eval run` still select Codex, so use the documented direct Harbor commands for Amp.
+- **Outside an Amp orb, use the existing Codex runner** (`pnpm eval canary` / `pnpm eval run`). An explicit user choice of harness overrides either environment default. If the selected harness lacks credentials, follow its documented authentication setup rather than silently switching harnesses. For Amp, the host secret is `AMP_EVAL_API_KEY`; the adapter maps it to `AMP_API_KEY` only at runtime inside the container.
+- **Verify the selected harness.** Run its skill-loading canary before the requested task or batch. Read the verifier reward and exception fields in saved results; Harbor can exit zero with an errored trial.
+- **Keep comparisons within one harness.** Use the same harness, model, effort, and service tier for baseline and skill conditions. Record the harness with the results. For Amp runs, judge the explicit saved directory with `pnpm eval judge --run <directory>`; automatic latest-run discovery is still Codex-only.
 
 ## 1. Task design
 

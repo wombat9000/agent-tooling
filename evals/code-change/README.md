@@ -5,7 +5,7 @@ code reviews and greenfield implementations. The tasks are plain folders: a fixt
 repository, an instruction, and a deterministic verifier. They depend on no harness.
 [Harbor](https://github.com/harbor-framework/harbor) runs them.
 
-Codex is the only harness used for now. See [Adding a harness](#adding-a-harness).
+Codex is the default harness. An experimental [Amp harness](#amp-in-harbor) is also available.
 
 ## Quick start
 
@@ -230,6 +230,47 @@ rerun after each change.
 
 The Docker smoke checks require every oracle trial to score 1 and every nop trial to score 0.
 These checks confirm task loading and verification in Docker. They do not test live Codex authentication.
+
+### Amp in Harbor
+
+The custom adapter in `lib/amp_agent.py` runs Amp CLI inside the task container using
+`--executor local`, not in another orb. Requires Harbor 0.27+ and `AMP_EVAL_API_KEY` set to an
+Amp access token from [Settings → Security](https://ampcode.com/settings/security).
+Amp reserves `AMP_API_KEY` in remote orbs; the adapter maps `AMP_EVAL_API_KEY` to the
+container's `AMP_API_KEY` only for the agent process at runtime. Do not put the credential
+in the Dockerfile, command-line arguments, or saved Harbor configuration. This adapter does not
+forward the parent orb's short-lived thread identity. Inference uses the token owner's Amp
+model routing and billing.
+
+Run from the repository root:
+
+```bash
+# Validate the task and verifier before spending inference.
+pnpm eval check
+pnpm eval smoke --task implement-mars-rover
+
+# First verify skill discovery with the canary, then run one Mars rover trial.
+PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  harbor run -p evals/code-change/tasks/canary -a amp_agent:AmpAgent \
+  -m openai/gpt-6.1-terra --ak reasoning_effort=high -n 1 -k 1 \
+  --skill skills/code-change --artifact /output/REVIEW.md \
+  -o eval-results/harbor --job-name amp-canary
+
+PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  harbor run -p evals/code-change/tasks/implement-mars-rover -a amp_agent:AmpAgent \
+  -m openai/gpt-6.1-terra --ak reasoning_effort=high -n 1 -k 1 \
+  --skill skills/code-change -o eval-results/harbor --job-name amp-mars-rover
+```
+
+Use a fresh job name for each run. Add `--install-only` to check container installation and
+skill registration without credentials or inference. Amp is installed with npm at setup time;
+use `--ak version=<npm-version>` to pin its version. Supplied skills are copied into Amp's
+user skill directory without changing the task prompt. The adapter enables automatic tool
+approval inside the disposable container and saves native stream logs under `agent/`.
+It does not yet export Harbor's normalized trajectory or token/cost metrics. Keep Amp results
+separate from Codex results; `pnpm eval run` and automatic latest-run discovery remain Codex-only.
+Account-level Amp skills and plugins can also affect results; use a dedicated eval account if
+you need isolation from personal configuration.
 
 ## OpenRouter quality scoring
 
