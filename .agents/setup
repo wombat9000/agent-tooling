@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Amp Orb snapshot setup: installs persistent dependencies needed for Harbor
+# evals (`pnpm eval`) and repository tooling, without pre-building heavy Harbor
+# task Docker images so non-eval threads keep fast orb provisioning.
+# Ephemeral runtime state (starting dockerd, socket permissions) lives in
+# .agents/resume.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+run_root() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "error: sudo is required to run: $*" >&2
+    return 1
+  fi
+}
+
+ensure_local_bin_in_rc() {
+  local rc_file="$1"
+  if [[ -f "$rc_file" ]] && grep -qsF '.local/bin' "$rc_file"; then
+    return 0
+  fi
+  cat >>"$rc_file" <<'EOF'
+
+# Ensure user-installed CLI tools (such as uv-managed harbor) are on PATH.
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+EOF
+}
+
+IS_LINUX=0
+if [[ "$(uname -s)" == "Linux" ]]; then
+  IS_LINUX=1
+fi
+
+# 1. Install Docker CLI plugins required by Harbor (`docker compose` / `docker buildx`)
+#    on Debian/Ubuntu Linux orbs.
+if [[ "$IS_LINUX" -eq 1 ]] && command -v docker >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+  missing_docker_pkgs=()
+  if ! docker compose version >/dev/null 2>&1; then
+    missing_docker_pkgs+=(docker-compose-plugin)
+  fi
+  if ! docker buildx version >/dev/null 2>&1; then
+    missing_docker_pkgs+=(docker-buildx-plugin)
+  fi
+
+  if (( ${#missing_docker_pkgs[@]} > 0 )); then
+    run_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_docker_pkgs[@]}"
+  fi
+fi
+
+# Add the orb user to the docker group when present (new login sessions inherit
+# this; .agents/resume also ensures /var/run/docker.sock permissions on wake).
+if [[ "$IS_LINUX" -eq 1 ]] && [[ "${EUID:-$(id -u)}" -ne 0 ]] \
+  && command -v getent >/dev/null 2>&1 && command -v usermod >/dev/null 2>&1 \
+  && getent group docker >/dev/null 2>&1; then
+  current_user="$(id -un)"
+  case " $(id -nG "$current_user") " in
+    *" docker "*) ;;
+    *) run_root usermod -aG docker "$current_user" ;;
+  esac
+fi
+
+# 2. Install Harbor via uv (`~/.local/bin/harbor`) and ensure it is discoverable on PATH.
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
+if ! command -v harbor >/dev/null 2>&1; then
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "error: uv is required to install harbor" >&2
+    exit 1
+  fi
+  uv tool install harbor
+fi
+
+if [[ "$IS_LINUX" -eq 1 ]]; then
+  ensure_local_bin_in_rc "$HOME/.profile"
+  ensure_local_bin_in_rc "$HOME/.bashrc"
+
+  # Also expose ~/.local/bin/harbor in /usr/local/bin when absent so non-login,
+  # non-interactive shells (which skip ~/.profile and ~/.bashrc) still find it.
+  if [[ -x "$HOME/.local/bin/harbor" ]] && [[ -d /usr/local/bin ]] \
+    && [[ ! -e /usr/local/bin/harbor ]] && [[ ! -L /usr/local/bin/harbor ]]; then
+    run_root ln -s "$HOME/.local/bin/harbor" /usr/local/bin/harbor
+  fi
+fi
+
+# 3. Install Node/pnpm workspace dependencies.
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "error: pnpm is required" >&2
+  exit 1
+fi
+pnpm install --frozen-lockfile
