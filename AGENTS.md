@@ -11,6 +11,10 @@ Top-level `rubrics/` is the single authoritative source for all shared rubrics i
 - **Never edit `skills/judge-code/rubrics/*.json` directly.** Always edit the authoritative files under `rubrics/*.json` and run `pnpm sync:rubrics` to mirror the shipped subset (`target: "production_code"` and `target: "project_structure"`) into `skills/judge-code/rubrics/`. Keeping that mirrored copy ensures `skills/judge-code/` stays self-contained when installed via the Skills CLI.
 - **Offline tests (`pnpm test`):** runs all repository unit tests (including `judge-code`, `repo-setup`, `evals/code-change`, the SHA-256 parity check between `rubrics/` and `skills/judge-code/rubrics/`, and `rubrics/test-rubrics.mts --dry-run`) completely offline with no API key required.
 - **Live rubric fixture tests (`pnpm test:rubrics`):** evaluates curated good/bad code fixtures under `rubrics/fixtures/` against `judge-code`'s scoring logic (live via OpenRouter using `OPENROUTER_API_KEY`, or `--backend codex|claude`, or `--dry-run` offline). Supports `--repeats N`, `--fixture <id>`, `--rubric <slug>`, and `--model <id>`.
+- **Local rubric scanner & offline dashboard (`pnpm rubrics:scan`, `pnpm rubrics:dashboard`):**
+  - `pnpm rubrics:scan --config <private-config.json> [--dry-run] [--force] [--repo <name>] [--skip-fixtures] [--no-dashboard]` scans configured local repositories against authoritative `rubrics/*.json`, skips unchanged `(repo, commit, mode, sources, exclude, rubric_hashes, model)` runs, saves sanitized score-only snapshots (`0600`, no source code) to `<dataDir>/runs/`, optionally runs `rubrics/test-rubrics.mts`, and rebuilds the HTML dashboard.
+  - `pnpm rubrics:dashboard --data <dir> [--out <file.html>]` builds a self-contained, zero-dependency offline HTML dashboard (trends, rubric-change markers, cross-repo check heatmap, hotspots, installed `judge-code` freshness, and fixture health) with no network calls.
+  - Keep scan configs, snapshots, and generated HTML dashboards in a private directory outside this repository; never commit private repo names, paths, filenames, or scores.
 
 ## Skill versioning and releases
 

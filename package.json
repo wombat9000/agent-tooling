@@ -6,8 +6,10 @@
   },
   "scripts": {
     "eval": "node evals/code-change/cli.mts",
+    "rubrics:dashboard": "node rubrics/dashboard.mts",
+    "rubrics:scan": "node rubrics/scan.mts",
     "sync:rubrics": "node rubrics/sync.mts",
-    "test": "node --test rubrics/rubrics.test.mts skills/judge-code/tests/judge-code.test.mts skills/repo-setup/tests/check-directory-size.test.mjs evals/code-change/lib/selfcheck.mts evals/code-change/lib/judge_review.test.mts evals/code-change/lib/judge_code.test.mts evals/code-change/lib/run_reports.test.mts evals/code-change/lib/html_report.test.mts evals/code-change/lib/scorecard.test.mts evals/code-change/cli.test.mts",
+    "test": "node --test rubrics/rubrics.test.mts rubrics/dashboard.test.mts skills/judge-code/tests/judge-code.test.mts skills/repo-setup/tests/check-directory-size.test.mjs evals/code-change/lib/selfcheck.mts evals/code-change/lib/judge_review.test.mts evals/code-change/lib/judge_code.test.mts evals/code-change/lib/run_reports.test.mts evals/code-change/lib/html_report.test.mts evals/code-change/lib/scorecard.test.mts evals/code-change/cli.test.mts",
     "test:rubrics": "node rubrics/test-rubrics.mts"
   }
 }
