@@ -10,9 +10,9 @@ import {
   type JudgeBackend,
   type JudgeResult,
 } from './decisions.mts';
-import { formatSummary } from './format.mts';
+import { formatSummary, formatThreshold } from './format.mts';
 import { readInputs, readPerFileInputs } from './inputs.mts';
-import { bundledRubrics, resolveRubrics, type JudgeMode } from './rubrics.mts';
+import { PASS_THRESHOLD, bundledRubrics, resolveRubrics, type JudgeMode } from './rubrics.mts';
 import { readStructureInputs } from './structure.mts';
 
 type OutputFormat = 'json' | 'summary';
@@ -116,7 +116,11 @@ async function main(): Promise<void> {
   if (values['list-rubrics']) {
     for (const rubric of bundledRubrics()) {
       const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
-      const checks = rubric.checks.map((id) => `${id} [${rubric.scopes[id]}]`).join(', ');
+      const checks = rubric.checks.map((id) => {
+        const threshold = rubric.thresholds[id];
+        const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
+        return `${id} [${rubric.scopes[id]}${thresholdNote}]`;
+      }).join(', ');
       console.log(`${rubric.slug} (${rubric.id})${tag}: ${checks}`);
     }
     return;

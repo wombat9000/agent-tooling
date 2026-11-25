@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const RUBRICS_DIR = fileURLToPath(new URL('../rubrics', import.meta.url));
 const CONVENTIONS_CHECK_ID = 'follows_repo_conventions';
+export const PASS_THRESHOLD = 0.8;
 
 export type RubricTarget = 'production_code' | 'project_structure';
 export type JudgeMode = 'code' | 'file' | 'structure';
@@ -21,6 +22,7 @@ export interface BundledRubricSummary {
   target: RubricTarget;
   checks: string[];
   scopes: Record<string, CheckScope>;
+  thresholds: Record<string, number>;
 }
 
 export interface ResolvedRubric {
@@ -28,6 +30,7 @@ export interface ResolvedRubric {
   target: RubricTarget;
   questions: Record<string, ChoiceQuestion>;
   scopes: Record<string, CheckScope>;
+  thresholds: Record<string, number>;
   groups: Record<string, string[]>;
   excluded: string[];
   skippedModuleChecks: string[];
@@ -48,6 +51,7 @@ interface ParsedRubricFile {
   target: RubricTarget;
   questions: Record<string, ChoiceQuestion>;
   scopes: Record<string, CheckScope>;
+  thresholds: Record<string, number>;
 }
 
 export function object(value: unknown, label: string): Record<string, unknown> {
@@ -105,6 +109,14 @@ function parseQuestionScope(value: unknown, checkId: string, target: RubricTarge
   throw new Error(`Invalid scope for ${checkId}: ${String(value)}. Expected "file" or "module".`);
 }
 
+export function parsePassThreshold(value: unknown, checkId: string): number {
+  if (value === undefined) return PASS_THRESHOLD;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`Invalid pass_threshold for ${checkId}: ${String(value)}. Expected a finite number in (0, 1].`);
+  }
+  return value;
+}
+
 function parseRubricJson(path: string, group: string, fallbackTarget: RubricTarget): ParsedRubricFile {
   const raw = object(JSON.parse(readFileSync(path, 'utf8')), `Rubric ${group}`);
   const id = nonempty(raw.rubric, `${group}.rubric`);
@@ -113,11 +125,13 @@ function parseRubricJson(path: string, group: string, fallbackTarget: RubricTarg
   if (!entries.length) throw new Error(`Rubric ${id} must contain at least one question`);
   const questions: Record<string, ChoiceQuestion> = {};
   const scopes: Record<string, CheckScope> = {};
+  const thresholds: Record<string, number> = {};
   for (const [checkId, value] of entries) {
     if (!/^[a-z][a-z0-9_]*$/.test(checkId)) throw new Error(`Invalid question ID: ${checkId}`);
     const question = object(value, checkId);
     if (question.type !== 'choice') throw new Error(`${checkId} must use type choice`);
     const scope = parseQuestionScope(question.scope, checkId, target);
+    const threshold = parsePassThreshold(question.pass_threshold, checkId);
     const criteria = object(question.criteria, `${checkId}.criteria`);
     if (Object.keys(criteria).sort().join(',') !== 'fail,pass') {
       throw new Error(`${checkId} must define exactly pass and fail criteria`);
@@ -131,8 +145,9 @@ function parseRubricJson(path: string, group: string, fallbackTarget: RubricTarg
       },
     };
     scopes[checkId] = scope;
+    thresholds[checkId] = threshold;
   }
-  return { id, group, target, questions, scopes };
+  return { id, group, target, questions, scopes, thresholds };
 }
 
 function bundledSlugs(): string[] {
@@ -172,6 +187,7 @@ export function bundledRubrics(): BundledRubricSummary[] {
       target: parsed.target,
       checks: Object.keys(parsed.questions),
       scopes: parsed.scopes,
+      thresholds: parsed.thresholds,
     };
   });
 }
@@ -241,6 +257,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const seenRubricIds = new Set<string>();
   const questions: Record<string, ChoiceQuestion> = {};
   const scopes: Record<string, CheckScope> = {};
+  const thresholds: Record<string, number> = {};
   const questionOwner = new Map<string, string>();
   const groups: Record<string, string[]> = {};
 
@@ -263,6 +280,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         instructions: rubricRules + question.instructions,
       };
       scopes[id] = parsed.scopes[id];
+      thresholds[id] = parsed.thresholds[id];
       groupIds.push(id);
     }
     groups[groupName] = groupIds;
@@ -284,6 +302,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
       },
     };
     scopes[CONVENTIONS_CHECK_ID] = resolvedTarget === 'project_structure' ? 'structure' : 'file';
+    thresholds[CONVENTIONS_CHECK_ID] = PASS_THRESHOLD;
     groups.conventions = [CONVENTIONS_CHECK_ID];
   }
 
@@ -294,6 +313,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     }
     delete questions[id];
     delete scopes[id];
+    delete thresholds[id];
   }
 
   const skippedModuleChecks: string[] = [];
@@ -303,6 +323,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         skippedModuleChecks.push(id);
         delete questions[id];
         delete scopes[id];
+        delete thresholds[id];
       }
     }
   }
@@ -335,6 +356,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     target: resolvedTarget,
     questions,
     scopes,
+    thresholds,
     groups,
     excluded,
     skippedModuleChecks,

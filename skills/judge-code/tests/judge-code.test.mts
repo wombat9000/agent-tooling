@@ -1261,3 +1261,571 @@ test('OpenRouter default model is typesafe/jev-1.14 in file mode and liquid/d1.2
     assert.match(rejected.stderr, /only supported with --backend openrouter/);
   }
 });
+
+test('per-criterion pass_threshold is validated, defaulted to 0.8, exposed on ResolvedRubric, and stripped from request payloads', async (t) => {
+  const { run, root, project } = setup(t);
+  const { PASS_THRESHOLD, parsePassThreshold, resolveRubrics } = await import('../scripts/rubrics.mts');
+
+  // Bundled rubrics and repo conventions default every check to PASS_THRESHOLD (0.8).
+  const bundled = resolveRubrics({
+    rubrics: ['fowler-smells', 'readability'],
+    exclude: ['no_duplicated_code'],
+    hasRequirements: false,
+    hasConventions: true,
+  });
+  assert.equal(PASS_THRESHOLD, 0.8);
+  assert.equal(bundled.thresholds.no_long_functions, 0.8);
+  assert.equal(bundled.thresholds.direct_readability, 0.8);
+  assert.equal(bundled.thresholds.follows_repo_conventions, 0.8);
+  assert.equal('no_duplicated_code' in bundled.thresholds, false);
+
+  // Custom production_code rubric supports optional pass_threshold overrides and defaults omitted values to 0.8.
+  const customProd = join(project, 'custom-thresholds.json');
+  writeFileSync(customProd, JSON.stringify({
+    rubric: 'custom-thresholds-v1',
+    questions: {
+      lenient_check: {
+        type: 'choice',
+        scope: 'file',
+        pass_threshold: 0.7,
+        instructions: 'Lenient check?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      default_check: {
+        type: 'choice',
+        scope: 'file',
+        instructions: 'Default check?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      strict_module_check: {
+        type: 'choice',
+        scope: 'module',
+        pass_threshold: 1,
+        instructions: 'Strict module check?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      explicit_default_check: {
+        type: 'choice',
+        scope: 'file',
+        pass_threshold: 0.8,
+        instructions: 'Explicit default check?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+    },
+  }));
+
+  const resolvedCode = resolveRubrics({
+    mode: 'code',
+    rubrics: [customProd],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  assert.deepEqual(resolvedCode.thresholds, {
+    lenient_check: 0.7,
+    default_check: 0.8,
+    strict_module_check: 1,
+    explicit_default_check: 0.8,
+  });
+  for (const question of Object.values(resolvedCode.questions)) {
+    assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
+  }
+
+  // File mode drops module-scoped checks from thresholds too.
+  const resolvedFile = resolveRubrics({
+    mode: 'file',
+    rubrics: [customProd],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  assert.deepEqual(resolvedFile.thresholds, {
+    lenient_check: 0.7,
+    default_check: 0.8,
+    explicit_default_check: 0.8,
+  });
+  assert.equal('strict_module_check' in resolvedFile.thresholds, false);
+
+  // Dry-run request.json never leaks pass_threshold in code or file modes, while result.json records overrides.
+  const codeOut = join(root, 'threshold-strip-code');
+  const codeProc = run('preview', ['--source', 'booking', '--rubric', customProd, '--out', codeOut, '--dry-run']);
+  assert.equal(codeProc.status, 0, codeProc.stderr);
+  const codeRes = JSON.parse(codeProc.stdout);
+  assert.equal(codeRes.pass_threshold, 0.8);
+  assert.deepEqual(codeRes.check_thresholds, { lenient_check: 0.7, strict_module_check: 1 });
+  const codeReq = JSON.parse(readFileSync(join(codeOut, 'request.json'), 'utf8'));
+  for (const question of Object.values(codeReq.questions) as Array<Record<string, unknown>>) {
+    assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
+  }
+
+  const fileOut = join(root, 'threshold-strip-file');
+  const fileProc = run('preview', ['--source', 'booking', '--mode', 'file', '--rubric', customProd, '--out', fileOut, '--dry-run']);
+  assert.equal(fileProc.status, 0, fileProc.stderr);
+  const fileRes = JSON.parse(fileProc.stdout);
+  assert.equal(fileRes.pass_threshold, 0.8);
+  assert.deepEqual(fileRes.check_thresholds, { lenient_check: 0.7 });
+  const perFileReq = JSON.parse(readFileSync(join(fileOut, fileRes.file_results[0].result_dir, 'request.json'), 'utf8'));
+  for (const question of Object.values(perFileReq.questions) as Array<Record<string, unknown>>) {
+    assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
+  }
+
+  // Excluding the only overridden check omits check_thresholds from result.json.
+  const noOverrideOut = join(root, 'threshold-excluded');
+  const noOverrideProc = run('preview', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', customProd,
+    '--exclude', 'lenient_check',
+    '--out', noOverrideOut,
+    '--dry-run',
+  ]);
+  assert.equal(noOverrideProc.status, 0, noOverrideProc.stderr);
+  const noOverrideRes = JSON.parse(noOverrideProc.stdout);
+  assert.equal(noOverrideRes.pass_threshold, 0.8);
+  assert.equal('check_thresholds' in noOverrideRes, false);
+
+  // Structure rubrics also support optional pass_threshold and strip it from request.json.
+  const customStruct = join(project, 'custom-struct-thresholds.json');
+  writeFileSync(customStruct, JSON.stringify({
+    rubric: 'custom-struct-thresholds-v1',
+    target: 'project_structure',
+    questions: {
+      struct_lenient: {
+        type: 'choice',
+        pass_threshold: 0.65,
+        instructions: 'Lenient structure check?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      struct_default: {
+        type: 'choice',
+        instructions: 'Default structure check?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+    },
+  }));
+  const structOut = join(root, 'threshold-strip-struct');
+  const structProc = run('preview', ['--source', 'booking', '--rubric', customStruct, '--out', structOut, '--dry-run']);
+  assert.equal(structProc.status, 0, structProc.stderr);
+  const structRes = JSON.parse(structProc.stdout);
+  assert.equal(structRes.mode, 'structure');
+  assert.equal(structRes.pass_threshold, 0.8);
+  assert.deepEqual(structRes.check_thresholds, { struct_lenient: 0.65 });
+  const structReq = JSON.parse(readFileSync(join(structOut, 'request.json'), 'utf8'));
+  for (const question of Object.values(structReq.questions) as Array<Record<string, unknown>>) {
+    assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
+  }
+
+  // Invalid pass_threshold values (0, < 0, > 1, non-numbers, NaN, Infinity) are rejected.
+  for (const badThreshold of [0, -0.1, -1, 1.01, 2, '0.7', null, true, {}, []]) {
+    const badPath = join(project, `bad-threshold-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(badPath, JSON.stringify({
+      rubric: 'bad-threshold-v1',
+      questions: {
+        bad_check: {
+          type: 'choice',
+          pass_threshold: badThreshold,
+          instructions: 'Bad?',
+          criteria: { pass: 'Yes', fail: 'No' },
+        },
+      },
+    }));
+    assert.throws(
+      () => resolveRubrics({ rubrics: [badPath], hasRequirements: false, hasConventions: false }),
+      /Invalid pass_threshold for bad_check/,
+    );
+  }
+  for (const nonFinite of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.throws(() => parsePassThreshold(nonFinite, 'bad_check'), /Invalid pass_threshold for bad_check/);
+  }
+  assert.equal(parsePassThreshold(undefined, 'ok_check'), 0.8);
+  assert.equal(parsePassThreshold(0.001, 'ok_check'), 0.001);
+  assert.equal(parsePassThreshold(1, 'ok_check'), 1);
+});
+
+test('OpenRouter scoring applies mixed per-criterion thresholds in code, file, and structure modes while CLI backends stay unchanged', async (t) => {
+  const { run, root, project } = setup(t);
+  const { runDecisionJudge } = await import('../scripts/decisions.mts');
+  const { resolveRubrics } = await import('../scripts/rubrics.mts');
+  const { readStructureInputs } = await import('../scripts/structure.mts');
+
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'unit-test-key';
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  });
+
+  const mixedRubricPath = join(project, 'mixed-thresholds.json');
+  writeFileSync(mixedRubricPath, JSON.stringify({
+    rubric: 'mixed-thresholds-v1',
+    questions: {
+      lenient_check: {
+        type: 'choice',
+        scope: 'file',
+        pass_threshold: 0.7,
+        instructions: 'Lenient?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      default_check: {
+        type: 'choice',
+        scope: 'file',
+        instructions: 'Default?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      strict_check: {
+        type: 'choice',
+        scope: 'file',
+        pass_threshold: 0.9,
+        instructions: 'Strict?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+    },
+  }));
+
+  const makeAnswer = (passProb: number) => ({
+    type: 'choice',
+    choice: passProb >= 0.5 ? 'pass' : 'fail',
+    probabilities: { pass: passProb, fail: Number((1 - passProb).toFixed(4)) },
+    confidence: Number(Math.abs(2 * passProb - 1).toFixed(4)),
+  });
+
+  // Code mode: same P(pass) = 0.72 passes 0.70 check and fails 0.80 check; 0.85 fails 0.90 check.
+  const codeRubric = resolveRubrics({
+    mode: 'code',
+    rubrics: [mixedRubricPath],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  const codeOut = join(root, 'mixed-code');
+  const codeResult = await runDecisionJudge(
+    {
+      mode: 'code',
+      files: { 'a.ts': 'export const a = 1;\n' },
+      rubric: codeRubric,
+      model: 'liquid/d1.2-ultra',
+      out: codeOut,
+    },
+    async (_url, init) => {
+      const payload = JSON.parse(String(init?.body));
+      for (const question of Object.values(payload.questions) as Array<Record<string, unknown>>) {
+        assert.equal('pass_threshold' in question, false);
+      }
+      return Response.json({
+        model: 'mock-code',
+        answers: {
+          lenient_check: makeAnswer(0.72),
+          default_check: makeAnswer(0.72),
+          strict_check: makeAnswer(0.85),
+        },
+      });
+    },
+  );
+  assert.equal(codeResult.status, 'scored');
+  assert.equal(codeResult.pass_threshold, 0.8);
+  assert.deepEqual(codeResult.check_thresholds, { lenient_check: 0.7, strict_check: 0.9 });
+  assert.equal(codeResult.quality!.checks.lenient_check.choice, 'pass');
+  assert.equal(codeResult.quality!.checks.lenient_check.pass_threshold, 0.7);
+  assert.equal(codeResult.quality!.checks.default_check.choice, 'fail');
+  assert.equal('pass_threshold' in codeResult.quality!.checks.default_check, false);
+  assert.equal(codeResult.quality!.checks.strict_check.choice, 'fail');
+  assert.equal(codeResult.quality!.checks.strict_check.pass_threshold, 0.9);
+  assert.ok(Math.abs(codeResult.quality!.pass_rate - (1 / 3)) < 1e-9);
+
+  // File mode: per-file choices and aggregates honor each check's threshold.
+  const fileRubric = resolveRubrics({
+    mode: 'file',
+    rubrics: [mixedRubricPath],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  const fileOut = join(root, 'mixed-file');
+  const fileResult = await runDecisionJudge(
+    {
+      mode: 'file',
+      files: {
+        'a.ts': 'export const a = 1;\n',
+        'b.ts': 'export const b = 2;\n',
+      },
+      rubric: fileRubric,
+      model: 'typesafe/jev-1.14',
+      concurrency: 2,
+      out: fileOut,
+    },
+    async (_url, init) => {
+      const payload = JSON.parse(String(init?.body));
+      for (const question of Object.values(payload.questions) as Array<Record<string, unknown>>) {
+        assert.equal('pass_threshold' in question, false);
+      }
+      const file = Object.keys(payload.state.production_files)[0];
+      if (file === 'a.ts') {
+        return Response.json({
+          model: 'mock-file',
+          answers: {
+            lenient_check: makeAnswer(0.72), // >= 0.70 -> pass
+            default_check: makeAnswer(0.72), // < 0.80 -> fail
+            strict_check: makeAnswer(0.95), // >= 0.90 -> pass
+          },
+        });
+      }
+      return Response.json({
+        model: 'mock-file',
+        answers: {
+          lenient_check: makeAnswer(0.7), // exact threshold -> pass
+          default_check: makeAnswer(0.85), // >= 0.80 -> pass
+          strict_check: makeAnswer(0.85), // < 0.90 -> fail
+        },
+      });
+    },
+  );
+  assert.equal(fileResult.status, 'scored');
+  assert.equal(fileResult.pass_threshold, 0.8);
+  assert.deepEqual(fileResult.check_thresholds, { lenient_check: 0.7, strict_check: 0.9 });
+  assert.equal(fileResult.quality!.checks.lenient_check.choice, 'pass');
+  assert.equal(fileResult.quality!.checks.lenient_check.files_passed, 2);
+  assert.equal(fileResult.quality!.checks.lenient_check.pass_threshold, 0.7);
+  assert.equal(fileResult.quality!.checks.default_check.choice, 'fail');
+  assert.equal(fileResult.quality!.checks.default_check.files_passed, 1);
+  assert.equal('pass_threshold' in fileResult.quality!.checks.default_check, false);
+  assert.equal(fileResult.quality!.checks.strict_check.choice, 'fail');
+  assert.equal(fileResult.quality!.checks.strict_check.files_passed, 1);
+  assert.equal(fileResult.quality!.checks.strict_check.pass_threshold, 0.9);
+  assert.equal(fileResult.file_results![0].checks!.lenient_check.choice, 'pass');
+  assert.equal(fileResult.file_results![0].checks!.lenient_check.pass_threshold, 0.7);
+  assert.equal(fileResult.file_results![0].checks!.default_check.choice, 'fail');
+  assert.equal(fileResult.file_results![1].checks!.lenient_check.choice, 'pass');
+  assert.equal(fileResult.file_results![1].checks!.strict_check.choice, 'fail');
+  assert.equal(fileResult.file_results![1].checks!.strict_check.pass_threshold, 0.9);
+
+  // Structure mode: per-criterion threshold is also applied in structure scoring.
+  const structRubricPath = join(project, 'mixed-struct.json');
+  writeFileSync(structRubricPath, JSON.stringify({
+    rubric: 'mixed-struct-v1',
+    target: 'project_structure',
+    questions: {
+      struct_lenient: {
+        type: 'choice',
+        pass_threshold: 0.7,
+        instructions: 'Struct lenient?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+      struct_default: {
+        type: 'choice',
+        instructions: 'Struct default?',
+        criteria: { pass: 'Yes', fail: 'No' },
+      },
+    },
+  }));
+  const structRubric = resolveRubrics({
+    mode: 'structure',
+    rubrics: [structRubricPath],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  const structInputs = readStructureInputs({
+    source: join(project, 'booking'),
+    out: join(root, 'mixed-struct'),
+  });
+  const structResult = await runDecisionJudge(
+    {
+      mode: 'structure',
+      structure: structInputs.manifest,
+      rubric: structRubric,
+      model: 'liquid/d1.2-ultra',
+      out: structInputs.out,
+    },
+    async () => Response.json({
+      model: 'mock-struct',
+      answers: {
+        struct_lenient: makeAnswer(0.72),
+        struct_default: makeAnswer(0.72),
+      },
+    }),
+  );
+  assert.equal(structResult.status, 'scored');
+  assert.equal(structResult.mode, 'structure');
+  assert.deepEqual(structResult.check_thresholds, { struct_lenient: 0.7 });
+  assert.equal(structResult.quality!.checks.struct_lenient.choice, 'pass');
+  assert.equal(structResult.quality!.checks.struct_lenient.pass_threshold, 0.7);
+  assert.equal(structResult.quality!.checks.struct_default.choice, 'fail');
+
+  // CLI backend ignores per-criterion probability thresholds and keeps pass/borderline/fail unchanged.
+  const fakeBin = join(root, 'fake-bin-thresholds');
+  mkdirSync(fakeBin, { recursive: true });
+  const codexStub = join(fakeBin, 'codex');
+  writeFileSync(codexStub, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const outIdx = args.indexOf('-o');
+const schemaIdx = args.indexOf('--output-schema');
+const schema = JSON.parse(fs.readFileSync(args[schemaIdx + 1], 'utf8'));
+const ids = schema.properties.checks.items.properties.id.enum;
+fs.writeFileSync(args[outIdx + 1], JSON.stringify({
+  checks: ids.map((id) => ({
+    id,
+    note: 'CLI check.',
+    choice: id === 'lenient_check' ? 'borderline' : 'pass',
+  })),
+}));
+`);
+  chmodSync(codexStub, 0o755);
+  const cliProc = run('preview', [
+    '--source', 'booking',
+    '--rubric', mixedRubricPath,
+    '--backend', 'codex',
+    '--out', join(root, 'mixed-codex'),
+  ], { PATH: `${fakeBin}:${process.env.PATH ?? ''}` });
+  assert.equal(cliProc.status, 0, cliProc.stderr);
+  const cliRes = JSON.parse(cliProc.stdout);
+  assert.equal(cliRes.pass_threshold, null);
+  assert.equal('check_thresholds' in cliRes, false);
+  assert.equal(cliRes.quality.checks.lenient_check.choice, 'fail');
+  assert.equal(cliRes.quality.checks.lenient_check.model_choice, 'borderline');
+  assert.equal('pass_threshold' in cliRes.quality.checks.lenient_check, false);
+});
+
+test('formatSummary displays per-criterion thresholds in code, file, and dry-run modes and guards rounding per check', async () => {
+  const { formatSummary } = await import('../scripts/format.mts');
+
+  // Code mode with mixed thresholds + sub-threshold rounding guard against custom 0.70 threshold.
+  const codeSummary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'code',
+    file_count: 1,
+    requested_model: 'liquid/d1.2-ultra',
+    returned_model: 'liquid/d1.2-ultra',
+    rubric: 'mixed-v1',
+    rubric_groups: { mixed: ['lenient_pass', 'lenient_edge_fail', 'default_fail'] },
+    pass_threshold: 0.8,
+    check_thresholds: { lenient_pass: 0.7, lenient_edge_fail: 0.7 },
+    quality: {
+      pass_rate: 1 / 3,
+      checks: {
+        lenient_pass: {
+          choice: 'pass',
+          model_choice: 'pass',
+          pass_probability: 0.7961,
+          confidence: 0.59,
+          pass_threshold: 0.7,
+        },
+        lenient_edge_fail: {
+          choice: 'fail',
+          model_choice: 'pass',
+          pass_probability: 0.6961,
+          confidence: 0.39,
+          pass_threshold: 0.7,
+        },
+        default_fail: {
+          choice: 'fail',
+          model_choice: 'pass',
+          pass_probability: 0.72,
+          confidence: 0.44,
+        },
+      },
+    },
+  }, '/tmp/out');
+  assert.match(codeSummary, /PASS\s+lenient_pass\s+P\(pass\)=0\.80 \(threshold 0\.70\)/);
+  assert.match(codeSummary, /FAIL\s+lenient_edge_fail\s+P\(pass\)=0\.696 \(threshold 0\.70\)/);
+  assert.match(codeSummary, /FAIL\s+default_fail\s+P\(pass\)=0\.72 \(threshold 0\.80\)/);
+
+  // File mode with mixed thresholds shows per-check thresholds in the table and failing-file detail.
+  const fileSummary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'file',
+    file_count: 1,
+    elapsed_ms: 100,
+    requested_model: 'typesafe/jev-1.14',
+    returned_model: 'typesafe/jev-1.14',
+    rubric: 'mixed-v1',
+    rubric_groups: { mixed: ['lenient_check', 'default_check', 'strict_check'] },
+    pass_threshold: 0.8,
+    check_thresholds: { lenient_check: 0.7, strict_check: 0.9 },
+    quality: {
+      pass_rate: 1 / 3,
+      all_files_pass_rate: 1 / 3,
+      checks: {
+        lenient_check: {
+          choice: 'pass',
+          files_passed: 1,
+          files_total: 1,
+          pass_probability: 0.72,
+          min_pass_probability: 0.72,
+          confidence: 0.44,
+          pass_threshold: 0.7,
+        },
+        default_check: {
+          choice: 'fail',
+          files_passed: 0,
+          files_total: 1,
+          pass_probability: 0.72,
+          min_pass_probability: 0.72,
+          confidence: 0.44,
+        },
+        strict_check: {
+          choice: 'fail',
+          files_passed: 0,
+          files_total: 1,
+          pass_probability: 0.8961,
+          min_pass_probability: 0.8961,
+          confidence: 0.79,
+          pass_threshold: 0.9,
+        },
+      },
+    },
+    file_results: [
+      {
+        file: 'edge.ts',
+        status: 'scored',
+        returned_model: 'typesafe/jev-1.14',
+        elapsed_ms: 100,
+        pass_rate: 1 / 3,
+        result_dir: 'files/01-edge.ts',
+        checks: {
+          lenient_check: { choice: 'pass', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44, pass_threshold: 0.7 },
+          default_check: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44 },
+          strict_check: { choice: 'fail', model_choice: 'pass', pass_probability: 0.8961, confidence: 0.79, pass_threshold: 0.9 },
+        },
+      },
+    ],
+  }, '/tmp/out');
+  assert.match(fileSummary, /PASS\s+lenient_check\s+1\/1\s+min P\(pass\)=0\.72 \(threshold 0\.70\)/);
+  assert.match(fileSummary, /FAIL\s+default_check\s+0\/1\s+min P\(pass\)=0\.72 \(threshold 0\.80\)/);
+  assert.match(fileSummary, /FAIL\s+strict_check\s+0\/1\s+min P\(pass\)=0\.896 \(threshold 0\.90\)/);
+  assert.match(fileSummary, /edge\.ts \(2 failed\): default_check \(0\.72\), strict_check \(0\.896 < 0\.90\)/);
+
+  // Dry-run summary highlights overridden check thresholds and leaves default checks plain.
+  const drySummary = formatSummary({
+    status: 'dry_run',
+    backend: 'openrouter',
+    mode: 'code',
+    file_count: 2,
+    requested_model: 'liquid/d1.2-ultra',
+    returned_model: null,
+    rubric: 'mixed-v1',
+    rubric_groups: { mixed: ['lenient_check', 'default_check'] },
+    pass_threshold: 0.8,
+    check_thresholds: { lenient_check: 0.7 },
+    quality: null,
+  }, '/tmp/out');
+  assert.match(drySummary, /Checks \(2\): lenient_check \(>=0\.70\), default_check/);
+
+  // Without custom overrides, code summary omits threshold suffixes to stay concise.
+  const defaultSummary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'code',
+    file_count: 1,
+    requested_model: 'liquid/d1.2-ultra',
+    returned_model: 'liquid/d1.2-ultra',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability'] },
+    pass_threshold: 0.8,
+    quality: {
+      pass_rate: 1,
+      checks: {
+        direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.91, confidence: 0.82 },
+      },
+    },
+  }, '/tmp/out');
+  assert.match(defaultSummary, /PASS\s+direct_readability\s+P\(pass\)=0\.91$/m);
+  assert.doesNotMatch(defaultSummary, /threshold/);
+});
