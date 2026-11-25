@@ -25,6 +25,13 @@ Run `pnpm eval check` for offline checks, `pnpm eval canary` for one Codex trial
 for Docker checks, baseline runs, and OpenRouter scoring. `pnpm eval report --latest --open`
 opens an HTML report of saved judge scores and rubric criteria without another API call.
 
+## Local Rubric Scanner & Offline Dashboard
+
+Track code-quality rubric scores across local repositories and `rubrics/fixtures/` health over time without committing private repository data:
+
+- `pnpm rubrics:scan --config /path/to/private/config.json [--dry-run] [--force] [--repo <name>] [--skip-fixtures] [--no-dashboard]` — scans configured local repositories against authoritative `rubrics/*.json`, caches unchanged `(repo, commit, mode, sources, exclude, rubric_hashes, model)` runs at $0 cost, stores score-only JSON snapshots (never source code) in `<dataDir>/runs/`, and rebuilds the offline dashboard.
+- `pnpm rubrics:dashboard --data /path/to/private/data [--out /path/to/index.html]` — regenerates the self-contained, single-file offline HTML dashboard (inline SVG trend charts with rubric/judge change markers, cross-repo check heatmap, hotspot files, installed `judge-code` version check, and fixture health) directly from saved snapshots.
+
 ## Install skills
 
 Use the [Vercel Skills CLI](https://github.com/vercel-labs/skills) with Node.js, Git, and either pnpm or npm available. Prefer `pnpm dlx` in pnpm projects; use `npx` in npm projects. Both commands may download and run the CLI without adding it to the project's dependencies. Review the skill instructions before installing them.
