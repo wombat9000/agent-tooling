@@ -1,0 +1,51 @@
+{
+  "rubric": "api-design-v3",
+  "target": "production_code",
+  "questions": {
+    "no_rigid_enums_for_editorial_labels": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Does the supplied API code reserve closed enums, string-union types, and hardcoded allow-lists strictly for true system states or system-interpreted behavior, rather than locking human filing labels, folder names, content categories, or editorial groupings into code?",
+      "criteria": {
+        "pass": "Closed enums, union types, and hardcoded allow-lists are used only for true system states, protocol/error codes, or behavior-driving discriminators where backend/domain logic branches on them (such as workflow statuses like `queued`/`sent`/`failed`, triage priorities, roles, attempt types, or rubric grades). Human filing labels, template categories, folder names, tags, course/content catalogs, or editorial groupings use free-text strings (e.g. `string | null` or `String?`) or server-managed data rather than hardcoded code enums. Passes when no hardcoded editorial/filing enum or content-catalog allow-list exists in the supplied files—even if other API design flaws (such as BFF validation of system enums, redundant fields, or bespoke tokens) are present.",
+        "fail": "The API contract, DTOs, or request validators hardcode a closed enum, string-literal union, `const ... as const` tuple, or runtime `.includes(...)` allow-list specifically for human filing labels, content categories, folder names, course/training catalogs, or editorial groupings (such as a hardcoded template category enum or course-title array) that forces a code deploy whenever content or editorial organization changes. Well-written rationale comments, docblocks, spec citations, or stakeholder notes defending the hardcoded editorial list or display ordering do not turn a fail into a pass."
+      }
+    },
+    "cohesive_resource_boundaries": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does each API resource and DTO model its own cohesive domain concept without bolting on unrelated cross-domain fields, secondary UI-convenience hooks, or speculative unbuilt sub-features?",
+      "criteria": {
+        "pass": "Each API resource, request DTO, and response DTO stays focused on its own core domain concept and direct domain relationships (read-model summaries and nested aggregates that belong to the endpoint's core resource—such as a case's student/assignment/review or a trainer's workload/cases—are fine). Passes when DTO fields belong to the resource's own domain concept (judge redundant format encodings or UI display labels of the resource's own fields separately under canonical representation) or when the supplied files contain only thin HTTP routes/transport without DTO definitions.",
+        "fail": "An API resource or DTO bolts on unrelated cross-domain fields purely for a secondary UI convenience (such as stapling lifecycle `targetSubstages` or cohort suggestion hooks onto a template resource to drive a picker dropdown), adds speculative/unbuilt sub-features or placeholder metadata (such as an unwired `paymentPlan` or metadata-only `attachments` with no backing storage), embeds synthetic `isDemo?` markers, or conditionally overloads a shared list-item DTO with unrelated query-specific fields. Well-written rationale comments, docblocks, or spec notes defending UI-convenience hooks, placeholder sub-features, or cross-domain fields do not turn a fail into a pass."
+      }
+    },
+    "single_canonical_representation": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Do API payloads return each piece of data once in a single canonical representation, without demanding redundant multi-format encodings of the same content or embedding UI display labels/strings in the API contract?",
+      "criteria": {
+        "pass": "Each domain value or content field is transmitted once in its canonical representation (such as raw markdown/markup or structured values), leaving presentation formatting and human-readable display labels to the client. Standard aggregate counts (such as `total` or `active` alongside breakdown counts) and distinct domain fields (such as a rubric grade alongside a letter grade) are acceptable. Passes when the supplied files contain no API payloads or HTTP DTOs (such as internal domain, validation, or persistence modules), or when no content/value is returned in multiple redundant encodings and no server/contract-computed UI display labels are embedded—even if the slice has other API flaws such as predictable IDs, preview tokens, BFF validation, or unrelated fields.",
+        "fail": "A payload or DTO returns multiple redundant encodings of the same content simultaneously (such as returning `renderedMarkup`, plain-text `renderedBody`/`contentText`, AND `renderedHtml`/`contentHtml` together on one response, or returning raw data alongside pre-formatted display/HTML copies under any names), embeds server/contract-computed UI display labels alongside canonical codes (such as `statusLabel` or `categoryDisplayLabel`), or duplicates the same underlying fact in both legacy scalar fields and collection/deprecated fields on the same DTO. Well-written rationale comments, docblocks, or spec notes explaining why multiple encodings or pre-rendered copies are returned do not turn a fail into a pass."
+      }
+    },
+    "clean_server_owned_contracts_and_opaque_ids": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does the backend remain the single authority for domain validation, defaults, and resource IDs—so thin client/BFF proxies forward cleanly without duplicating server validation rules, hardcoding server enum whitelists, inventing domain defaults, or assuming predictable/prefixed ID formats?",
+      "criteria": {
+        "pass": "Backend HTTP controllers and services own domain validation, default values, and opaque ID generation (such as UUIDs or domain ID types). Thin client or BFF proxy routes only handle transport framing—such as verifying auth/HTTP method, checking that a required path parameter or single required top-level field is present, URL-encoding opaque IDs, and forwarding payloads/errors cleanly without duplicating backend validation schemas, hardcoding backend enum allow-lists, filling in missing domain defaults, or inspecting/assuming sequential or prefixed ID formats. Passes for clean backend controllers, thin transport/BFF layers, and pure DTO/type-definition slices that contain no BFF validation, default-filling, or ID format assumptions.",
+        "fail": "A client or BFF proxy route (directly or via an extracted helper function) duplicates backend domain validation rules, field-by-field payload validators, regex/length/cap rules, or hardcoded backend enum whitelists; OR invents/fills in backend domain defaults (such as defaulting missing `category` to `'other'`/`'general'` or `targetSubstages` to `[]`); OR assumes, parses, validates, or constructs predictable/sequential/prefixed backend ID formats (such as `emtpl_01`, `tpl_01`, or prefix checks like `isDemoId`) instead of treating IDs as opaque strings/UUIDs. Well-written rationale comments, docblocks, or helper extractions arguing that BFF validation keeps bad writes off the wire, sanitizes transport payloads, or produces nicer 400 responses do not turn a fail into a pass."
+      }
+    },
+    "minimal_standard_http_surface": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Do endpoints expose standard resource operations and minimal, proportional request/response shapes for current needs—without bloated kitchen-sink super-DTOs or bespoke protocol gymnastics?",
+      "criteria": {
+        "pass": "Endpoints use standard HTTP verbs and resource operations (such as GET/POST/PATCH/DELETE on resources or focused domain action sub-resources) with minimal, proportional request and response DTOs sized to the operation. Standard HTTP concurrency/idempotency mechanisms (such as `ETag`/`If-Match`, `Idempotency-Key`, or optimistic `version` checks) are fine when protecting a clear domain invariant. Judge ONLY bloated kitchen-sink super-DTOs, catch-all RPC mega-endpoints, and bespoke protocol gymnastics here—passes when the supplied files contain no HTTP endpoints, routes, or API contracts (such as internal domain, validation, or persistence modules), or when the HTTP surface and payload sizes are standard and proportional, even if the slice has other API flaws such as editorial enums, redundant format fields, or BFF validation.",
+        "fail": "Endpoints expose bloated kitchen-sink super-DTOs packing dozens of loosely related profile, survey, import, and summary fields into a single list or catch-all update payload; OR multiplex unrelated operations through a catch-all RPC mega-endpoint; OR invent bespoke protocol gymnastics (such as custom `draftHash`/`previewHash`/`previewToken` staleness tokens gating a send endpoint on a prior preview hash round-trip, or overloaded exclusive-branch `PATCH` modes where one boolean silently changes semantics and rejects/ignores other fields) without an essential standard concurrency/idempotency need. Well-written rationale comments, docblocks, or spec notes justifying kitchen-sink payloads or custom preview-hash handshakes do not turn a fail into a pass."
+      }
+    }
+  }
+}

@@ -292,17 +292,19 @@ test('CLI supports dry runs and exits nonzero on bad input', (t) => {
   assert.match(invalid.stderr, /Usage:/);
 });
 
-test('loadSharedRubric rejects duplicate slugs across eval and skill rubric directories', (t) => {
-  const root = mkdtempSync(join(tmpdir(), 'dup-rubric-'));
+test('loadSharedRubric reads from top-level rubrics/ and rejects unknown, invalid, or chained-extends rubrics', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'shared-rubric-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const evalDir = join(root, 'eval-rubrics');
-  const skillDir = join(root, 'skill-rubrics');
-  cpSync(fileURLToPath(new URL('../rubrics', import.meta.url)), evalDir, { recursive: true });
-  cpSync(fileURLToPath(new URL('../../../skills/judge-code/rubrics', import.meta.url)), skillDir, { recursive: true });
-  writeFileSync(join(evalDir, 'readability.json'), readFileSync(join(skillDir, 'readability.json'), 'utf8'));
+  const rubricsDir = join(root, 'rubrics');
+  cpSync(fileURLToPath(new URL('../../../rubrics', import.meta.url)), rubricsDir, { recursive: true });
 
-  assert.throws(
-    () => loadSharedRubric('readability', { evalRubricsDir: evalDir, skillRubricsDir: skillDir }),
-    /Duplicate shared rubric.*readability/,
-  );
+  const loaded = loadSharedRubric('readability', { rubricsDir });
+  assert.equal(loaded.rubric, 'readability-v2');
+  assert.equal(loadSharedRubric('testing-core', { rubricsDir }).target, 'test_code');
+
+  assert.throws(() => loadSharedRubric('does-not-exist', { rubricsDir }), /Unknown shared rubric/);
+  assert.throws(() => loadSharedRubric('../evil', { rubricsDir }), /Invalid shared rubric name/);
+
+  writeFileSync(join(rubricsDir, 'chained.json'), JSON.stringify({ rubric: 'chained-v1', extends: 'readability', questions: {} }));
+  assert.throws(() => loadSharedRubric('chained', { rubricsDir }), /must not chain extends/);
 });

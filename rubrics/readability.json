@@ -1,0 +1,25 @@
+{
+  "rubric": "readability-v2",
+  "target": "production_code",
+  "questions": {
+    "direct_readability": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Is the supplied production code written directly and readably using domain names and explicit domain relationships?",
+      "criteria": {
+        "pass": "Names reflect the problem domain, control flow is straightforward, and domain relationships or state transitions are stated explicitly (such as with exhaustive branch/switch statements or direct mappings) rather than via clever enum-order/index arithmetic or cryptic encodings. Any regular expression used is justified and descriptively named.",
+        "fail": "The code derives domain relationships from clever calculations (such as enum ordinal/position or index/modular arithmetic), uses opaque generic or single-letter names for domain concepts, embeds cryptic unnamed regexes where explicit checks are clearer, or uses convoluted control flow."
+      }
+    },
+    "named_domain_expressions": {
+      "type": "choice",
+      "scope": "file",
+      "pass_threshold": 0.6,
+      "instructions": "Does the supplied production code give non-obvious conditionals, compound checks, and inline boundary or rule expressions clear domain names instead of forcing readers to decipher them inline?",
+      "criteria": {
+        "pass": "Non-obvious validation checks, multi-clause compound boolean conditions, and inline conditional expressions encoding non-trivial domain or boundary rules are given intention-revealing names via local variables/constants, properties, or small domain functions. Simple, self-explanatory checks—such as null/emptiness checks, `value > 0`, comparisons against named constants, straightforward boundary type/presence guards (like checking required payload fields), and simple single-condition ternaries for field mapping or defaults—may remain inline.",
+        "fail": "Non-obvious compound boolean conditions (such as multi-part eligibility, range, state, or regex/arithmetic checks) or dense inline conditional expressions encoding business or boundary rules are embedded directly inside guards, branch expressions, or callers without a domain name, forcing the reader to decipher the mechanics to understand the rule."
+      }
+    }
+  }
+}

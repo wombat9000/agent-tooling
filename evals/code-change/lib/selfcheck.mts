@@ -55,30 +55,14 @@ test('each task has valid wiring, and review tasks pass reference and fail missi
   }
 });
 
-test('shared rubrics across evals/ and skills/judge-code/ parse cleanly without duplicate slugs or overlapping question IDs per target', () => {
-  const evalRubricsDir = join(LIB, '../rubrics');
-  const skillRubricsDir = join(LIB, '../../../skills/judge-code/rubrics');
-  const evalSlugs = readdirSync(evalRubricsDir)
+test('shared rubrics under rubrics/ parse cleanly without overlapping question IDs per target', () => {
+  const rubricsDir = join(LIB, '../../../rubrics');
+  const allSlugs = readdirSync(rubricsDir)
     .filter((name) => name.endsWith('.json'))
     .map((name) => name.slice(0, -'.json'.length))
     .sort();
-  const skillSlugs = readdirSync(skillRubricsDir)
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => name.slice(0, -'.json'.length))
-    .sort();
-  assert.ok(evalSlugs.length > 0);
-  assert.ok(skillSlugs.length > 0);
+  assert.ok(allSlugs.length >= 13, `Expected at least 13 shared rubrics in rubrics/, found ${allSlugs.length}`);
 
-  const skillSlugSet = new Set(skillSlugs);
-  for (const slug of evalSlugs) {
-    assert.equal(
-      skillSlugSet.has(slug),
-      false,
-      `Duplicate shared rubric slug ${slug} exists in both evals/code-change/rubrics/ and skills/judge-code/rubrics/`,
-    );
-  }
-
-  const allSlugs = [...evalSlugs, ...skillSlugs].sort();
   const seenByTarget = new Map<string, Map<string, string>>();
   for (const slug of allSlugs) {
     const parsed = parseSharedRubric(slug);

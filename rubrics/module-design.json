@@ -1,0 +1,24 @@
+{
+  "rubric": "module-design-v2",
+  "target": "production_code",
+  "questions": {
+    "modular_organization": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does the supplied production code organize distinct primary types and responsibilities into separate, well-named files and readable high-level workflows?",
+      "criteria": {
+        "pass": "Distinct primary types, components, and responsibilities (such as entry-point coordination, boundary parsing/formatting, persistence, and domain models) each live in their own well-named file—one primary type or focused responsibility per file by default, allowing narrow exceptions such as a sealed/discriminated-union type hierarchy or tiny tightly coupled supporting types owned exclusively by one file—and entry-point/workflow functions read as clear high-level steps without dense inline mechanics.",
+        "fail": "Multiple distinct primary types or separate responsibilities (such as entry-point coordination, boundary parsing/formatting, persistence, and multiple domain models or views) are grouped into a single file instead of navigable files, OR a single dense function or monolithic module tangles together distinct responsibilities without clear separation of concerns."
+      }
+    },
+    "no_unnecessary_abstraction": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does the supplied production code avoid speculative interfaces, factories, or pass-through layers?",
+      "criteria": {
+        "pass": "Every type, interface, and function serves a concrete role in the task's requirements without unused interfaces for single implementations, speculative extension hooks, or trivial pass-through wrappers.",
+        "fail": "The code introduces speculative interfaces, factories, or strategies with a single implementation for hypothetical future requirements, or adds pass-through wrapper layers that only forward calls without owning a real responsibility."
+      }
+    }
+  }
+}

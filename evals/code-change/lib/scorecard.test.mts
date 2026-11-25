@@ -186,10 +186,10 @@ test('working-tree content hashes match git HEAD hashes and ignore excluded file
   assert.equal(computeSkillHash(tmpRepo, 'demo'), skillHashBefore);
   assert.equal(computeTaskHash(tmpRepo, 'demo', 'task-a'), taskHashBefore);
 
-  // Rubric hashing falls back to skills/judge-code/rubrics/ and strips question scope metadata.
+  // Rubric hashing reads from top-level rubrics/ and strips question scope metadata.
   const rubricRepo = tempDir(t, 'hash-rubric-scope-');
   mkdirSync(join(rubricRepo, 'evals/demo/tasks/task-a/tests'), { recursive: true });
-  mkdirSync(join(rubricRepo, 'skills/judge-code/rubrics'), { recursive: true });
+  mkdirSync(join(rubricRepo, 'rubrics'), { recursive: true });
   writeFileSync(join(rubricRepo, 'evals/demo/tasks/task-a/tests/judge.json'), JSON.stringify({ extends: ['readability'] }));
   const baseRubric = {
     rubric: 'readability-v2',
@@ -202,10 +202,10 @@ test('working-tree content hashes match git HEAD hashes and ignore excluded file
       },
     },
   };
-  writeFileSync(join(rubricRepo, 'skills/judge-code/rubrics/readability.json'), JSON.stringify(baseRubric));
+  writeFileSync(join(rubricRepo, 'rubrics/readability.json'), JSON.stringify(baseRubric));
   const hashWithoutScope = computeRubricHash(rubricRepo, 'demo', 'task-a', 'production_code');
   assert.ok(hashWithoutScope);
-  writeFileSync(join(rubricRepo, 'skills/judge-code/rubrics/readability.json'), JSON.stringify({
+  writeFileSync(join(rubricRepo, 'rubrics/readability.json'), JSON.stringify({
     ...baseRubric,
     questions: {
       direct_readability: {
@@ -261,8 +261,8 @@ test('recordJudgeBatches merges conditions/targets, resolves relocated archives,
   const repo = tempDir(t, 'scorecard-repo-');
   mkdirSync(join(repo, 'skills/demo'), { recursive: true });
   writeFileSync(join(repo, 'skills/demo/SKILL.md'), '# Demo skill\n');
-  mkdirSync(join(repo, 'evals/demo/rubrics'), { recursive: true });
-  writeFileSync(join(repo, 'evals/demo/rubrics/core.json'), JSON.stringify({
+  mkdirSync(join(repo, 'rubrics'), { recursive: true });
+  writeFileSync(join(repo, 'rubrics/core.json'), JSON.stringify({
     rubric: 'core-v1',
     target: 'production_code',
     questions: {
@@ -270,7 +270,7 @@ test('recordJudgeBatches merges conditions/targets, resolves relocated archives,
       modularity: { type: 'choice', instructions: 'Modular?', criteria: { pass: 'Yes', fail: 'No' } },
     },
   }));
-  writeFileSync(join(repo, 'evals/demo/rubrics/testing-core.json'), JSON.stringify({
+  writeFileSync(join(repo, 'rubrics/testing-core.json'), JSON.stringify({
     rubric: 'testing-core-v1',
     target: 'test_code',
     questions: {
@@ -433,7 +433,7 @@ test('recordJudgeBatches merges conditions/targets, resolves relocated archives,
   assert.throws(() => writeScorecardHtml(repo, join(repo, 'bad.json')), /end in \.html/);
 
   // Provenance mismatch check: changing rubric ID rejects recording against mismatched tree.
-  writeFileSync(join(repo, 'evals/demo/rubrics/core.json'), JSON.stringify({
+  writeFileSync(join(repo, 'rubrics/core.json'), JSON.stringify({
     rubric: 'core-v2',
     target: 'production_code',
     questions: {

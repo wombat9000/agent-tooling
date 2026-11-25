@@ -1,0 +1,40 @@
+{
+  "id": "message-chains-good",
+  "description": "Asks direct collaborators via intention-revealing domain methods and uses a standard collection pipeline",
+  "mode": "file",
+  "rubric": "fowler-smells",
+  "files": {
+    "fulfillment.ts": [
+      "export interface FulfillmentOrder {",
+      "  readonly id: string;",
+      "  shippingCountryCode(): string;",
+      "  isExpressEligible(): boolean;",
+      "  totalWeightGrams(): number;",
+      "}",
+      "",
+      "export interface DispatchPlan {",
+      "  readonly orderId: string;",
+      "  readonly destinationCountry: string;",
+      "  readonly carrierLane: 'express' | 'standard';",
+      "}",
+      "",
+      "const MAX_EXPRESS_WEIGHT_GRAMS = 10_000;",
+      "",
+      "export function planDispatches(orders: readonly FulfillmentOrder[]): DispatchPlan[] {",
+      "  return orders",
+      "    .filter((order) => order.totalWeightGrams() > 0)",
+      "    .map((order) => ({",
+      "      orderId: order.id,",
+      "      destinationCountry: order.shippingCountryCode(),",
+      "      carrierLane:",
+      "        order.isExpressEligible() && order.totalWeightGrams() <= MAX_EXPRESS_WEIGHT_GRAMS",
+      "          ? 'express'",
+      "          : 'standard',",
+      "    }));",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_message_chains": "pass"
+  }
+}

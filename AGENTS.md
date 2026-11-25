@@ -4,6 +4,14 @@
 
 Use `pnpm dlx` as the primary example for one-off CLI commands in this repository's setup documentation. Keep `npx` documented as the npm alternative. When applying skills to another repository, follow that repository's declared package manager and conventions; do not switch package managers to match these examples. For tools already installed in a pnpm project, use `pnpm exec` or the project's existing scripts instead of `pnpm dlx`.
 
+## Authoritative rubrics and testing
+
+Top-level `rubrics/` is the single authoritative source for all shared rubrics in this repository (both `judge-code` production/structure rubrics and eval `test_code` rubrics).
+
+- **Never edit `skills/judge-code/rubrics/*.json` directly.** Always edit the authoritative files under `rubrics/*.json` and run `pnpm sync:rubrics` to mirror the shipped subset (`target: "production_code"` and `target: "project_structure"`) into `skills/judge-code/rubrics/`. Keeping that mirrored copy ensures `skills/judge-code/` stays self-contained when installed via the Skills CLI.
+- **Offline tests (`pnpm test`):** runs all repository unit tests (including `judge-code`, `repo-setup`, `evals/code-change`, the SHA-256 parity check between `rubrics/` and `skills/judge-code/rubrics/`, and `rubrics/test-rubrics.mts --dry-run`) completely offline with no API key required.
+- **Live rubric fixture tests (`pnpm test:rubrics`):** evaluates curated good/bad code fixtures under `rubrics/fixtures/` against `judge-code`'s scoring logic (live via OpenRouter using `OPENROUTER_API_KEY`, or `--backend codex|claude`, or `--dry-run` offline). Supports `--repeats N`, `--fixture <id>`, `--rubric <slug>`, and `--model <id>`.
+
 ## Skill versioning and releases
 
 Use repository-wide releases for now. All skills share Git tags in the form `vMAJOR.MINOR.PATCH`, starting with `v0.1.0`. Do not introduce per-skill release tags or independent version fields unless the maintainer requests a change in policy.
