@@ -25,8 +25,8 @@
       "scope": "file",
       "instructions": "Is the supplied production code free of Long Parameter List and Data Clumps smells?",
       "criteria": {
-        "pass": "Function and constructor parameter lists stay concise, and groups of values that naturally belong together (such as start/end timestamps, ranges, or request inputs) are grouped into cohesive domain or boundary types rather than passed repeatedly as separate primitives.",
-        "fail": "Functions take sprawling parameter lists, or the same cluster of primitive values is repeatedly passed together across multiple method signatures instead of being modeled as a cohesive value object."
+        "pass": "Function and constructor parameter lists stay concise (typically up to 4 distinct parameters, or a structured options/input object when more inputs are needed), and groups of values that naturally belong together (such as start/end dates, ranges, or request inputs) are grouped into cohesive domain or boundary types rather than passed repeatedly as separate primitives.",
+        "fail": "Functions take sprawling parameter lists (such as 5+ loose primitive parameters that belong in an input object), or the same cluster of primitive values is repeatedly passed together across multiple method signatures instead of being modeled as a cohesive value object."
       }
     },
     "no_feature_envy_or_data_class_anemia": {
@@ -43,17 +43,18 @@
       "scope": "file",
       "instructions": "Is the supplied production code free of the Message Chains smell?",
       "criteria": {
-        "pass": "Callers interact directly with their collaborators or intention-revealing domain methods rather than navigating deep chains of nested object properties to reach internal data. Fluent builders, standard library collection pipelines, and framework/JDBC query chains are acceptable.",
+        "pass": "Callers interact directly with their collaborators or intention-revealing domain methods rather than navigating deep chains of nested object properties to reach internal data. Fluent builders, standard library collection pipelines, framework/DB query chains, and shallow property reads on nested document/value structs (such as `record.section.field`) are acceptable.",
         "fail": "Code repeatedly navigates deep object-graph property chains (such as reaching through multiple nested domain objects to inspect or manipulate internal fields) instead of asking the owning object directly."
       }
     },
     "no_primitive_obsession": {
       "type": "choice",
       "scope": "file",
+      "pass_threshold": 0.65,
       "instructions": "Is the supplied production code free of the Primitive Obsession smell?",
       "criteria": {
-        "pass": "Domain concepts with distinct meaning, units, valid states, or constraints (such as time intervals, statuses, tiers, directions, or validated quantities) are represented with dedicated domain types or enums rather than raw strings, booleans, or magic numbers in core logic.",
-        "fail": "Core domain or service logic relies on raw strings, magic numbers, untyped pairs/tuples, or raw boolean flags to represent structured domain concepts, states, or rules."
+        "pass": "Core domain concepts with constrained state sets, multi-field structure, or distinct domain behavior/units (such as statuses, tiers, directions, date ranges, or validated value objects) use dedicated domain types, unions/enums, or named constants rather than magic strings, magic numbers, untyped tuples, or clusters of raw boolean flags. Plain primitives remain acceptable where wrapper types would add no domain behavior or invariant—such as opaque IDs, timestamps/ISO strings, content hashes, tokens, revision/version counters, plain text/email/URL fields validated at boundaries, simple numeric counts, and storage or DTO field carriers.",
+        "fail": "Core domain or service logic branches on raw magic strings or unnamed magic numbers for domain states, tiers, rates, or categories; passes untyped pairs/tuples instead of structured types; or uses clusters of raw boolean control flags or loose primitive clusters where a cohesive domain type, union/enum, or named constant belongs."
       }
     },
     "no_repeated_switches": {
