@@ -121,18 +121,18 @@ function setup(t: TestContext, projectSubdir = 'project') {
   return { source, root, project, installed, run };
 }
 
-test('list-rubrics prints bundled slugs, versioned IDs, check IDs, and per-check scopes', (t) => {
+test('list-rubrics prints bundled slugs, versioned IDs, check IDs, per-check scopes, and custom thresholds', (t) => {
   const { run } = setup(t);
   const proc = run('preview', ['--list-rubrics']);
   assert.equal(proc.status, 0, proc.stderr);
   assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels \[file\], cohesive_resource_boundaries \[module\]/);
-  assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state \[file\], domain_invariants \[module\], boundary_separation \[file\]/);
-  assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\]/);
+  assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state \[file\], domain_invariants \[module\], boundary_separation \[module\]/);
+  assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\].*no_primitive_obsession \[file, >=0\.65\]/);
   assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[module\]/);
   assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
   assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
-  assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file\]/);
-  assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file\], open_closed \[module\]/);
+  assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=0\.60\]/);
+  assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[module\], open_closed \[module\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
 });
 
 test('per-criterion scope is validated, defaulted for custom rubrics, exposed on ResolvedRubric, and stripped from request payloads', async (t) => {
@@ -141,7 +141,7 @@ test('per-criterion scope is validated, defaulted for custom rubrics, exposed on
 
   // Bundled rubrics expose accurate per-check scopes and strip scope from questions.
   const resolved = resolveRubrics({
-    rubrics: ['fowler-smells', 'readability'],
+    rubrics: ['fowler-smells', 'readability', 'domain-modelling', 'solid'],
     exclude: ['no_duplicated_code'],
     hasRequirements: false,
     hasConventions: true,
@@ -149,7 +149,10 @@ test('per-criterion scope is validated, defaulted for custom rubrics, exposed on
   assert.equal(resolved.scopes.no_long_functions, 'file');
   assert.equal(resolved.scopes.no_repeated_switches, 'module');
   assert.equal(resolved.scopes.direct_readability, 'file');
-  assert.equal(resolved.scopes.follows_repo_conventions, 'file');
+  assert.equal(resolved.scopes.boundary_separation, 'module');
+  assert.equal(resolved.scopes.single_responsibility, 'module');
+  assert.equal(resolved.scopes.dependency_inversion, 'module');
+  assert.equal(resolved.scopes.follows_repo_conventions, 'module');
   assert.equal('no_duplicated_code' in resolved.scopes, false);
   for (const question of Object.values(resolved.questions)) {
     assert.deepEqual(Object.keys(question).sort(), ['criteria', 'instructions', 'type']);
@@ -719,7 +722,8 @@ console.log(JSON.stringify({
 test('file mode filters to file-scoped checks, records skipped_module_checks, and rejects empty-after-filter rubrics', (t) => {
   const { run, root } = setup(t);
 
-  // fowler-smells + conventions: keeps 5 file checks + follows_repo_conventions, records 4 module checks as skipped.
+  // fowler-smells + conventions: keeps 5 file checks, skips 4 module checks + module-scoped follows_repo_conventions,
+  // while still sending state.conventions precedence in every per-file request.json.
   const out = join(root, 'file-dry');
   const proc = run('preview', [
     '--source', 'booking',
@@ -742,13 +746,15 @@ test('file mode filters to file-scoped checks, records skipped_module_checks, an
     'no_primitive_obsession',
     'no_comment_deodorant_or_dead_code',
   ]);
-  assert.deepEqual(result.rubric_groups.conventions, ['follows_repo_conventions']);
+  assert.equal('conventions' in result.rubric_groups, false);
   assert.deepEqual(result.skipped_module_checks, [
     'no_duplicated_code',
     'no_feature_envy_or_data_class_anemia',
     'no_repeated_switches',
     'no_speculative_or_middle_man',
+    'follows_repo_conventions',
   ]);
+  assert.deepEqual(result.check_thresholds, { no_primitive_obsession: 0.65 });
   assert.equal(result.file_results.length, 4);
   assert.deepEqual(
     result.file_results.map((entry: { file: string }) => entry.file),
@@ -763,25 +769,32 @@ test('file mode filters to file-scoped checks, records skipped_module_checks, an
     assert.equal(existsSync(join(out, entry.result_dir, 'response.txt')), false);
     const req = JSON.parse(readFileSync(reqPath, 'utf8'));
     assert.deepEqual(Object.keys(req.state.production_files), [entry.file]);
-    assert.equal(Object.keys(req.questions).length, 6);
+    assert.equal(req.state.conventions, 'Use mutable JPA entities when annotated with @Entity.\n');
+    assert.match(req.questions.no_long_functions.instructions, /state\.conventions takes precedence/);
+    assert.equal(Object.keys(req.questions).length, 5);
     if (process.platform !== 'win32') {
       assert.equal(statSync(join(out, entry.result_dir)).mode & 0o077, 0);
       assert.equal(statSync(reqPath).mode & 0o077, 0);
     }
   }
 
-  // module-design has only module-scoped checks -> errors clearly in --mode file.
-  const emptyErr = run('reject', [
-    '--source', 'booking',
-    '--mode', 'file',
-    '--rubric', 'module-design',
-    '--out', join(root, 'empty-file-mode'),
-    '--dry-run',
-  ]);
-  assert.equal(emptyErr.status, 1);
-  assert.match(emptyErr.stderr, /No file-scoped checks remain for --mode file/);
-  assert.match(emptyErr.stderr, /modular_organization/);
-  assert.equal(existsSync(join(root, 'empty-file-mode')), false);
+  // module-design and solid have only module-scoped checks -> error clearly in --mode file.
+  for (const [rubricName, expectedSkipped] of [
+    ['module-design', /modular_organization/],
+    ['solid', /single_responsibility.*dependency_inversion/],
+  ] as const) {
+    const emptyErr = run('reject', [
+      '--source', 'booking',
+      '--mode', 'file',
+      '--rubric', rubricName,
+      '--out', join(root, `empty-file-mode-${rubricName}`),
+      '--dry-run',
+    ]);
+    assert.equal(emptyErr.status, 1);
+    assert.match(emptyErr.stderr, /No file-scoped checks remain for --mode file/);
+    assert.match(emptyErr.stderr, expectedSkipped);
+    assert.equal(existsSync(join(root, `empty-file-mode-${rubricName}`)), false);
+  }
 });
 
 test('file mode allows >128 KiB multi-file directories while rejecting any single file exceeding 128 KiB', (t) => {
@@ -1266,7 +1279,7 @@ test('per-criterion pass_threshold is validated, defaulted to 0.8, exposed on Re
   const { run, root, project } = setup(t);
   const { PASS_THRESHOLD, parsePassThreshold, resolveRubrics } = await import('../scripts/rubrics.mts');
 
-  // Bundled rubrics and repo conventions default every check to PASS_THRESHOLD (0.8).
+  // Bundled rubrics default to PASS_THRESHOLD (0.8) except calibrated overrides (no_primitive_obsession 0.65, named_domain_expressions 0.6).
   const bundled = resolveRubrics({
     rubrics: ['fowler-smells', 'readability'],
     exclude: ['no_duplicated_code'],
@@ -1275,7 +1288,9 @@ test('per-criterion pass_threshold is validated, defaulted to 0.8, exposed on Re
   });
   assert.equal(PASS_THRESHOLD, 0.8);
   assert.equal(bundled.thresholds.no_long_functions, 0.8);
+  assert.equal(bundled.thresholds.no_primitive_obsession, 0.65);
   assert.equal(bundled.thresholds.direct_readability, 0.8);
+  assert.equal(bundled.thresholds.named_domain_expressions, 0.6);
   assert.equal(bundled.thresholds.follows_repo_conventions, 0.8);
   assert.equal('no_duplicated_code' in bundled.thresholds, false);
 

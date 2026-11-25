@@ -301,7 +301,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         fail: `The ${subject} violates one or more explicit conventions stated in state.conventions.`,
       },
     };
-    scopes[CONVENTIONS_CHECK_ID] = resolvedTarget === 'project_structure' ? 'structure' : 'file';
+    scopes[CONVENTIONS_CHECK_ID] = resolvedTarget === 'project_structure' ? 'structure' : 'module';
     thresholds[CONVENTIONS_CHECK_ID] = PASS_THRESHOLD;
     groups.conventions = [CONVENTIONS_CHECK_ID];
   }

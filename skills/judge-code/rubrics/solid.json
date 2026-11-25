@@ -4,10 +4,10 @@
   "questions": {
     "single_responsibility": {
       "type": "choice",
-      "scope": "file",
+      "scope": "module",
       "instructions": "Does each module, type, and function in the supplied production code have a single cohesive responsibility and reason to change?",
       "criteria": {
-        "pass": "Each module, type, and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same unit.",
+        "pass": "Each module, type, and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same unit. A cohesive single-document storage schema with its nested sub-types and record helpers, or a thin HTTP route handler performing standard request handling (auth, input framing, service delegation, and response mapping), counts as one cohesive responsibility.",
         "fail": "A module, type, or function bundles multiple unrelated reasons to change so that modifying one concern requires editing unrelated behavior within the same unit."
       }
     },
@@ -40,11 +40,11 @@
     },
     "dependency_inversion": {
       "type": "choice",
-      "scope": "file",
+      "scope": "module",
       "instructions": "Do domain objects, application services, and workflows depend on domain values or focused abstractions rather than directly invoking concrete infrastructure or ambient system APIs?",
       "criteria": {
-        "pass": "Domain objects, application services, and workflows depend on domain types, pure values, or focused abstractions rather than directly calling concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock APIs); concrete infrastructure is read or wired at the entry point, composition root, or infrastructure adapter boundary, without adding speculative single-implementation interfaces where passing domain values or a concrete adapter already decouples the policy.",
-        "fail": "A domain object, application service, or workflow directly instantiates or invokes concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock calls) instead of receiving values or depending on a focused abstraction—including when a service or workflow calls a concrete or ambient API directly and passes the result to a domain helper."
+        "pass": "Domain objects, application services, and workflows depend on domain types, pure values, or focused abstractions rather than directly calling concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock APIs). Dedicated infrastructure adapters, persistence repositories (for example under `.server/`), entry points, and composition roots naturally call concrete storage, network, or environment APIs or wire default clock/ID callbacks (`now`, `createId`) at the adapter boundary without adding speculative single-implementation interfaces where passing domain values or a concrete adapter already decouples the policy.",
+        "fail": "A domain object, pure domain helper, or application service/workflow (outside a dedicated infrastructure adapter, repository, or composition root) directly instantiates or invokes concrete low-level infrastructure or ambient system APIs (such as filesystem, network, database, environment, or system clock calls) instead of receiving values or depending on a focused abstraction—including when a service or workflow calls a concrete or ambient API directly and passes the result to a domain helper."
       }
     }
   }
