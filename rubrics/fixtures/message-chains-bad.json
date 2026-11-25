@@ -1,0 +1,38 @@
+{
+  "id": "message-chains-bad",
+  "description": "Repeatedly navigates deep object-graph getter chains across multiple nested domain objects",
+  "mode": "file",
+  "rubric": "fowler-smells",
+  "files": {
+    "fulfillment.ts": [
+      "interface TaxRule { getRate(): number; getRegionCode(): string; }",
+      "interface Country { getCode(): string; getTaxRule(): TaxRule; }",
+      "interface Address { getCountry(): Country; getPostalCode(): string; }",
+      "interface BillingProfile { getPrimaryAddress(): Address; getCurrencyCode(): string; }",
+      "interface Account { getBillingProfile(): BillingProfile; }",
+      "interface Customer { getAccount(): Account; }",
+      "interface Order { getId(): string; getCustomer(): Customer; getSubtotalCents(): number; }",
+      "",
+      "export function buildTaxInvoiceSummary(order: Order) {",
+      "  const countryCode = order.getCustomer().getAccount().getBillingProfile().getPrimaryAddress().getCountry().getCode();",
+      "  const postalCode = order.getCustomer().getAccount().getBillingProfile().getPrimaryAddress().getPostalCode();",
+      "  const taxRate = order.getCustomer().getAccount().getBillingProfile().getPrimaryAddress().getCountry().getTaxRule().getRate();",
+      "  const regionCode = order.getCustomer().getAccount().getBillingProfile().getPrimaryAddress().getCountry().getTaxRule().getRegionCode();",
+      "  const currency = order.getCustomer().getAccount().getBillingProfile().getCurrencyCode();",
+      "  const taxCents = Math.round(order.getSubtotalCents() * taxRate);",
+      "",
+      "  return {",
+      "    orderId: order.getId(),",
+      "    countryCode,",
+      "    postalCode,",
+      "    regionCode,",
+      "    currency,",
+      "    taxCents,",
+      "  };",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_message_chains": "fail"
+  }
+}

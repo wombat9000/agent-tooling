@@ -153,16 +153,6 @@ lib/scorecard_record.mts   records saved judge batches into evals/scorecards/<sk
 lib/scorecard_markdown.mts deterministic GitHub-previewable Markdown generator for evals/SCORECARD.md
 lib/scorecard_html.mts     self-contained interactive offline HTML scorecard dashboard generator
 lib/scorecard.test.mts     offline tests for scorecard schema, hashing, staleness, recording, Markdown, and HTML
-rubrics/
-  domain-modelling.json    shared facet: immutability, domain invariants, boundary separation
-  readability.json         shared facet: direct readability and named domain expressions
-  module-design.json       shared facet: file-level modular organization and avoiding speculative abstraction
-  solid.json               shared facet: pragmatic SOLID principles (SRP, OCP, LSP, ISP, DIP)
-  fowler-smells.json       shared facet: Martin Fowler Refactoring code smells (duplication, long functions, feature envy, primitive obsession, repeated switches, etc.)
-  testing-core.json        shared `test_code` facet: independent coverage, non-duplication, observable diagnostic assertions, owner-boundary testing
-  testing-unit.json        shared `test_code` facet: single-behavior AAA in unit tests and disciplined unit test doubles
-  testing-integration.json shared `test_code` facet: right execution tier, cohesive integration scope, shared fixtures without inline raw DB in API bodies, real internal wiring
-  testing-e2e.json         shared `test_code` facet: user-visible locators, deterministic web-first waiting and isolation, focused user journeys
 tasks/<task>/
   instruction.md           the prompt; never mentions the skill or the report format
   task.toml                Harbor configuration; skills go to /skills
@@ -250,7 +240,7 @@ No SDK or package install is needed. Both models use the
 
 Each task's hidden `tests/judge.json` defines binary pass/fail questions and an optional `target`
 (`"review"` by default, or `"production_code"`), or composes one or more shared skill-level rubric
-facets under `rubrics/` via `"extends"` (for example,
+facets from the repository-root `rubrics/` directory via `"extends"` (for example,
 `{ "extends": ["domain-modelling", "readability", "module-design", "solid"] }`):
 
 - **Review tasks (`lib/judge_review.mts`):** The judge receives the requirement, numbered base

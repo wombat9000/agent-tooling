@@ -208,6 +208,7 @@ function resolveRawRubric(
   reader: TextReader,
   skill: string,
   rubricRelPath: string,
+  allowLegacyLocations: boolean,
 ): { raw: Record<string, unknown>; groups?: Record<string, string[]> } | null {
   const text = reader.readText(rubricRelPath);
   if (text === null) return null;
@@ -222,11 +223,15 @@ function resolveRawRubric(
   let baseTarget: unknown;
 
   for (const name of names) {
-    const evalPath = `evals/${skill}/rubrics/${name}.json`;
-    const skillPath = `skills/judge-code/rubrics/${name}.json`;
-    const sharedText = reader.readText(evalPath) ?? reader.readText(skillPath);
+    const rootPath = `rubrics/${name}.json`;
+    let sharedText = reader.readText(rootPath);
+    if (sharedText === null && allowLegacyLocations) {
+      // Historical git refs prior to top-level rubrics/ consolidation split rubrics across evals/ and skills/judge-code/.
+      sharedText = reader.readText(`evals/${skill}/rubrics/${name}.json`)
+        ?? reader.readText(`skills/judge-code/rubrics/${name}.json`);
+    }
     if (sharedText === null) {
-      throw new Error(`Missing shared rubric ${evalPath} (or ${skillPath})`);
+      throw new Error(`Missing shared rubric ${rootPath}`);
     }
     const base = JSON.parse(sharedText) as Record<string, unknown>;
     baseRubrics.push(String(base.rubric));
@@ -264,14 +269,16 @@ export function resolveRubricForTarget(
   gitRef?: string,
 ): ResolvedRubricInfo | null {
   const reader = makeTextReader(repoRoot, gitRef);
+  const allowLegacyLocations = Boolean(gitRef);
   let loaded: { raw: Record<string, unknown>; groups?: Record<string, string[]> } | null = null;
 
   if (target === 'test_code') {
-    loaded = resolveRawRubric(reader, skill, `evals/${skill}/tasks/${task}/tests/judge-tests.json`);
+    loaded = resolveRawRubric(reader, skill, `evals/${skill}/tasks/${task}/tests/judge-tests.json`, allowLegacyLocations);
     if (!loaded) {
       // Fall back to shared testing-core.json (current default) or legacy testing.json at older refs.
       for (const fallbackSlug of ['testing-core', 'testing']) {
-        const text = reader.readText(`evals/${skill}/rubrics/${fallbackSlug}.json`);
+        const text = reader.readText(`rubrics/${fallbackSlug}.json`)
+          ?? (allowLegacyLocations ? reader.readText(`evals/${skill}/rubrics/${fallbackSlug}.json`) : null);
         if (text !== null) {
           const parsed = JSON.parse(text) as Record<string, unknown>;
           const qIds = Object.keys((parsed.questions ?? {}) as Record<string, unknown>);
@@ -281,7 +288,7 @@ export function resolveRubricForTarget(
       }
     }
   } else {
-    loaded = resolveRawRubric(reader, skill, `evals/${skill}/tasks/${task}/tests/judge.json`);
+    loaded = resolveRawRubric(reader, skill, `evals/${skill}/tasks/${task}/tests/judge.json`, allowLegacyLocations);
   }
 
   if (!loaded) return null;

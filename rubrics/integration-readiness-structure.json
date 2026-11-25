@@ -1,0 +1,22 @@
+{
+  "rubric": "integration-readiness-structure-v1",
+  "target": "project_structure",
+  "questions": {
+    "no_bundled_stub_or_demo_modules": {
+      "type": "choice",
+      "instructions": "Is the project structure free of in-process stub/fixture/demo-world backend modules bundled inside production source directories?",
+      "criteria": {
+        "pass": "Production source directories contain only real application modules and external API clients; any mock servers, fixtures, or seed worlds live strictly outside production runtime directories (such as in dedicated test/e2e/external mock tooling).",
+        "fail": "Production source directories (such as `app/lib/` or `src/server/`) bundle in-process fake backends, stub stores, demo-world seed files, or demo-overlay modules imported by production routes. Naming or commenting them as temporary demo aids does not turn a fail into a pass."
+      }
+    },
+    "no_parallel_shadow_directories": {
+      "type": "choice",
+      "instructions": "Is the project structure free of parallel shadow feature directories (such as `phase1/` or `legacy/` mirror folders) and parity test suites policing duplicated variants?",
+      "criteria": {
+        "pass": "Each feature lives once in its directory without cloned version-mirror subdirectories (`phase1/`, `v1/`, `legacy/`) and without dedicated parity test files whose purpose is keeping duplicated UI variants or fake-world stubs in sync.",
+        "fail": "Features contain cloned parallel mirror subdirectories (such as `phase1/` folders duplicating parent screens/columns/filters/hooks) or dedicated parity/demo-overlay/stub-smoke test files policing self-inflicted duplication or fake-world internals."
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "rubric": "project-structure-v1",
+  "target": "project_structure",
+  "questions": {
+    "no_junk_drawer_directories": {
+      "type": "choice",
+      "instructions": "Does the project structure avoid flat junk-drawer directories that dump many loosely related files or multiple distinct concerns into one folder?",
+      "criteria": {
+        "pass": "Directories stay focused and navigable—each folder holds a cohesive set of closely related files or well-organized subfolders rather than a sprawling flat list of unrelated responsibilities.",
+        "fail": "One or more directories flatten a large collection of loosely related files or multiple distinct concerns/sub-features into a single crowded folder instead of grouping them into navigable subfolders."
+      }
+    },
+    "cohesive_subfeature_grouping": {
+      "type": "choice",
+      "instructions": "Are tightly related file clusters (sharing a domain prefix or importing mostly from each other) grouped into dedicated subfolders instead of sitting flat alongside unrelated peers?",
+      "criteria": {
+        "pass": "Multi-file sub-features, widget families, or tightly coupled helper clusters live together in dedicated subfolders (or stay flat only when the entire parent folder is already small and single-purpose).",
+        "fail": "A clear multi-file cluster (such as several files sharing a sub-feature prefix or forming a tight local-import subgraph) is dumped flat into a larger directory alongside unrelated sibling files."
+      }
+    },
+    "clear_concern_separation": {
+      "type": "choice",
+      "instructions": "Are distinct architectural concerns (such as persistence, external API/AI transport, domain models/rules, UI components, orchestration, and test utilities) cleanly separated rather than mixed flat together?",
+      "criteria": {
+        "pass": "Distinct layers or concerns (such as storage/persistence, external clients/inference, core domain logic, UI components, and test utilities) are clearly separated by directory or naming boundary, without test-only helpers masquerading as production files.",
+        "fail": "Multiple distinct architectural concerns (such as persistence, external transport/API clients, domain logic, and orchestration) are mixed flat in the same directory without clear boundaries, OR un-suffixed test utility files sit alongside production source files."
+      }
+    },
+    "consistent_organization_depth": {
+      "type": "choice",
+      "instructions": "Do sibling sub-features use a consistent level of folder organization rather than partially extracting one sub-feature while leaving comparable peer clusters flat?",
+      "criteria": {
+        "pass": "Comparable sub-features or clusters within a directory follow a consistent grouping convention (either peers are similarly grouped into subfolders or the directory is small enough that flat layout is uniform).",
+        "fail": "A directory extracts one sub-feature into a dedicated subfolder while leaving equally large or larger multi-file peer clusters flat in the parent directory."
+      }
+    },
+    "descriptive_file_roles": {
+      "type": "choice",
+      "instructions": "Do file and folder names clearly convey ownership without vague catch-all names or confusingly ambiguous generic filenames?",
+      "criteria": {
+        "pass": "Files and folders have specific, domain-meaningful names that make ownership obvious, without grab-bag files (such as utils, helpers, common, misc) or ambiguous generic names repeated across related folders.",
+        "fail": "The structure relies on vague catch-all filenames (such as utils, helpers, common, misc, or un-scoped test-support), or repeats ambiguous generic names (such as model, service, decisions, languages, validation) across sibling or parent/child folders in ways that obscure what belongs where."
+      }
+    }
+  }
+}

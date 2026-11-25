@@ -6,8 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { grade, type ExpectedReview } from './grade_review.mts';
 
-const EVAL_RUBRICS = fileURLToPath(new URL('../rubrics', import.meta.url));
-const SKILL_RUBRICS = fileURLToPath(new URL('../../../skills/judge-code/rubrics', import.meta.url));
+const SHARED_RUBRICS = fileURLToPath(new URL('../../../rubrics', import.meta.url));
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
 export const DEFAULT_MAX_RETRIES = 4;
@@ -120,22 +119,15 @@ function parseExtends(value: unknown): string[] {
 
 export function loadSharedRubric(
   name: string,
-  dirs: { evalRubricsDir?: string; skillRubricsDir?: string } = {},
+  dirs: { rubricsDir?: string } = {},
 ): Record<string, unknown> {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
     throw new Error(`Invalid shared rubric name: ${name}`);
   }
-  const evalPath = join(dirs.evalRubricsDir ?? EVAL_RUBRICS, `${name}.json`);
-  const skillPath = join(dirs.skillRubricsDir ?? SKILL_RUBRICS, `${name}.json`);
-  const inEval = Boolean(statSync(evalPath, { throwIfNoEntry: false })?.isFile());
-  const inSkill = Boolean(statSync(skillPath, { throwIfNoEntry: false })?.isFile());
-  if (inEval && inSkill) {
-    throw new Error(`Duplicate shared rubric exists in both evals/code-change/rubrics and skills/judge-code/rubrics: ${name}`);
-  }
-  if (!inEval && !inSkill) {
+  const sharedPath = join(dirs.rubricsDir ?? SHARED_RUBRICS, `${name}.json`);
+  if (!statSync(sharedPath, { throwIfNoEntry: false })?.isFile()) {
     throw new Error(`Unknown shared rubric: ${name}`);
   }
-  const sharedPath = inEval ? evalPath : skillPath;
   const base = object(JSON.parse(readFileSync(sharedPath, 'utf8')), `Shared rubric ${name}`);
   if (base.extends !== undefined) {
     throw new Error(`Shared rubric ${name} must not chain extends`);
@@ -288,7 +280,7 @@ function parseRubricObject(
   return groups ? { rubric, target, questions, groups } : { rubric, target, questions };
 }
 
-/** Parse and validate a single shared rubric from evals/code-change/rubrics/ or skills/judge-code/rubrics/. */
+/** Parse and validate a single shared rubric from top-level rubrics/. */
 export function parseSharedRubric(slug: string, rulesPrefix = ''): SharedJudgeRubric {
   const raw = loadSharedRubric(slug);
   const rubric = nonempty(raw.rubric, 'rubric');

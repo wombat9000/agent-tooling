@@ -1,0 +1,60 @@
+{
+  "rubric": "integration-readiness-v3",
+  "target": "production_code",
+  "questions": {
+    "no_prod_fixture_or_demo_contamination": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Is the supplied production code free of in-process fake/stub backends, hardcoded demo or preview seed worlds, synthetic demo overlays merged into live API responses, and UI `isDemo` filtering needed to protect real data?",
+      "criteria": {
+        "pass": "Production runtime code talks to real or externally configured backends via URL/environment configuration without bundling in-process mock/stub backends, in-memory fallback stores or hardcoded preview/sample datasets (even if not named `demo` or `stub`), synthetic overlays merged onto live API responses or returned on upstream errors, or client/UI `isDemo` filtering to keep fake records out of real workflows. Unbacked demos, if any, point at a separate external server via configurable URL/env rather than in-process code. Passes when no demo, stub, or hardcoded fallback-backend behavior is present.",
+        "fail": "Production runtime code imports or implements an in-process fake/stub backend, in-memory fallback store used when an API URL is unset, or hardcoded demo/sample/preview seed records; OR merges synthetic records (such as `demo_*` overlays) into live API responses or returns fake data on upstream errors; OR routes `isDemoId` requests to a local stub; OR relies on UI/hook `isDemo` filtering to shield real workflows from injected synthetic data. Well-written rationale comments, docblocks, TODOs, or ADRs explaining why an in-process stub, fallback store, demo overlay, or `isDemo` filter exists do not turn a fail into a pass."
+      }
+    },
+    "clean_api_contract_boundary": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does each backend capability go through a small, typed API client or thin JSON transport boundary without returning raw `fetch` `Response` pass-throughs or tacking speculative, unbacked, or demo-only optional fields onto live Phase 1 types?",
+      "criteria": {
+        "pass": "Each backend capability communicates through a focused, typed API client or thin server-side HTTP JSON transport + route boundary (generic typed JSON helpers like `getJson<T>` called by thin BFF proxy routes that parse JSON and map upstream errors consistently are fine), and live/existing domain types contain only fields backed by real contracts (legitimate nullable/optional runtime fields on real contracts are fine) so swapping in a real backend endpoint later only touches that capability's client boundary. Passes when no API clients, backend contracts, or domain/API types are present in the supplied files.",
+        "fail": "Live or Phase 1 API/domain types are polluted with speculative optional fields for unbacked/future features, placeholder interfaces for unbuilt modules, or synthetic demo markers (such as `isDemo?`); OR a capability's API client returns raw unparsed `fetch` `Response` objects straight to callers/routes (leaving declared response DTOs unused, bypassing client error handling, or forcing callers to run ad-hoc `response.json()` casts); OR feature code couples directly to stub-specific shapes/URLs. Well-written rationale comments, docblocks, or ADRs explaining why placeholder fields or raw `Response` pass-throughs exist do not turn a fail into a pass."
+      }
+    },
+    "consistent_feature_flag_isolation": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Are feature flags defined in one authoritative place, evaluated with consistent fail-closed semantics across both pages and backing data routes for unreleased features, and isolated from colliding persisted state?",
+      "criteria": {
+        "pass": "Every feature flag is defined and evaluated through a single authoritative module, unreleased features fail closed consistently across both page/UI routes and backing API/data routes (never defaulting enabled when unset or unavailable), and flag variants do not collide on shared persisted state keys (such as `localStorage` or `tableId` keys with incompatible column/data schemas). Passes when no feature flags are present or when a single clean hook/helper toggles additive UI without inconsistent fallbacks.",
+        "fail": "The same feature flag name or evaluation logic is duplicated across multiple files; OR the same unreleased feature flag fails closed on page routes while failing open on backing data/overlay routes (for example passing `fallback = true`, using `!== 'false'` when unset, or defaulting enabled during outages); OR incompatible flag variants share colliding persisted state keys (such as identical `tableId` or `localStorage` keys for different schemas). Well-written rationale comments, docblocks, or ADRs justifying asymmetric fail-open fallbacks, duplicated flag definitions, or shared keys do not turn a fail into a pass."
+      }
+    },
+    "no_shadow_screen_forks": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Do shared screens, views, hooks, columns, and filters stay in one authoritative implementation and toggle phased additions cleanly rather than cloning whole screens or sub-modules into shadow copies (either in mirror directories or side-by-side in the same file)?",
+      "criteria": {
+        "pass": "Each screen, view-model, hook, table definition, and filter module has one authoritative implementation that handles feature-flagged or phased additions cleanly in place (via props, optional panels, additive fields, or small localized conditionals) without parallel version forks. Passes when no duplicate screen/view/hook/column/filter fork exists in the supplied files (including server-only slices with no UI screens).",
+        "fail": "Whole screens, views, hooks, column definitions, or filter modules are duplicated into parallel shadow copies—either in mirror directories/files (such as `phase1/`, `v1/`, or `legacy/`) or as duplicated side-by-side classic/modern functions in the same file—and switched at runtime instead of parameterizing a single shared implementation. Well-written rationale comments, docblocks, or ADRs institutionalizing parallel screen forks do not turn a fail into a pass."
+      }
+    },
+    "no_workaround_proxies_or_parity_tax": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Do server/BFF routes perform thin single-pass auth and forward cleanly to the upstream HTTP API without workaround plumbing (double auth, JSON round-tripping into in-process stubs, or scraping live endpoints to feed a stub), and avoid parity scaffolding policing duplicate variants?",
+      "criteria": {
+        "pass": "Server/BFF routes authenticate once per request and forward cleanly to the upstream HTTP API without redundant session checks, synthetic Request/JSON serialization into local JS functions, or scraping unrelated live endpoints to hydrate a stub; and any verification or parity code (if present) tests real user/domain behavior rather than policing duplicate variants or fake-world internals. Passes for slices without workaround proxy plumbing or parity scaffolding (judge demo overlays separately under demo contamination).",
+        "fail": "Server/BFF routes or proxy helpers authenticate redundantly (such as calling session verification twice on the same request), construct synthetic `Request`/`Response` JSON round-trips just to call an in-process stub function, scrape paginated live APIs solely to feed a local stub, or maintain parity/bridge scaffolding solely to keep duplicate encodings or fake-world variants in sync. Well-written rationale comments, docblocks, or ADRs justifying proxy workarounds, double auth, or parity bridges do not turn a fail into a pass."
+      }
+    },
+    "no_accidental_or_speculative_complexity": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Does the implementation match current user needs directly without overengineered rule engines/DSLs for small fixed behaviors, speculative hidden columns/validators for unbuilt features, or trivial pass-through wrappers?",
+      "criteria": {
+        "pass": "The code uses direct, straightforward typed implementations proportional to current requirements—small fixed filter sets stay simple typed functions without rule engines or untyped string-key DSLs, table columns/validators/types serve active backed behavior, and modules own real responsibilities without trivial pass-through layers. Passes when code is concise and proportional without speculative or accidental machinery.",
+        "fail": "The code builds overengineered mini-engines or untyped string-key filter/rule DSLs for a handful of static options (such as 3–5 fixed status filters), defines speculative hidden table columns or bloated request validators for unbuilt/unbacked features, or adds trivial pass-through wrapper files/functions that merely forward or shuffle data without owning real behavior. Well-written rationale comments, docblocks, or ADRs explaining why speculative complexity or pass-through layers exist do not turn a fail into a pass."
+      }
+    }
+  }
+}
