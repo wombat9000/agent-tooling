@@ -6,8 +6,8 @@
       "type": "choice",
       "instructions": "Does the project structure avoid flat junk-drawer directories that dump many loosely related files or multiple distinct concerns into one folder?",
       "criteria": {
-        "pass": "Directories stay focused and navigable—each folder holds a cohesive set of closely related files or cleanly decomposed feature subfolders rather than a sprawling flat list of unrelated responsibilities. Breaking a complex feature into focused modules or subdirectories is encouraged and does not fail.",
-        "fail": "Concrete evidence in the manifest shows one or more directories flattening a large collection of unrelated clusters or distinct sub-features into a single crowded folder with ambiguous ownership instead of grouping them into navigable subfolders."
+        "pass": "Directories stay focused and navigable—each folder holds a cohesive set of closely related files or cleanly decomposed feature subfolders rather than a sprawling flat list of unrelated responsibilities. Breaking a complex feature into focused modules or subdirectories is encouraged and does not fail; file count alone or a single ungrouped sub-feature cluster (judged separately under sub-feature grouping) does not make a focused directory a junk drawer.",
+        "fail": "Concrete evidence in the manifest shows one or more directories flattening many unrelated responsibilities or distinct concerns into a single crowded folder with genuine ambiguous ownership and navigation cost, rather than grouping them into navigable subfolders. Do not fail based on file count alone or solely by recycling an ungrouped sub-feature cluster from an otherwise focused directory."
       }
     },
     "cohesive_subfeature_grouping": {
@@ -22,8 +22,8 @@
       "type": "choice",
       "instructions": "Are distinct architectural concerns (such as persistence, external API/transport clients, domain models/rules, UI/presentation, orchestration, and test utilities) cleanly separated rather than mixed flat together?",
       "criteria": {
-        "pass": "Distinct architectural concerns (such as storage/persistence, external clients/transport, core domain logic, UI/presentation, orchestration, and test utilities) are clearly separated by directory or explicit role/naming boundaries—whether organized by architectural layer or within cohesive feature folders—without test-only helpers masquerading as production modules.",
-        "fail": "Concrete evidence shows multiple unrelated architectural concerns mixed flat in a crowded directory with ambiguous ownership, OR production-named modules without test scoping/suffixes actually serve only as test utilities alongside production source files."
+        "pass": "Distinct architectural concerns (such as storage/persistence, external clients/transport, core domain logic, UI/presentation, orchestration, and test utilities) are clearly separated by directory or explicit role/naming boundaries (such as distinct `store`, `model`, `transitions`, `client`, `service`, or `view` files within a cohesive feature folder)—whether organized by architectural layer or within cohesive feature folders—without test-only helpers masquerading as production modules.",
+        "fail": "Concrete evidence shows multiple unrelated architectural concerns mixed flat in a crowded directory without clear directory or explicit role-naming boundaries (causing ambiguous ownership), OR production-named modules without test scoping/suffixes actually serve only as test utilities alongside production source files. Cohesive feature folders that already separate concerns via explicit role-named files (such as `store`, `model`, `transitions`, `service`, or `client`) do NOT fail."
       }
     },
     "consistent_organization_depth": {
