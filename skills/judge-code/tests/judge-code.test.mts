@@ -2444,3 +2444,134 @@ test('formatSummary renders linter-style punch-list leading with findings, worst
   assert.match(largeSummary, /Top 20 hotspot files \(23 of 23 files with findings\):/);
   assert.match(largeSummary, /\.\.\. and 3 more files with findings \(see result\.json\)/);
 });
+
+test('structure mode compacts test/test-support entries and reports exact byte and file breakdown when exceeding 128 KiB', async (t) => {
+  const { run, root, project } = setup(t);
+  const { readStructureInputs } = await import('../scripts/structure.mts');
+
+  // 1. Compact test and test-support entries omit verbose per-test metadata while keeping paths, role, and directory topology.
+  const largeRepo = join(project, 'large-with-tests');
+  const verboseTestBody = [
+    "import { describe, expect, it, vi } from 'vitest';",
+    "import { render, screen, fireEvent } from '@testing-library/react';",
+    "import { buildFakeSession, createStubTransport, seedFixtureRows, resetMockClock } from '../testing/helpers';",
+    "import { computeState, validateTransition, formatSummary, mapResponseDto } from './module';",
+    'export const testSuiteFixtureA = 1;',
+    'export const testSuiteFixtureB = 2;',
+    'export const testSuiteFixtureC = 3;',
+    'export function createLocalTestHarness() { return [describe, expect, it, vi, render, screen, fireEvent]; }',
+    ...Array.from({ length: 40 }, (_, i) => `const line${i} = ${i};`),
+  ].join('\n');
+
+  for (let i = 0; i < 120; i += 1) {
+    const dir = join(largeRepo, `features/feature-${String(i).padStart(3, '0')}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'service.ts'),
+      `import { helper } from './helper';\nexport function runFeature${i}() { return helper(); }\n`,
+    );
+    writeFileSync(join(dir, 'service.test.ts'), verboseTestBody);
+    writeFileSync(join(dir, `Feature${i}Test.kt`), `package com.acme.f${i}\nimport com.acme.shared.FakeClock\nclass Feature${i}Test\n`);
+  }
+  mkdirSync(join(largeRepo, 'testing'), { recursive: true });
+  writeFileSync(join(largeRepo, 'testing/helpers.ts'), verboseTestBody);
+  mkdirSync(join(largeRepo, '__mocks__'), { recursive: true });
+  writeFileSync(join(largeRepo, '__mocks__/client.ts'), verboseTestBody);
+  writeFileSync(join(largeRepo, 'README.md'), '# Large repo\n');
+
+  const compactResult = readStructureInputs({
+    source: largeRepo,
+    out: join(root, 'compact-out'),
+  });
+  const compactManifest = compactResult.manifest;
+  const compactBytes = Buffer.byteLength(JSON.stringify(compactManifest), 'utf8');
+  assert.ok(compactBytes < 128 * 1024, `Expected compacted 363-file manifest to fit well under 128 KiB, got ${compactBytes}`);
+  assert.equal(compactManifest.total_files, 363);
+  assert.deepEqual(compactManifest.directory_summary['features/feature-000'], {
+    source_files: 1,
+    test_files: 2,
+    other_files: 0,
+    subdirs: 0,
+  });
+  assert.deepEqual(compactManifest.directory_summary.testing, {
+    source_files: 0,
+    test_files: 1,
+    other_files: 0,
+    subdirs: 0,
+  });
+
+  // Source entries preserve full metadata; test/test-support entries serialize compactly as { kind: 'test' }.
+  const sourceEntry = compactManifest.files['features/feature-000/service.ts'];
+  assert.equal(sourceEntry.kind, 'source');
+  assert.equal(sourceEntry.lines, 3);
+  assert.deepEqual(sourceEntry.exports, ['runFeature0']);
+  assert.deepEqual(sourceEntry.local_imports, ['./helper']);
+
+  for (const testRel of [
+    'features/feature-000/service.test.ts',
+    'features/feature-000/Feature0Test.kt',
+    'testing/helpers.ts',
+    '__mocks__/client.ts',
+  ]) {
+    assert.deepEqual(compactManifest.files[testRel], { kind: 'test' }, `Expected ${testRel} to be compacted`);
+  }
+
+  // 2. Oversize manifest throws an actionable error with exact serialized bytes, limit (131072), and file breakdown.
+  const hugeRepo = join(project, 'oversize-structure');
+  const sourceFilesCount = 450;
+  const testFilesCount = 12;
+  const otherFilesCount = 3;
+  const richSourceBody = [
+    "import { alpha, beta, gamma } from './common-shared-domain-primitives';",
+    "import { delta, epsilon, zeta } from '../shared/persistence-repository-client';",
+    "import { z } from 'zod';",
+    "import { clsx } from 'clsx';",
+    ...Array.from({ length: 10 }, (_, idx) => `export function exportedHandlerOperationName${idx}() { return ${idx}; }`),
+  ].join('\n');
+
+  for (let i = 0; i < sourceFilesCount; i += 1) {
+    const dir = join(hugeRepo, `modules/domain-slice-${String(i).padStart(3, '0')}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `workflow-orchestrator-controller-${i}.ts`), richSourceBody);
+  }
+  for (let i = 0; i < testFilesCount; i += 1) {
+    writeFileSync(join(hugeRepo, `modules/domain-slice-${String(i).padStart(3, '0')}/workflow.test.ts`), 'export const t = 1;\n');
+  }
+  for (let i = 0; i < otherFilesCount; i += 1) {
+    writeFileSync(join(hugeRepo, `doc-${i}.json`), '{"ok":true}\n');
+  }
+
+  const oversizeOut = join(root, 'oversize-out');
+  assert.throws(
+    () => readStructureInputs({ source: hugeRepo, out: oversizeOut }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      const match = /^Structural manifest exceeds 128 KiB \((\d+) \/ 131072 bytes; 465 files: 450 source, 12 test, 3 other\)\./.exec(err.message);
+      assert.ok(match, `Unexpected error message: ${err.message}`);
+      const reportedBytes = Number(match[1]);
+      assert.ok(reportedBytes > 131072, `Expected reported bytes > 131072, got ${reportedBytes}`);
+      assert.match(err.message, /Narrow --source to a smaller subtree or exclude paths with --ignore/);
+      return true;
+    },
+  );
+
+  // CLI --mode structure surfaces the same actionable byte-count diagnostic on stderr.
+  const cliReject = run('reject', ['--source', 'oversize-structure', '--mode', 'structure', '--out', oversizeOut, '--dry-run']);
+  assert.equal(cliReject.status, 1);
+  assert.match(cliReject.stderr, /Structural manifest exceeds 128 KiB \(\d+ \/ 131072 bytes; 465 files: 450 source, 12 test, 3 other\)/);
+
+  // 3. Combined manifest + --requirements exceeding 128 KiB reports total, manifest, and document bytes.
+  const reqDoc = join(root, 'big-requirements.md');
+  writeFileSync(reqDoc, `# Spec\n${'a'.repeat(115 * 1024)}\n`);
+  assert.throws(
+    () => readStructureInputs({ source: largeRepo, out: join(root, 'doc-oversize-out'), requirements: reqDoc }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(
+        err.message,
+        /^Structural manifest and documents exceed 128 KiB \(\d+ \/ 131072 bytes: \d+ manifest \+ \d+ documents; 363 files: 120 source, 242 test, 1 other\)\./,
+      );
+      return true;
+    },
+  );
+});

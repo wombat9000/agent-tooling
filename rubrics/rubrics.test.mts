@@ -242,10 +242,10 @@ test('runRubricHarness builds structure manifests for mode "structure" fixtures 
   assert.ok(capturedManifest);
   assert.equal(capturedManifest.root_name, 'src');
   assert.equal(capturedManifest.total_files, 3);
-  const manifestFiles = capturedManifest.files as Record<string, { kind: string; local_imports: string[] }>;
+  const manifestFiles = capturedManifest.files as Record<string, { kind: string; local_imports?: string[] }>;
   assert.equal(manifestFiles['features/profile/service.ts'].kind, 'source');
   assert.deepEqual(manifestFiles['features/profile/service.ts'].local_imports, ['./types']);
-  assert.equal(manifestFiles['features/profile/service.test.ts'].kind, 'test');
+  assert.deepEqual(manifestFiles['features/profile/service.test.ts'], { kind: 'test' });
 
   const unsafeFixturesDir = join(root, 'unsafe-fixtures');
   mkdirSync(unsafeFixturesDir, { recursive: true });

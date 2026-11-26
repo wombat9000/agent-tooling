@@ -25,14 +25,20 @@ export interface DirectoryCount {
   subdirs: number;
 }
 
-export interface FileStructureEntry {
-  kind: 'source' | 'test';
+export interface SourceFileStructureEntry {
+  kind: 'source';
   lines: number;
   package?: string;
   exports: string[];
   local_imports: string[];
   external_imports: string[];
 }
+
+export interface TestFileStructureEntry {
+  kind: 'test';
+}
+
+export type FileStructureEntry = SourceFileStructureEntry | TestFileStructureEntry;
 
 export interface StructureManifest {
   root_name: string;
@@ -77,7 +83,7 @@ function stripBlockComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
-function extractTypeScriptMetadata(text: string): Omit<FileStructureEntry, 'kind' | 'lines'> {
+function extractTypeScriptMetadata(text: string): Omit<SourceFileStructureEntry, 'kind' | 'lines'> {
   const clean = stripBlockComments(text);
   const exports: string[] = [];
   const localImports: string[] = [];
@@ -115,7 +121,7 @@ function extractTypeScriptMetadata(text: string): Omit<FileStructureEntry, 'kind
   };
 }
 
-function extractKotlinMetadata(text: string): Omit<FileStructureEntry, 'kind' | 'lines'> {
+function extractKotlinMetadata(text: string): Omit<SourceFileStructureEntry, 'kind' | 'lines'> {
   const clean = stripBlockComments(text);
   const pkg = /^\s*package\s+([A-Za-z0-9_.]+)/m.exec(clean)?.[1];
   const pkgRoot = pkg ? pkg.split('.').slice(0, 2).join('.') : undefined;
@@ -205,6 +211,8 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
   const directorySummary: Record<string, DirectoryCount> = {};
   const files: Record<string, FileStructureEntry> = {};
   const otherFiles: string[] = [];
+  let sourceFileCount = 0;
+  let testFileCount = 0;
 
   function walk(dir: string, prefix = '') {
     const dirKey = prefix || '.';
@@ -226,17 +234,24 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
         if (ignoreMatcher.isIgnoredFile(relPath)) continue;
         if (isCodeFile(entry.name)) {
           const kind = isTestOrSupportPath(relPath) ? 'test' : 'source';
-          if (kind === 'test') counts.test_files += 1;
-          else counts.source_files += 1;
-
-          const text = readLocalSource(fullPath);
-          const lines = text === null ? 0 : text.split(/\r?\n/).length;
-          const meta = text === null
-            ? { exports: [], local_imports: [], external_imports: [] }
-            : entry.name.endsWith('.kt')
-              ? extractKotlinMetadata(text)
-              : extractTypeScriptMetadata(text);
-          files[relPath] = { kind, lines, ...meta };
+          if (kind === 'test') {
+            counts.test_files += 1;
+            testFileCount += 1;
+            // Compact test/test-support entries keep paths, role classification, and directory topology
+            // while omitting verbose per-test export/import/line metadata so large repos stay under 128 KiB.
+            files[relPath] = { kind: 'test' };
+          } else {
+            counts.source_files += 1;
+            sourceFileCount += 1;
+            const text = readLocalSource(fullPath);
+            const lines = text === null ? 0 : text.split(/\r?\n/).length;
+            const meta = text === null
+              ? { exports: [], local_imports: [], external_imports: [] }
+              : entry.name.endsWith('.kt')
+                ? extractKotlinMetadata(text)
+                : extractTypeScriptMetadata(text);
+            files[relPath] = { kind: 'source', lines, ...meta };
+          }
         } else {
           counts.other_files += 1;
           otherFiles.push(relPath);
@@ -247,8 +262,9 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
 
   walk(source);
 
-  const totalFiles = Object.keys(files).length + otherFiles.length;
-  if (Object.keys(files).length === 0) {
+  const otherFileCount = otherFiles.length;
+  const totalFiles = sourceFileCount + testFileCount + otherFileCount;
+  if (sourceFileCount + testFileCount === 0) {
     throw new Error('No supported Kotlin, TypeScript, or JavaScript files found in --source');
   }
 
@@ -261,8 +277,22 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
   };
 
   const serialized = JSON.stringify(manifest);
-  if (Buffer.byteLength(serialized, 'utf8') > docBudget) {
-    throw new Error('Structural manifest and documents exceed 128 KiB. Narrow --source to a smaller subtree.');
+  const serializedBytes = Buffer.byteLength(serialized, 'utf8');
+  if (serializedBytes > docBudget) {
+    const docBytes = MAX_MANIFEST_BYTES - docBudget;
+    const fileBreakdown = `${totalFiles} files: ${sourceFileCount} source, ${testFileCount} test, ${otherFileCount} other`;
+    if (docBytes > 0) {
+      const totalBytes = serializedBytes + docBytes;
+      throw new Error(
+        `Structural manifest and documents exceed 128 KiB (${totalBytes} / ${MAX_MANIFEST_BYTES} bytes: `
+        + `${serializedBytes} manifest + ${docBytes} documents; ${fileBreakdown}). `
+        + 'Narrow --source to a smaller subtree or exclude paths with --ignore.',
+      );
+    }
+    throw new Error(
+      `Structural manifest exceeds 128 KiB (${serializedBytes} / ${MAX_MANIFEST_BYTES} bytes; ${fileBreakdown}). `
+      + 'Narrow --source to a smaller subtree or exclude paths with --ignore.',
+    );
   }
   if (key && serialized.includes(key)) {
     throw new Error('OPENROUTER_API_KEY appears in the structural manifest');
