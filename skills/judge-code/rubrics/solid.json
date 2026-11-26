@@ -8,7 +8,7 @@
       "instructions": "Does each class, service, and primary unit in the supplied production code own one cohesive responsibility rather than mixing genuinely unrelated architectural or domain concerns?",
       "criteria": {
         "pass": "Each class, service, or primary unit owns one cohesive role without mixing unrelated domain policies or architectural layers. Private helpers, constants, or supporting types serving that same role pass. Cohesive single-role units also pass: a UI component combining markup, styling, local interaction state, and private sub-components for one view; a focused outbound adapter handling request execution, parsing, telemetry, and error mapping for one external provider; a thin HTTP route handler delegating to services; a storage schema with its record helpers; or a small types/ports file declaring a feature's contracts.",
-        "fail": "A class, service, or module mixes genuinely unrelated domain concerns or architectural layers inside the same unit—for example combining persistence/migrations with core business policy, embedding business rules or raw data-fetching inside a UI view, or packing multiple independent workflows or domains into one god-class or monolith."
+        "fail": "A class, service, function, or module bundles genuinely unrelated domain concerns or architectural layers so changing one concern requires editing unrelated behavior in the same unit—for example combining business/pricing calculation with report or HTML/CSV formatting, notification delivery, and persistence/retention mechanics, embedding business rules or raw data-fetching inside a UI view, or packing multiple independent workflows or domains into one god-class or monolith."
       }
     },
     "open_closed": {
