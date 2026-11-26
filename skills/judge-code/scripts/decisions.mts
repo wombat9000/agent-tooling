@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
   PASS_THRESHOLD,
+  filterRubricForFiles,
+  narrowResolvedRubric,
   nonempty,
   object,
   type ChoiceQuestion,
@@ -55,11 +57,13 @@ export interface Judgment {
 
 export interface FileJudgment {
   file: string;
-  status: 'scored' | 'dry_run' | 'error';
+  status: 'scored' | 'dry_run' | 'skipped' | 'error';
+  skip_reason?: 'not_applicable';
   returned_model: string | null;
   elapsed_ms: number;
   pass_rate: number | null;
   checks: Record<string, Judgment> | null;
+  applicable_checks?: string[];
   result_dir?: string;
   error?: string;
 }
@@ -73,12 +77,14 @@ export interface ModuleInput {
 
 export interface ModuleJudgment {
   module: string;
-  status: 'scored' | 'dry_run' | 'error';
+  status: 'scored' | 'dry_run' | 'skipped' | 'error';
+  skip_reason?: 'not_applicable';
   file_count: number;
   returned_model: string | null;
   elapsed_ms: number;
   pass_rate: number | null;
   checks: Record<string, Judgment> | null;
+  applicable_checks?: string[];
   result_dir?: string;
   error?: string;
 }
@@ -111,6 +117,7 @@ export interface JudgeResult {
   excluded_checks?: string[];
   ignored_patterns?: string[];
   skipped_module_checks?: string[];
+  skipped_not_applicable_checks?: string[];
   pass_threshold: number | null;
   check_thresholds?: Record<string, number>;
   quality: {
@@ -244,34 +251,40 @@ function overriddenThresholds(
 }
 
 export function aggregatePerFile(
-  fileResults: Array<{ pass_rate: number | null; checks: Record<string, Judgment> | null }>,
+  fileResults: Array<{ status?: string; pass_rate: number | null; checks: Record<string, Judgment> | null }>,
   questionIds: string[],
   thresholds?: Record<string, number>,
 ): { pass_rate: number; all_files_pass_rate: number; checks: Record<string, Judgment> } {
-  const totalTargets = fileResults.length;
-  if (totalTargets === 0) {
+  const scoredTargets = fileResults.filter(
+    (entry) => (entry.status === undefined || entry.status === 'scored') && entry.checks !== null,
+  );
+  if (scoredTargets.length === 0) {
     return { pass_rate: 1, all_files_pass_rate: 1, checks: {} };
   }
   const checks: Record<string, Judgment> = {};
 
   for (const id of questionIds) {
-    const perTarget = fileResults.map((entry) => entry.checks![id]);
+    const perTarget = scoredTargets
+      .map((entry) => entry.checks![id])
+      .filter((c): c is Judgment => c !== undefined);
+    if (perTarget.length === 0) continue;
+    const targetCount = perTarget.length;
     const passed = perTarget.filter((c) => c.choice === 'pass').length;
     const errors = perTarget.filter((c) => findingSeverity(c) === 'error').length;
     const warnings = perTarget.filter((c) => findingSeverity(c) === 'warning').length;
     const hasProbabilities = perTarget.every((c) => typeof c.pass_probability === 'number');
     const hasConfidence = perTarget.every((c) => typeof c.confidence === 'number');
     const meanProb = hasProbabilities
-      ? perTarget.reduce((sum, c) => sum + c.pass_probability!, 0) / totalTargets
+      ? perTarget.reduce((sum, c) => sum + c.pass_probability!, 0) / targetCount
       : null;
     const minProb = hasProbabilities
       ? Math.min(...perTarget.map((c) => c.pass_probability!))
       : null;
     const meanConf = hasConfidence
-      ? perTarget.reduce((sum, c) => sum + c.confidence!, 0) / totalTargets
+      ? perTarget.reduce((sum, c) => sum + c.confidence!, 0) / targetCount
       : null;
     const threshold = thresholds?.[id];
-    const choice: 'pass' | 'fail' = passed === totalTargets ? 'pass' : 'fail';
+    const choice: 'pass' | 'fail' = passed === targetCount ? 'pass' : 'fail';
     const severity: FindingSeverity | undefined = choice === 'fail'
       ? (errors > 0 ? 'error' : 'warning')
       : undefined;
@@ -279,7 +292,7 @@ export function aggregatePerFile(
       choice,
       ...(severity ? { severity } : {}),
       files_passed: passed,
-      files_total: totalTargets,
+      files_total: targetCount,
       ...(errors > 0 ? { files_errors: errors } : {}),
       ...(warnings > 0 ? { files_warnings: warnings } : {}),
       pass_probability: meanProb,
@@ -289,8 +302,11 @@ export function aggregatePerFile(
     };
   }
 
-  const meanTargetPassRate = fileResults.reduce((sum, entry) => sum + (entry.pass_rate ?? 0), 0) / totalTargets;
-  const allTargetsPassRate = Object.values(checks).filter((c) => c.choice === 'pass').length / questionIds.length;
+  const evaluatedCount = Object.keys(checks).length;
+  const meanTargetPassRate = scoredTargets.reduce((sum, entry) => sum + (entry.pass_rate ?? 0), 0) / scoredTargets.length;
+  const allTargetsPassRate = evaluatedCount > 0
+    ? Object.values(checks).filter((c) => c.choice === 'pass').length / evaluatedCount
+    : 1;
   return {
     pass_rate: meanTargetPassRate,
     all_files_pass_rate: allTargetsPassRate,
@@ -302,13 +318,21 @@ export function prepareJudgeRun(
   options: JudgeRunOptions,
   backend: JudgeBackend,
   passThreshold: number | null,
-): { out?: string; request: CodeRequest; body: string; result: JudgeResult } {
+): { out?: string; request: CodeRequest; body: string; result: JudgeResult; rubric: ResolvedRubric } {
   const isStructure = options.rubric.target === 'project_structure';
   const isTestCode = options.rubric.target === 'test_code';
   const fileCount = isStructure
     ? (options.structure?.total_files ?? 0)
     : Object.keys(options.files ?? {}).length;
   if (fileCount === 0) throw new Error('No files to score');
+
+  const effectiveRubric = isStructure
+    ? options.rubric
+    : filterRubricForFiles(options.rubric, options.files ?? {});
+  const skippedNotApplicable = Object.keys(options.rubric.questions).filter(
+    (id) => !(id in effectiveRubric.questions),
+  );
+  const hasApplicableChecks = Object.keys(effectiveRubric.questions).length > 0;
 
   let out: string | undefined;
   if (options.out !== undefined) {
@@ -334,12 +358,14 @@ export function prepareJudgeRun(
   const request: CodeRequest = {
     model: options.model ?? `${backend}-default`,
     state,
-    questions: options.rubric.questions,
+    questions: effectiveRubric.questions,
   };
-  const body = out !== undefined
-    ? saveJson(join(out, 'request.json'), request)
-    : `${JSON.stringify(request, null, 2)}\n`;
-  const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
+  const body = hasApplicableChecks
+    ? (out !== undefined
+      ? saveJson(join(out, 'request.json'), request)
+      : `${JSON.stringify(request, null, 2)}\n`)
+    : '';
+  const checkThresholds = overriddenThresholds(effectiveRubric.thresholds, passThreshold);
   const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   const result: JudgeResult = {
@@ -350,16 +376,17 @@ export function prepareJudgeRun(
     file_count: fileCount,
     requested_model: options.model ?? null,
     returned_model: null,
-    rubric: options.rubric.rubric,
-    rubric_groups: options.rubric.groups,
-    ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+    rubric: effectiveRubric.rubric,
+    rubric_groups: effectiveRubric.groups,
+    ...(effectiveRubric.excluded.length > 0 ? { excluded_checks: effectiveRubric.excluded } : {}),
     ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
+    ...(skippedNotApplicable.length > 0 ? { skipped_not_applicable_checks: skippedNotApplicable } : {}),
     pass_threshold: passThreshold,
     ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
-    quality: null,
+    quality: !options.dryRun && !hasApplicableChecks ? { pass_rate: 1, checks: {} } : null,
   };
 
-  return { out, request, body, result };
+  return { out, request, body, result, rubric: effectiveRubric };
 }
 
 export async function runPerFileJudge(
@@ -375,11 +402,11 @@ export async function runPerFileJudge(
 ): Promise<JudgeResult> {
   const files = options.files ?? {};
   const fileNames = Object.keys(files).sort((a, b) => a.localeCompare(b));
-  const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
   const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   if (fileNames.length === 0) {
     if (!options.allowEmpty) throw new Error('No files to score');
+    const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
     const emptyResult: JudgeResult = {
       status: options.dryRun ? 'dry_run' : 'scored',
       backend,
@@ -409,21 +436,51 @@ export async function runPerFileJudge(
     return emptyResult;
   }
 
+  const perFileRubrics = new Map<string, ResolvedRubric>();
+  const activeCheckIds = new Set<string>();
+  for (const file of fileNames) {
+    const fileRubric = filterRubricForFiles(options.rubric, { [file]: files[file] });
+    perFileRubrics.set(file, fileRubric);
+    for (const id of Object.keys(fileRubric.questions)) {
+      activeCheckIds.add(id);
+    }
+  }
+  const effectiveRubric = narrowResolvedRubric(options.rubric, activeCheckIds);
+  const skippedNotApplicable = Object.keys(options.rubric.questions).filter((id) => !activeCheckIds.has(id));
+  const activeQuestionIds = Object.keys(effectiveRubric.questions);
+  const checkThresholds = overriddenThresholds(effectiveRubric.thresholds, passThreshold);
+
   const startMs = performance.now();
   let out: string | undefined;
   if (options.out !== undefined) {
     out = resolve(options.out);
     mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
     mkdirSync(out, { mode: 0o700 });
-    mkdirSync(join(out, 'files'), { recursive: true, mode: 0o700 });
+    if (activeQuestionIds.length > 0) {
+      mkdirSync(join(out, 'files'), { recursive: true, mode: 0o700 });
+    }
   }
 
   const concurrency = options.concurrency ?? defaultConcurrency;
-  const questionIds = Object.keys(options.rubric.questions);
   let totalRetries = 0;
 
   const fileResults = await runWithConcurrency(fileNames, concurrency, async (file, index): Promise<FileJudgment> => {
     const fileStart = performance.now();
+    const fileRubric = perFileRubrics.get(file)!;
+    const fileQuestionIds = Object.keys(fileRubric.questions);
+
+    if (fileQuestionIds.length === 0) {
+      return {
+        file,
+        status: 'skipped',
+        skip_reason: 'not_applicable',
+        returned_model: null,
+        elapsed_ms: 0,
+        pass_rate: null,
+        checks: null,
+      };
+    }
+
     let relDir: string | undefined;
     let absDir: string | undefined;
     if (out !== undefined) {
@@ -448,7 +505,7 @@ export async function runPerFileJudge(
           }
           : { production_files: numbered({ [file]: files[file] }) }),
       },
-      questions: options.rubric.questions,
+      questions: fileRubric.questions,
     };
     const body = absDir !== undefined
       ? saveJson(join(absDir, 'request.json'), request)
@@ -461,6 +518,7 @@ export async function runPerFileJudge(
       elapsed_ms: 0,
       pass_rate: null,
       checks: null,
+      ...(fileQuestionIds.length < activeQuestionIds.length ? { applicable_checks: fileQuestionIds } : {}),
       ...(relDir !== undefined ? { result_dir: relDir } : {}),
     };
 
@@ -499,17 +557,18 @@ export async function runPerFileJudge(
     ...(totalRetries > 0 ? { retries: totalRetries } : {}),
     requested_model: options.model ?? null,
     returned_model: models.join(', ') || null,
-    rubric: options.rubric.rubric,
-    rubric_groups: options.rubric.groups,
-    ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+    rubric: effectiveRubric.rubric,
+    rubric_groups: effectiveRubric.groups,
+    ...(effectiveRubric.excluded.length > 0 ? { excluded_checks: effectiveRubric.excluded } : {}),
     ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
-    ...(options.rubric.skippedModuleChecks.length > 0
-      ? { skipped_module_checks: options.rubric.skippedModuleChecks }
+    ...(effectiveRubric.skippedModuleChecks.length > 0
+      ? { skipped_module_checks: effectiveRubric.skippedModuleChecks }
       : {}),
+    ...(skippedNotApplicable.length > 0 ? { skipped_not_applicable_checks: skippedNotApplicable } : {}),
     pass_threshold: passThreshold,
     ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: !options.dryRun && errored.length === 0
-      ? aggregatePerFile(fileResults, questionIds, passThreshold !== null ? options.rubric.thresholds : undefined)
+      ? aggregatePerFile(fileResults, activeQuestionIds, passThreshold !== null ? effectiveRubric.thresholds : undefined)
       : null,
     file_results: fileResults,
     ...(errored.length > 0
@@ -537,21 +596,49 @@ export async function runMultiModuleJudge(
   const modules = options.modules ?? [];
   if (modules.length === 0) throw new Error('No modules to score');
 
+  const perModuleRubrics = modules.map((mod) => filterRubricForFiles(options.rubric, mod.files));
+  const activeCheckIds = new Set<string>();
+  for (const modRubric of perModuleRubrics) {
+    for (const id of Object.keys(modRubric.questions)) {
+      activeCheckIds.add(id);
+    }
+  }
+  const effectiveRubric = narrowResolvedRubric(options.rubric, activeCheckIds);
+  const skippedNotApplicable = Object.keys(options.rubric.questions).filter((id) => !activeCheckIds.has(id));
+  const activeQuestionIds = Object.keys(effectiveRubric.questions);
+
   const startMs = performance.now();
   let out: string | undefined;
   if (options.out !== undefined) {
     out = resolve(options.out);
     mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
     mkdirSync(out, { mode: 0o700 });
-    mkdirSync(join(out, 'modules'), { recursive: true, mode: 0o700 });
+    if (activeQuestionIds.length > 0) {
+      mkdirSync(join(out, 'modules'), { recursive: true, mode: 0o700 });
+    }
   }
 
   const concurrency = options.concurrency ?? defaultConcurrency;
-  const questionIds = Object.keys(options.rubric.questions);
   let totalRetries = 0;
 
   const moduleResults = await runWithConcurrency(modules, concurrency, async (mod, index): Promise<ModuleJudgment> => {
     const modStart = performance.now();
+    const modRubric = perModuleRubrics[index];
+    const modQuestionIds = Object.keys(modRubric.questions);
+
+    if (modQuestionIds.length === 0) {
+      return {
+        module: mod.name,
+        status: 'skipped',
+        skip_reason: 'not_applicable',
+        file_count: Object.keys(mod.files).length,
+        returned_model: null,
+        elapsed_ms: 0,
+        pass_rate: null,
+        checks: null,
+      };
+    }
+
     let relDir: string | undefined;
     let absDir: string | undefined;
     if (out !== undefined) {
@@ -576,7 +663,7 @@ export async function runMultiModuleJudge(
             : {}),
         production_files: numbered(mod.files),
       },
-      questions: options.rubric.questions,
+      questions: modRubric.questions,
     };
     const body = absDir !== undefined
       ? saveJson(join(absDir, 'request.json'), request)
@@ -590,6 +677,7 @@ export async function runMultiModuleJudge(
       elapsed_ms: 0,
       pass_rate: null,
       checks: null,
+      ...(modQuestionIds.length < activeQuestionIds.length ? { applicable_checks: modQuestionIds } : {}),
       ...(relDir !== undefined ? { result_dir: relDir } : {}),
     };
 
@@ -619,7 +707,7 @@ export async function runMultiModuleJudge(
   const models = [...new Set(moduleResults.map((entry) => entry.returned_model).filter((m): m is string => Boolean(m)))];
   const elapsedMs = Math.round(performance.now() - startMs);
   const totalFiles = moduleResults.reduce((sum, entry) => sum + entry.file_count, 0);
-  const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
+  const checkThresholds = overriddenThresholds(effectiveRubric.thresholds, passThreshold);
   const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   const result: JudgeResult = {
@@ -631,14 +719,15 @@ export async function runMultiModuleJudge(
     ...(totalRetries > 0 ? { retries: totalRetries } : {}),
     requested_model: options.model ?? null,
     returned_model: models.join(', ') || null,
-    rubric: options.rubric.rubric,
-    rubric_groups: options.rubric.groups,
-    ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+    rubric: effectiveRubric.rubric,
+    rubric_groups: effectiveRubric.groups,
+    ...(effectiveRubric.excluded.length > 0 ? { excluded_checks: effectiveRubric.excluded } : {}),
     ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
+    ...(skippedNotApplicable.length > 0 ? { skipped_not_applicable_checks: skippedNotApplicable } : {}),
     pass_threshold: passThreshold,
     ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: !options.dryRun && errored.length === 0
-      ? aggregatePerFile(moduleResults, questionIds, passThreshold !== null ? options.rubric.thresholds : undefined)
+      ? aggregatePerFile(moduleResults, activeQuestionIds, passThreshold !== null ? effectiveRubric.thresholds : undefined)
       : null,
     module_results: moduleResults,
     ...(errored.length > 0
@@ -836,6 +925,22 @@ export function readAnswers(
   return { model, checks };
 }
 
+function hasAnyApplicableRequest(options: JudgeRunOptions): boolean {
+  if (options.rubric.target === 'project_structure') return true;
+  if (options.mode === 'file') {
+    const files = options.files ?? {};
+    return Object.entries(files).some(
+      ([file, content]) => Object.keys(filterRubricForFiles(options.rubric, { [file]: content }).questions).length > 0,
+    );
+  }
+  if (options.modules && options.modules.length > 0) {
+    return options.modules.some(
+      (mod) => Object.keys(filterRubricForFiles(options.rubric, mod.files).questions).length > 0,
+    );
+  }
+  return Object.keys(filterRubricForFiles(options.rubric, options.files ?? {}).questions).length > 0;
+}
+
 /** Score a production file scan, module bundle(s), or project structure manifest through OpenRouter's Decisions API. */
 export async function runDecisionJudge(
   options: JudgeRunOptions,
@@ -843,11 +948,9 @@ export async function runDecisionJudge(
   retry: RetryOptions = {},
 ): Promise<JudgeResult> {
   nonempty(options.model, 'model');
-  const isEmptyAllowedFileRun = options.mode === 'file'
-    && options.allowEmpty === true
-    && Object.keys(options.files ?? {}).length === 0;
-  const key = options.dryRun || isEmptyAllowedFileRun ? '' : process.env.OPENROUTER_API_KEY?.trim() ?? '';
-  if (!options.dryRun && !isEmptyAllowedFileRun && !key) {
+  const needsApiCall = !options.dryRun && hasAnyApplicableRequest(options);
+  const key = needsApiCall ? process.env.OPENROUTER_API_KEY?.trim() ?? '' : '';
+  if (needsApiCall && !key) {
     throw new Error('Set OPENROUTER_API_KEY before judging (or pass --backend codex / --backend claude)');
   }
 
@@ -857,10 +960,10 @@ export async function runDecisionJudge(
       'openrouter',
       PASS_THRESHOLD,
       DEFAULT_OPENROUTER_CONCURRENCY,
-      async (_request, body, fileDir) => {
+      async (request, body, fileDir) => {
         const responsePath = fileDir !== undefined ? join(fileDir, 'response.txt') : undefined;
         const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
-        const judged = readAnswers(raw, options.rubric.questions, options.rubric.thresholds);
+        const judged = readAnswers(raw, request.questions, options.rubric.thresholds);
         return { ...judged, retries };
       },
     );
@@ -872,23 +975,23 @@ export async function runDecisionJudge(
       'openrouter',
       PASS_THRESHOLD,
       DEFAULT_OPENROUTER_CONCURRENCY,
-      async (_request, body, moduleDir) => {
+      async (request, body, moduleDir) => {
         const responsePath = moduleDir !== undefined ? join(moduleDir, 'response.txt') : undefined;
         const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
-        const judged = readAnswers(raw, options.rubric.questions, options.rubric.thresholds);
+        const judged = readAnswers(raw, request.questions, options.rubric.thresholds);
         return { ...judged, retries };
       },
     );
   }
 
   const startMs = performance.now();
-  const { out, body, result } = prepareJudgeRun(options, 'openrouter', PASS_THRESHOLD);
+  const { out, request, body, result } = prepareJudgeRun(options, 'openrouter', PASS_THRESHOLD);
 
-  if (!options.dryRun) {
+  if (!options.dryRun && Object.keys(request.questions).length > 0) {
     try {
       const responsePath = out !== undefined ? join(out, 'response.txt') : undefined;
       const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
-      const judged = readAnswers(raw, options.rubric.questions, options.rubric.thresholds);
+      const judged = readAnswers(raw, request.questions, options.rubric.thresholds);
       if (retries > 0) result.retries = retries;
       result.returned_model = judged.model;
       result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };

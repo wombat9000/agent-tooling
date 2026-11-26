@@ -1,0 +1,8 @@
+{
+  "id": "single-state-authority-good",
+  "description": "Reads URL searchParams as single authority, uses an intentional initialProfile local draft with explicit Save/Cancel boundary, and composes layout via children without prop drilling",
+  "rubric": "react",
+  "expect": {
+    "single_state_authority_and_ownership": "pass"
+  }
+}

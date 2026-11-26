@@ -79,7 +79,8 @@ function writeRealFixture(
 
 test('skills/judge-code/rubrics/ has exact file-set and SHA-256 parity with shipped rubrics in rubrics/', () => {
   const shipped = listShippedRubricFiles(AUTHORITATIVE_RUBRICS_DIR);
-  assert.equal(shipped.length, 9, `Expected 9 shipped rubrics, found ${shipped.length}: ${shipped.join(', ')}`);
+  assert.equal(shipped.length, 10, `Expected 10 shipped rubrics, found ${shipped.length}: ${shipped.join(', ')}`);
+  assert.ok(shipped.includes('react.json'), 'react.json must be shipped to judge-code');
   assert.ok(!shipped.some((file) => file.startsWith('testing-')), 'test_code rubrics must not be shipped to judge-code');
 
   const check = checkRubricSync(AUTHORITATIVE_RUBRICS_DIR, SKILL_RUBRICS_DIR);
@@ -88,7 +89,7 @@ test('skills/judge-code/rubrics/ has exact file-set and SHA-256 parity with ship
   const cli = spawnSync(process.execPath, [SYNC_CLI, '--check'], { encoding: 'utf8' });
   assert.ifError(cli.error);
   assert.equal(cli.status, 0, cli.stderr || cli.stdout);
-  assert.match(cli.stdout, /OK: 9 shipped rubric\(s\) match/);
+  assert.match(cli.stdout, /OK: 10 shipped rubric\(s\) match/);
 });
 
 test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricSync detects all drift types', (t) => {
@@ -128,11 +129,11 @@ test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricS
   assert.deepEqual(second.unchanged, ['prod.json', 'struct.json']);
 });
 
-test('all 52 criteria across all 13 authoritative rubrics have full paired pass and fail fixture coverage under rubrics/fixtures/', () => {
+test('all 58 criteria across all 14 authoritative rubrics have full paired pass and fail fixture coverage under rubrics/fixtures/', () => {
   const allRubricFiles = readdirSync(AUTHORITATIVE_RUBRICS_DIR)
     .filter((f) => f.endsWith('.json'))
     .sort();
-  assert.equal(allRubricFiles.length, 13, `Expected 13 authoritative rubrics, found ${allRubricFiles.length}`);
+  assert.equal(allRubricFiles.length, 14, `Expected 14 authoritative rubrics, found ${allRubricFiles.length}`);
 
   const criteriaByTarget: Record<'production_code' | 'project_structure' | 'test_code', string[]> = {
     production_code: [],
@@ -148,13 +149,13 @@ test('all 52 criteria across all 13 authoritative rubrics have full paired pass 
     criteriaByTarget[target].push(...Object.keys(parsed.questions));
   }
 
-  assert.equal(criteriaByTarget.production_code.length, 32, 'Expected 32 production_code criteria');
+  assert.equal(criteriaByTarget.production_code.length, 38, 'Expected 38 production_code criteria');
   assert.equal(criteriaByTarget.project_structure.length, 7, 'Expected 7 project_structure criteria');
   assert.equal(criteriaByTarget.test_code.length, 13, 'Expected 13 test_code criteria');
   assert.equal(
     criteriaByTarget.production_code.length + criteriaByTarget.project_structure.length + criteriaByTarget.test_code.length,
-    52,
-    'Expected 52 total authoritative criteria',
+    58,
+    'Expected 58 total authoritative criteria',
   );
 
   const fixtures = loadFixtures();
@@ -292,9 +293,9 @@ test('loadFixtures enforces real-file fixture.json + files/ layout and rejects i
   assert.throws(() => loadFixtures(badRootDir), /must be a single safe directory name/);
 });
 
-test('pnpm test:rubrics --dry-run validates all 132 checked-in fixtures, rubrics, CLI filters, and 45-criterion criteria_matrix offline', () => {
+test('pnpm test:rubrics --dry-run validates all 144 checked-in fixtures, rubrics, CLI filters, and 51-criterion criteria_matrix offline', () => {
   const fixtures = loadFixtures();
-  assert.ok(fixtures.length >= 132, `Expected at least 132 fixtures across all 52 criteria, found ${fixtures.length}`);
+  assert.ok(fixtures.length >= 144, `Expected at least 144 fixtures across all 58 criteria, found ${fixtures.length}`);
 
   const env = { ...process.env };
   delete env.OPENROUTER_API_KEY;
@@ -313,7 +314,7 @@ test('pnpm test:rubrics --dry-run validates all 132 checked-in fixtures, rubrics
   assert.equal(report.models.module, DEFAULT_DECISION_MODEL);
   assert.equal(report.fixtures_total, fixtures.length);
   assert.equal(report.fixtures_passed, fixtures.length);
-  assert.equal(report.criteria_matrix.length, 45, 'Expected 32 production_code + 13 test_code dual-mode criteria');
+  assert.equal(report.criteria_matrix.length, 51, 'Expected 38 production_code + 13 test_code dual-mode criteria');
 
   // Verify --rule works for both production_code and test_code rules offline.
   const filtered = spawnSync(
@@ -760,6 +761,56 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   assert.match(rendered, /liskov_substitution.*module-only/);
   assert.match(rendered, /interface_segregation.*file-only/);
   assert.match(rendered, /dependency_inversion.*neither/);
+});
+
+test('applies_to schema validation enforces valid extensions/runtime_imports and fixture applicability', async (t) => {
+  const { parseApplicability, resolveRubrics } = await import('../skills/judge-code/scripts/rubrics.mts');
+  const root = makeTempDir(t, 'applies-to-validation-');
+
+  // Valid shapes
+  assert.equal(parseApplicability(undefined, 'test', 'production_code'), undefined);
+  assert.deepEqual(
+    parseApplicability({ extensions: ['.TSX', '.tsx'], runtime_imports: ['react', 'react-dom', 'react'] }, 'react', 'production_code'),
+    { extensions: ['.tsx'], runtime_imports: ['react', 'react-dom'] },
+  );
+
+  // Invalid shapes fail closed
+  assert.throws(() => parseApplicability({}, 'bad', 'production_code'), /at least one of extensions or runtime_imports/);
+  assert.throws(() => parseApplicability({ unknown: true }, 'bad', 'production_code'), /Unknown key/);
+  assert.throws(() => parseApplicability({ extensions: ['tsx'] }, 'bad', 'production_code'), /Expected leading dot/);
+  assert.throws(() => parseApplicability({ extensions: [] }, 'bad', 'production_code'), /nonempty array/);
+  assert.throws(() => parseApplicability({ runtime_imports: [''] }, 'bad', 'production_code'), /nonempty string/);
+  assert.throws(() => parseApplicability({ extensions: ['.tsx'] }, 'bad', 'project_structure'), /not supported for project_structure/);
+
+  // Authoritative react.json resolves with expected applies_to metadata
+  const resolvedReact = resolveRubrics({
+    mode: 'code',
+    rubrics: [join(AUTHORITATIVE_RUBRICS_DIR, 'react.json')],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  assert.deepEqual(resolvedReact.appliesTo?.effect_lifecycle_and_async_safety, {
+    extensions: ['.tsx'],
+    runtime_imports: ['react', 'react-dom'],
+  });
+
+  // Fixture whose files do not satisfy react applicability is rejected offline
+  const fixturesDir = join(root, 'fixtures');
+  writeRealFixture(
+    fixturesDir,
+    'react/non-react-bad',
+    {
+      id: 'non-react-bad',
+      description: 'Non-React fixture targeting react rubric should fail validation',
+      rubric: 'react',
+      expect: { effect_lifecycle_and_async_safety: 'pass' },
+    },
+    { 'plain.ts': 'export const value = 1;\n' },
+  );
+  await assert.rejects(
+    runRubricHarness({ fixturesDir, dryRun: true }),
+    /does not match rubric applicability/,
+  );
 });
 
 test('runRubricHarness reads project_structure manifests directly from files/ preserving root_name parity', async (t) => {

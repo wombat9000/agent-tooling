@@ -674,7 +674,7 @@ export function buildDashboardModel(options: {
       let fallbackGroup: string | null = null;
       for (const rName of modeRepos) {
         const check = repos.find((r) => r.name === rName)!.by_mode[mode]!.latest.checks[checkId];
-        if (!check) continue;
+        if (!check || check.total === 0) continue;
         fallbackThreshold = check.threshold;
         if (check.rubric_group) fallbackGroup = check.rubric_group;
         const fc = countSummaryFindings(check);

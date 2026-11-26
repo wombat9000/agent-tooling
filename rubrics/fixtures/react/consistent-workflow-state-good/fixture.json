@@ -1,0 +1,8 @@
+{
+  "id": "consistent-workflow-state-good",
+  "description": "Models mutually exclusive submission stages with a discriminated union and keeps orthogonal UI flags and stale-data-plus-refresh state clean",
+  "rubric": "react",
+  "expect": {
+    "consistent_workflow_state": "pass"
+  }
+}

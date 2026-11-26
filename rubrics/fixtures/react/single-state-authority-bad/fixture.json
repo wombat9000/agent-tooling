@@ -1,0 +1,8 @@
+{
+  "id": "single-state-authority-bad",
+  "description": "Mirrors URL searchParams and loader records into diverging React state with two-way sync effects and drills unrelated leaf tooltip state through intermediate pass-through wrappers",
+  "rubric": "react",
+  "expect": {
+    "single_state_authority_and_ownership": "fail"
+  }
+}

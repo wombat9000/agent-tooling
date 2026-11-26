@@ -34,6 +34,7 @@ import {
   readPerFileInputs,
 } from '../skills/judge-code/scripts/inputs.mts';
 import {
+  filterRubricForFiles,
   nonempty,
   object,
   resolveRubrics,
@@ -862,6 +863,7 @@ function aggregateSnapshotChecksAndMetrics(
     const scores = fileEntries
       .map((entry) => entry.checks[id])
       .filter((c): c is SnapshotFileCheckScore => c !== undefined);
+    if (scores.length === 0) continue;
     const passed = scores.filter((c) => c.choice === 'pass').length;
     const rawPassed = scores.filter((c) => (c.model_choice ?? c.choice) === 'pass').length;
     const probs = scores
@@ -885,12 +887,13 @@ function aggregateSnapshotChecksAndMetrics(
     };
   }
 
+  const evaluatedCount = Object.keys(checks).length;
   const allFilesPassedChecks = Object.values(checks).filter((c) => c.total > 0 && c.passed === c.total).length;
   return {
     checks,
     calibratedPassRate: totalPairs > 0 ? totalCalibratedPassed / totalPairs : 0,
     rawPassRate: totalPairs > 0 ? totalRawPassed / totalPairs : 0,
-    allFilesPassRate: questionIds.length > 0 && totalTargets > 0 ? allFilesPassedChecks / questionIds.length : 0,
+    allFilesPassRate: evaluatedCount > 0 && totalTargets > 0 ? allFilesPassedChecks / evaluatedCount : 0,
     meanPassProbability: allProbs.length > 0 ? allProbs.reduce((s, p) => s + p, 0) / allProbs.length : null,
   };
 }
@@ -1257,6 +1260,12 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
         if (mode === 'file') {
           const collected = collectMultiSourceFiles(repo);
           const fileCount = Object.keys(collected.files).length;
+          const activeCheckIds = new Set<string>();
+          for (const [filePath, content] of Object.entries(collected.files)) {
+            const perFile = filterRubricForFiles(resolved, { [filePath]: content });
+            for (const id of Object.keys(perFile.questions)) activeCheckIds.add(id);
+          }
+          const applicableCheckCount = activeCheckIds.size;
           if (dryRun) {
             repoOutcomes.push({
               repo: repo.name,
@@ -1266,7 +1275,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               commit_short: gitInfo.commit_short,
               dirty: gitInfo.dirty,
               file_count: fileCount,
-              check_count: checkCount,
+              check_count: applicableCheckCount,
               cost_usd: 0,
             });
             continue;
@@ -1330,7 +1339,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
             metrics: {
               file_count: fileEntries.length,
               target_count: fileEntries.length,
-              check_count: checkCount,
+              check_count: Object.keys(agg.checks).length,
               calibrated_pass_rate: agg.calibratedPassRate,
               raw_pass_rate: agg.rawPassRate,
               all_files_pass_rate: agg.allFilesPassRate,
@@ -1356,7 +1365,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
             commit_short: gitInfo.commit_short,
             dirty: gitInfo.dirty,
             file_count: fileEntries.length,
-            check_count: checkCount,
+            check_count: Object.keys(agg.checks).length,
             findings_total: findings.total,
             findings_hard: findings.hard,
             findings_borderline: findings.borderline,
@@ -1591,6 +1600,14 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
                 (sum, text) => sum + Buffer.byteLength(text, 'utf8'),
                 0,
               );
+              const moduleRubric = filterRubricForFiles(resolved, loaded.files);
+              if (Object.keys(moduleRubric.questions).length === 0) {
+                return unscoredModuleResult(mod, 'skipped', {
+                  skipReason: 'not_applicable',
+                  fileCount,
+                  bytes: totalBytes,
+                });
+              }
 
               if (dryRun) {
                 return unscoredModuleResult(mod, 'scored', { fileCount, bytes: totalBytes });

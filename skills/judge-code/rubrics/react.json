@@ -1,0 +1,74 @@
+{
+  "rubric": "react-v1",
+  "target": "production_code",
+  "applies_to": {
+    "extensions": [
+      ".tsx"
+    ],
+    "runtime_imports": [
+      "react",
+      "react-dom"
+    ]
+  },
+  "questions": {
+    "effect_lifecycle_and_async_safety": {
+      "type": "choice",
+      "scope": "file",
+      "pass_threshold": 0.7,
+      "instructions": "Are React effects in the supplied production code free of leaked resources, unguarded async race conditions, and user-event logic misrouted through state-watching effects?",
+      "criteria": {
+        "pass": "Every effect that registers a subscription, event listener, repeating timer, observer, or persistent connection releases that same resource in its cleanup function (or via an identifiable delegated disposer). Any async fetch or request initiated inside `useEffect` uses a visible cancellation or stale-result guard (such as a `cancelled` flag, sequence/revision check, or `AbortController` with abort handling) before committing state, or data loading is delegated to a data library, framework loader/fetcher, or event handler. User-initiated actions run directly in event handlers rather than setting a trigger flag for `useEffect` to react to. Self-cleaning APIs, one-shot synchronization effects needing no teardown (such as updating focus, syncing a ref, resetting a navigation blocker, or notifying a parent dirty/pending callback), and files without effects pass.",
+        "fail": "An effect registers a subscription, event listener, repeating timer, observer, or persistent connection without releasing that same resource in a cleanup function (or via an identifiable delegated disposer); OR an async fetch or request inside `useEffect` can overwrite newer state with stale out-of-order results because it lacks a visible cancellation or stale-result guard; OR user-initiated event logic is routed through `useEffect` watching a flag or state instead of running directly in the event handler."
+      }
+    },
+    "explicit_component_composition": {
+      "type": "choice",
+      "scope": "file",
+      "pass_threshold": 0.7,
+      "instructions": "Does the supplied React code express screen and substantial section structure through explicit, cohesive component composition rather than burying structure inside a monolithic component?",
+      "criteria": {
+        "pass": "Focused composition components arrange meaningful child sections and hide individual control internals, including decomposing complex screens into small focused component files. Small or cohesive screens, forms, cards, dialogs, or sections where inline markup expresses structure clearly, genuinely nested declarative UI markup, and implementation components owning local control details all pass. Files that do not define React components or JSX (such as custom hook modules or helper files) also pass. Do NOT fail on line count alone or demand pointless pass-through wrappers.",
+        "fail": "A monolithic React component buries high-level screen or section structure inside dense inline control markup, multiple unrelated layout regions or sections, deep conditional JSX branching, and tangled unrelated local states or handlers where extracting meaningful section or control boundaries is warranted. Do NOT fail files that contain no React components or JSX, or fail on line count alone."
+      }
+    },
+    "focused_component_interfaces": {
+      "type": "choice",
+      "scope": "file",
+      "pass_threshold": 0.7,
+      "instructions": "Do React component prop interfaces stay cohesive and purposeful without boolean-flag mode explosions, kitchen-sink prop bags, catch-all action callbacks, or leaked child internals?",
+      "criteria": {
+        "pass": "Components accept cohesive props records (even with several related fields or a few orthogonal display booleans such as `disabled` or `compact`), discriminated-union prop variants for distinct modes, or legitimate integration/form boundaries requiring distinct domain inputs and explicit domain callbacks. Files without component prop interfaces also pass.",
+        "fail": "Component props exhibit boolean-flag mode explosions with conflicting or mutually exclusive combinations or tangled conditional branches (such as combining `isCompact`, `isEditing`, `hideHeader`, and `showFooter` to morph modes), kitchen-sink prop bags serving unrelated modes or responsibilities, unrestricted catch-all `onAction` callbacks, or leaked child initialization, reset, or persistence mechanics hoisted into parent props."
+      }
+    },
+    "cohesive_custom_hooks": {
+      "type": "choice",
+      "scope": "file",
+      "pass_threshold": 0.65,
+      "instructions": "Does each custom React hook coordinate one cohesive stateful concern without becoming a screen-wide god hook or tangling pure domain policy or raw transport mechanics with UI side effects?",
+      "criteria": {
+        "pass": "Each custom hook coordinates one cohesive stateful concern—feature-specific hooks pass (reuse is NOT required), even when returning multiple related values and callbacks—and hooks that delegate domain policy and transport to imported helpers or clients while coordinating one workflow (including invoking an error callback, browser lifecycle listener, or redirect at workflow boundaries) pass. Files without custom hooks also pass.",
+        "fail": "A god hook (such as `usePageController`, `useScreenState`, or a screen-wide dumping ground) packs unrelated stateful concerns, independent effects, and unrelated handlers into one hook just to shrink component JSX; OR a custom hook embeds substantial pure domain policy calculations or raw HTTP/transport retry mechanics directly alongside unrelated DOM or UI side effects (such as toasts, focus management, or navigation) so those concerns cannot evolve independently."
+      }
+    },
+    "consistent_workflow_state": {
+      "type": "choice",
+      "scope": "file",
+      "pass_threshold": 0.7,
+      "instructions": "Do components and hooks model async and multi-stage UI workflow states consistently without contradictory flag combinations or silent failure-as-success paths?",
+      "criteria": {
+        "pass": "Mutually exclusive async or UI workflow stages owned by the file use single-status or discriminated-union state modeling (or strictly synchronized transitions that cannot leave contradictory flags), and visible async mutations handle failure paths without falsely reporting success. Genuinely independent orthogonal flags, intentional stale-data-plus-loading states (`data` + `isRefreshing`), delegated router/error-boundary handling, presentational components that merely read status props without owning workflow state transitions, and files without async or multi-stage workflow state all pass.",
+        "fail": "A component or hook models mutually exclusive async or UI workflow stages with multiple independently updated boolean flags where a visible transition leaves or can leave contradictory states (such as `isSubmitting` left `true` on error, or `isSuccess` and `isError` coexisting); OR a visible user-initiated async mutation unconditionally reports success, clears user input, or navigates along a rejection path (or catches errors and silently presents success)."
+      }
+    },
+    "single_state_authority_and_ownership": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does the React module preserve a single source of truth for URL/route/loader data and keep UI state owned near its consumers without needless hoisting and pass-through prop drilling?",
+      "criteria": {
+        "pass": "URL search params and live route/loader data remain the single authority without diverging React state mirrors. Local editable drafts with an explicit Apply/Cancel/Submit boundary, intentional `initial...` snapshots, optimistic UI overlays, lifting state to the nearest common owner of multiple coordinating siblings, and direct 1–2 layer prop passing where clear all pass.",
+        "fail": "The bundle maintains duplicate diverging authorities for URL search params or live route/loader data (copying search params or loader data into separate React state with two-way sync or update paths that drift on navigation/revalidation); OR hoists local UI state far above its only meaningful consumer and drills unrelated props through intermediate pass-through wrapper components instead of keeping state local or composing via `children`/slots."
+      }
+    }
+  }
+}

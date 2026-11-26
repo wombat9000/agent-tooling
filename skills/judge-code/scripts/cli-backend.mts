@@ -267,16 +267,16 @@ async function invokeClaude(
 /** Score a file scan, module bundle(s), or project structure using the local codex or claude CLI. */
 export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend): Promise<JudgeResult> {
   const model = backend === 'codex' ? CODEX_MODEL : CLAUDE_MODEL;
-  const questionIds = Object.keys(options.rubric.questions);
-  const schema = buildSchema(questionIds);
 
   const invoke = async (request: CodeRequest, artifactDir?: string) => {
+    const reqQuestionIds = Object.keys(request.questions);
+    const schema = buildSchema(reqQuestionIds);
     const prompt = buildPrompt(request);
     const responsePath = artifactDir !== undefined ? join(artifactDir, 'response.txt') : undefined;
     const invoked = backend === 'codex'
       ? await invokeCodex(prompt, schema, responsePath)
       : await invokeClaude(prompt, schema, responsePath);
-    const checks = adaptCliChecks(invoked.rawChecks, questionIds);
+    const checks = adaptCliChecks(invoked.rawChecks, reqQuestionIds);
     return { model: invoked.returnedModel, checks };
   };
 
@@ -303,7 +303,7 @@ export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend)
   const startMs = performance.now();
   const { out, request, result } = prepareJudgeRun({ ...options, model }, backend, null);
 
-  if (!options.dryRun) {
+  if (!options.dryRun && Object.keys(request.questions).length > 0) {
     try {
       const judged = await invoke(request, out);
       result.returned_model = judged.model;

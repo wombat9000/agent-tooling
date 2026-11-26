@@ -16,10 +16,16 @@ export interface ChoiceQuestion {
   criteria: { pass: string; fail: string };
 }
 
+export interface RubricApplicability {
+  extensions?: string[];
+  runtime_imports?: string[];
+}
+
 export interface BundledRubricSummary {
   slug: string;
   id: string;
   target: RubricTarget;
+  appliesTo?: RubricApplicability;
   checks: string[];
   scopes: Record<string, CheckScope>;
   thresholds: Record<string, number>;
@@ -31,6 +37,7 @@ export interface RuleDefinition {
   rubricSlug: string;
   rubricId: string;
   target: RubricTarget;
+  appliesTo?: RubricApplicability;
   scope: CheckScope;
   threshold: number;
   instructions: string;
@@ -43,7 +50,9 @@ export interface ResolvedRubric {
   questions: Record<string, ChoiceQuestion>;
   scopes: Record<string, CheckScope>;
   thresholds: Record<string, number>;
+  appliesTo?: Record<string, RubricApplicability>;
   groups: Record<string, string[]>;
+  groupRubricIds?: Record<string, string>;
   excluded: string[];
   skippedModuleChecks: string[];
 }
@@ -62,6 +71,7 @@ interface ParsedRubricFile {
   id: string;
   group: string;
   target: RubricTarget;
+  appliesTo?: RubricApplicability;
   questions: Record<string, ChoiceQuestion>;
   scopes: Record<string, CheckScope>;
   thresholds: Record<string, number>;
@@ -137,6 +147,289 @@ export function parsePassThreshold(value: unknown, checkId: string): number {
   return value;
 }
 
+const VALID_APPLIES_TO_KEYS = new Set(['extensions', 'runtime_imports']);
+const EXTENSION_RE = /^\.[a-z0-9]+$/i;
+const PACKAGE_SPECIFIER_RE = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+(?:\/[a-z0-9._-]+)*$/i;
+
+export function parseApplicability(
+  value: unknown,
+  label: string,
+  target: RubricTarget,
+): RubricApplicability | undefined {
+  if (value === undefined) return undefined;
+  if (target === 'project_structure') {
+    throw new Error(`${label}.applies_to is not supported for project_structure rubrics`);
+  }
+  const raw = object(value, `${label}.applies_to`);
+  for (const key of Object.keys(raw)) {
+    if (!VALID_APPLIES_TO_KEYS.has(key)) {
+      throw new Error(`Unknown key in ${label}.applies_to: ${key}. Expected extensions and/or runtime_imports.`);
+    }
+  }
+
+  let extensions: string[] | undefined;
+  if (raw.extensions !== undefined) {
+    if (!Array.isArray(raw.extensions) || raw.extensions.length === 0) {
+      throw new Error(`${label}.applies_to.extensions must be a nonempty array of file extensions`);
+    }
+    extensions = [...new Set(raw.extensions.map((item, idx) => {
+      const ext = nonempty(item, `${label}.applies_to.extensions[${idx}]`).trim().toLowerCase();
+      if (!EXTENSION_RE.test(ext)) {
+        throw new Error(`Invalid extension in ${label}.applies_to.extensions[${idx}]: ${String(item)}. Expected leading dot (e.g. ".tsx").`);
+      }
+      return ext;
+    }))];
+  }
+
+  let runtimeImports: string[] | undefined;
+  if (raw.runtime_imports !== undefined) {
+    if (!Array.isArray(raw.runtime_imports) || raw.runtime_imports.length === 0) {
+      throw new Error(`${label}.applies_to.runtime_imports must be a nonempty array of package specifiers`);
+    }
+    runtimeImports = [...new Set(raw.runtime_imports.map((item, idx) => {
+      const pkg = nonempty(item, `${label}.applies_to.runtime_imports[${idx}]`).trim();
+      if (!PACKAGE_SPECIFIER_RE.test(pkg)) {
+        throw new Error(`Invalid package specifier in ${label}.applies_to.runtime_imports[${idx}]: ${String(item)}`);
+      }
+      return pkg;
+    }))];
+  }
+
+  if (!extensions && !runtimeImports) {
+    throw new Error(`${label}.applies_to must specify at least one of extensions or runtime_imports`);
+  }
+
+  return {
+    ...(extensions ? { extensions } : {}),
+    ...(runtimeImports ? { runtime_imports: runtimeImports } : {}),
+  };
+}
+
+export function formatApplicability(appliesTo: RubricApplicability): string {
+  const parts: string[] = [];
+  if (appliesTo.extensions?.length) {
+    parts.push(appliesTo.extensions.map((ext) => `*${ext}`).join(', '));
+  }
+  if (appliesTo.runtime_imports?.length) {
+    parts.push(`imports: ${appliesTo.runtime_imports.join(', ')}`);
+  }
+  return parts.join(' | ');
+}
+
+function stripCommentsAndTemplates(source: string): string {
+  let out = '';
+  let i = 0;
+  const len = source.length;
+  while (i < len) {
+    const ch = source[i];
+    const next = i + 1 < len ? source[i + 1] : '';
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < len && source[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < len && !(source[i] === '*' && source[i + 1] === '/')) {
+        if (source[i] === '\n') out += '\n';
+        i += 1;
+      }
+      if (i < len) i += 2;
+      out += ' ';
+      continue;
+    }
+    if (ch === '\'' || ch === '"') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < len && source[i] !== quote && source[i] !== '\n') {
+        if (source[i] === '\\' && i + 1 < len) {
+          out += source[i] + source[i + 1];
+          i += 2;
+          continue;
+        }
+        out += source[i];
+        i += 1;
+      }
+      if (i < len) {
+        out += source[i];
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '`') {
+      out += '``';
+      i += 1;
+      while (i < len && source[i] !== '`') {
+        if (source[i] === '\\' && i + 1 < len) {
+          i += 2;
+          continue;
+        }
+        if (source[i] === '\n') out += '\n';
+        i += 1;
+      }
+      if (i < len) i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function matchesImportPackage(specifier: string, packages: readonly string[]): boolean {
+  return packages.some((pkg) => specifier === pkg || specifier.startsWith(`${pkg}/`));
+}
+
+const IMPORT_CLAUSE_SYNTAX_RE = /^(?:type\s+)?(?:[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]*\}))?|\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]*\})$/;
+const EXPORT_CLAUSE_SYNTAX_RE = /^(?:type\s+)?(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^}]*\})$/;
+
+function isRuntimeNamedList(braceBlock: string): boolean {
+  const inner = braceBlock.slice(1, -1).trim();
+  if (!inner) return false;
+  const items = inner.split(',').map((part) => part.trim()).filter(Boolean);
+  return items.some((item) => !/^type\s+/.test(item));
+}
+
+function isRuntimeImportClause(rawClause: string): boolean {
+  const clause = rawClause.trim();
+  if (!IMPORT_CLAUSE_SYNTAX_RE.test(clause)) return false;
+  if (/^type\s+(?:[*{$A-Za-z_])/.test(clause)) return false;
+  if (clause.startsWith('{') && clause.endsWith('}')) {
+    return isRuntimeNamedList(clause);
+  }
+  return true;
+}
+
+function isRuntimeExportFromClause(rawClause: string): boolean {
+  const clause = rawClause.trim();
+  if (!EXPORT_CLAUSE_SYNTAX_RE.test(clause)) return false;
+  if (/^type\s+(?:[*{$A-Za-z_])/.test(clause)) return false;
+  if (clause.startsWith('{') && clause.endsWith('}')) {
+    return isRuntimeNamedList(clause);
+  }
+  return true;
+}
+
+/** Return true if a TS/JS source file contains a runtime (non-type-only) import/re-export from any target package. */
+export function hasRuntimeImport(content: string, packages: readonly string[]): boolean {
+  if (packages.length === 0) return false;
+  const clean = stripCommentsAndTemplates(content);
+
+  // Side-effect imports: import 'react-dom';
+  for (const match of clean.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)) {
+    if (matchesImportPackage(match[1], packages)) return true;
+  }
+
+  // Standard imports: import ... from 'react' (excluding import type and all-inline-type named imports).
+  for (const match of clean.matchAll(/^\s*import\s+([^;'"]+?)\s+from\s+['"]([^'"]+)['"]/gm)) {
+    if (matchesImportPackage(match[2], packages) && isRuntimeImportClause(match[1])) {
+      return true;
+    }
+  }
+
+  // Runtime re-exports: export { useState } from 'react' / export * from 'react'
+  for (const match of clean.matchAll(/^\s*export\s+([^;'"]+?)\s+from\s+['"]([^'"]+)['"]/gm)) {
+    if (matchesImportPackage(match[2], packages) && isRuntimeExportFromClause(match[1])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function matchesFileApplicability(
+  filePath: string,
+  content: string,
+  appliesTo: RubricApplicability | undefined,
+): boolean {
+  if (!appliesTo) return true;
+  const lower = filePath.toLowerCase();
+  if (appliesTo.extensions?.some((ext) => lower.endsWith(ext))) {
+    return true;
+  }
+  if (appliesTo.runtime_imports?.length && /\.(?:tsx?|[cm]ts)$/.test(lower)) {
+    return hasRuntimeImport(content, appliesTo.runtime_imports);
+  }
+  return false;
+}
+
+export function narrowResolvedRubric(rubric: ResolvedRubric, keepCheckIds: ReadonlySet<string>): ResolvedRubric {
+  const questions: Record<string, ChoiceQuestion> = {};
+  const scopes: Record<string, CheckScope> = {};
+  const thresholds: Record<string, number> = {};
+  const appliesTo: Record<string, RubricApplicability> = {};
+
+  for (const id of Object.keys(rubric.questions)) {
+    if (!keepCheckIds.has(id)) continue;
+    questions[id] = rubric.questions[id];
+    scopes[id] = rubric.scopes[id];
+    thresholds[id] = rubric.thresholds[id];
+    if (rubric.appliesTo?.[id]) appliesTo[id] = rubric.appliesTo[id];
+  }
+
+  const groups: Record<string, string[]> = {};
+  const groupRubricIds: Record<string, string> = {};
+  const activeRubricIds: string[] = [];
+  for (const [group, ids] of Object.entries(rubric.groups)) {
+    const remaining = ids.filter((id) => id in questions);
+    if (remaining.length === 0) continue;
+    groups[group] = remaining;
+    const rubricId = rubric.groupRubricIds?.[group] ?? (group === 'conventions' ? 'repo-conventions' : group);
+    groupRubricIds[group] = rubricId;
+    if (!activeRubricIds.includes(rubricId)) activeRubricIds.push(rubricId);
+  }
+
+  const unchanged = Object.keys(questions).length === Object.keys(rubric.questions).length;
+  return {
+    rubric: unchanged ? rubric.rubric : activeRubricIds.join('+'),
+    target: rubric.target,
+    questions,
+    scopes,
+    thresholds,
+    ...(Object.keys(appliesTo).length > 0 ? { appliesTo } : {}),
+    groups,
+    ...(Object.keys(groupRubricIds).length > 0 ? { groupRubricIds } : {}),
+    excluded: rubric.excluded,
+    skippedModuleChecks: rubric.skippedModuleChecks,
+  };
+}
+
+/**
+ * Filter a resolved rubric against a file map (single file in file mode, or module bundle in module mode).
+ * Checks with `applies_to` remain active if ANY file in `files` satisfies their applicability rule.
+ */
+export function filterRubricForFiles(
+  rubric: ResolvedRubric,
+  files: Record<string, string>,
+): ResolvedRubric {
+  if (!rubric.appliesTo || Object.keys(rubric.appliesTo).length === 0) {
+    return rubric;
+  }
+  const entries = Object.entries(files);
+  const applicabilityCache = new Map<RubricApplicability, boolean>();
+  const keep = new Set<string>();
+
+  for (const id of Object.keys(rubric.questions)) {
+    const rule = rubric.appliesTo[id];
+    if (!rule) {
+      keep.add(id);
+      continue;
+    }
+    let matched = applicabilityCache.get(rule);
+    if (matched === undefined) {
+      matched = entries.some(([filePath, content]) => matchesFileApplicability(filePath, content, rule));
+      applicabilityCache.set(rule, matched);
+    }
+    if (matched) keep.add(id);
+  }
+
+  if (keep.size === Object.keys(rubric.questions).length) {
+    return rubric;
+  }
+  return narrowResolvedRubric(rubric, keep);
+}
+
 function parseRubricJson(
   path: string,
   group: string,
@@ -146,6 +439,7 @@ function parseRubricJson(
   const raw = object(JSON.parse(readFileSync(path, 'utf8')), `Rubric ${group}`);
   const id = nonempty(raw.rubric, `${group}.rubric`);
   const target = parseTarget(raw.target, fallbackTarget, allowTestCode);
+  const appliesTo = parseApplicability(raw.applies_to, group, target);
   const entries = Object.entries(object(raw.questions, `${group}.questions`));
   if (!entries.length) throw new Error(`Rubric ${id} must contain at least one question`);
   const questions: Record<string, ChoiceQuestion> = {};
@@ -172,7 +466,7 @@ function parseRubricJson(
     scopes[checkId] = scope;
     thresholds[checkId] = threshold;
   }
-  return { id, group, target, questions, scopes, thresholds };
+  return { id, group, target, ...(appliesTo ? { appliesTo } : {}), questions, scopes, thresholds };
 }
 
 function bundledSlugs(): string[] {
@@ -210,6 +504,7 @@ export function bundledRubrics(): BundledRubricSummary[] {
       slug,
       id: parsed.id,
       target: parsed.target,
+      ...(parsed.appliesTo ? { appliesTo: parsed.appliesTo } : {}),
       checks: Object.keys(parsed.questions),
       scopes: parsed.scopes,
       thresholds: parsed.thresholds,
@@ -280,6 +575,7 @@ export function explainRules(ruleIds: string[], rubricSpecs: string[] = []): Rul
         rubricSlug: parsed.group,
         rubricId: parsed.id,
         target: parsed.target,
+        ...(parsed.appliesTo ? { appliesTo: parsed.appliesTo } : {}),
         scope: parsed.scopes[id],
         threshold: parsed.thresholds[id],
         instructions: question.instructions,
@@ -355,8 +651,10 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const questions: Record<string, ChoiceQuestion> = {};
   const scopes: Record<string, CheckScope> = {};
   const thresholds: Record<string, number> = {};
+  const appliesTo: Record<string, RubricApplicability> = {};
   const questionOwner = new Map<string, string>();
   const groups: Record<string, string[]> = {};
+  const groupRubricIds: Record<string, string> = {};
 
   for (const parsed of parsedSources) {
     if (seenRubricIds.has(parsed.id)) {
@@ -378,9 +676,11 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
       };
       scopes[id] = parsed.scopes[id];
       thresholds[id] = parsed.thresholds[id];
+      if (parsed.appliesTo) appliesTo[id] = parsed.appliesTo;
       groupIds.push(id);
     }
     groups[groupName] = groupIds;
+    groupRubricIds[groupName] = parsed.id;
   }
 
   if (options.hasConventions) {
@@ -405,6 +705,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     scopes[CONVENTIONS_CHECK_ID] = resolvedTarget === 'project_structure' ? 'structure' : 'module';
     thresholds[CONVENTIONS_CHECK_ID] = PASS_THRESHOLD;
     groups.conventions = [CONVENTIONS_CHECK_ID];
+    groupRubricIds.conventions = 'repo-conventions';
   }
 
   // Filter to explicit --rule <id> checks if requested.
@@ -424,6 +725,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         delete questions[id];
         delete scopes[id];
         delete thresholds[id];
+        delete appliesTo[id];
       }
     }
   }
@@ -438,6 +740,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     delete questions[id];
     delete scopes[id];
     delete thresholds[id];
+    delete appliesTo[id];
     appliedExcluded.push(id);
   }
 
@@ -449,6 +752,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
         delete questions[id];
         delete scopes[id];
         delete thresholds[id];
+        delete appliesTo[id];
       }
     }
   }
@@ -456,7 +760,10 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   for (const [group, ids] of Object.entries(groups)) {
     const remaining = ids.filter((id) => id in questions);
     if (remaining.length > 0) groups[group] = remaining;
-    else delete groups[group];
+    else {
+      delete groups[group];
+      delete groupRubricIds[group];
+    }
   }
 
   const activeRubricIds = parsedSources
@@ -482,7 +789,9 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     questions,
     scopes,
     thresholds,
+    ...(Object.keys(appliesTo).length > 0 ? { appliesTo } : {}),
     groups,
+    groupRubricIds,
     excluded: appliedExcluded,
     skippedModuleChecks,
   };
