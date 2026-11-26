@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
 import {
@@ -17,6 +19,10 @@ import { readStructureInputs } from './structure.mts';
 
 type OutputFormat = 'json' | 'summary';
 
+export const EXIT_OK = 0;
+export const EXIT_VIOLATION = 1;
+export const EXIT_SCORING_ERROR = 2;
+
 const USAGE = `Usage: node judge-code.mts --source FILE_OR_DIRECTORY --out NEW_DIRECTORY [options]
 
   --source PATH         Production Kotlin or TypeScript file or directory (required)
@@ -26,16 +32,22 @@ const USAGE = `Usage: node judge-code.mts --source FILE_OR_DIRECTORY --out NEW_D
   --rubric NAME_OR_PATH Bundled rubric name/ID or local .json rubric (repeatable)
   --all                 Include all bundled rubrics for the selected mode
   --exclude CHECK_ID    Exclude a specific check ID (repeatable)
+  --ignore GLOB         Exclude matching relative paths or basenames (repeatable; e.g. '*-test-support.*', 'legacy/**')
   --requirements FILE   Optional Markdown or text requirements document
   --conventions FILE    Optional Markdown or text repo conventions document
   --model ID            OpenRouter Decisions model ID (default: ${DEFAULT_DECISION_MODEL} for code/structure, ${DEFAULT_FILE_MODE_DECISION_MODEL} for file; openrouter only)
   --concurrency N       Max concurrent per-file requests in --mode file (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
   --format FORMAT       Output format: json (default) or summary
-  --fail-on-violation   Exit with status 1 when any check fails
+  --fail-on-violation   Exit with status ${EXIT_VIOLATION} when any scored check fails
   --dry-run             Save the exact request locally without sending anything
   --allow-credentials   Allow inputs that match heuristic credential patterns after review
   --list-rubrics        List bundled rubric names, versions, targets, check IDs, and scopes
   --help, -h            Show this help
+
+Exit codes:
+  ${EXIT_OK}  Success (or scored run without --fail-on-violation)
+  ${EXIT_VIOLATION}  Scored check violation with --fail-on-violation (or invalid CLI arguments/inputs)
+  ${EXIT_SCORING_ERROR}  Scoring, transport, or backend error (e.g. API HTTP error, invalid model, or errored files)
 
 Select a production Kotlin or TypeScript module (or directory for --mode structure).
 Read SKILL.md before live scoring.
@@ -88,6 +100,23 @@ function hasViolation(result: JudgeResult): boolean {
   return Object.values(result.quality.checks).some((check) => check.choice === 'fail');
 }
 
+function hasScoringError(result: JudgeResult): boolean {
+  if (result.status === 'error') return true;
+  return result.file_results?.some((entry) => entry.status === 'error') ?? false;
+}
+
+/**
+ * Resolve CLI exit status from a JudgeResult:
+ * - 2 on scoring/transport/backend error (even when --fail-on-violation is not set)
+ * - 1 on scored rubric violations when --fail-on-violation is set
+ * - 0 otherwise
+ */
+export function exitCodeForResult(result: JudgeResult, failOnViolation: boolean): number {
+  if (hasScoringError(result)) return EXIT_SCORING_ERROR;
+  if (failOnViolation && hasViolation(result)) return EXIT_VIOLATION;
+  return EXIT_OK;
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: {
     source: { type: 'string' },
@@ -97,6 +126,7 @@ async function main(): Promise<void> {
     rubric: { type: 'string', multiple: true },
     all: { type: 'boolean' },
     exclude: { type: 'string', multiple: true },
+    ignore: { type: 'string', multiple: true },
     requirements: { type: 'string' },
     conventions: { type: 'string' },
     model: { type: 'string' },
@@ -156,6 +186,7 @@ async function main(): Promise<void> {
       const inputs = readStructureInputs({
         source: values.source!,
         out: values.out!,
+        ignore: values.ignore,
         requirements: values.requirements,
         conventions: values.conventions,
         allowCredentials: values['allow-credentials'],
@@ -163,6 +194,7 @@ async function main(): Promise<void> {
       return {
         mode: resolvedMode,
         structure: inputs.manifest,
+        ignore: values.ignore,
         requirements: inputs.requirements,
         conventions: inputs.conventions,
         rubric,
@@ -176,6 +208,7 @@ async function main(): Promise<void> {
       const inputs = reader({
         source: values.source!,
         out: values.out!,
+        ignore: values.ignore,
         requirements: values.requirements,
         conventions: values.conventions,
         allowCredentials: values['allow-credentials'],
@@ -183,6 +216,7 @@ async function main(): Promise<void> {
       return {
         mode: resolvedMode,
         files: inputs.files,
+        ignore: values.ignore,
         requirements: inputs.requirements,
         conventions: inputs.conventions,
         rubric,
@@ -203,14 +237,23 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(result));
   }
 
-  if (result.status === 'error' || (values['fail-on-violation'] && hasViolation(result))) {
-    process.exitCode = 1;
+  process.exitCode = exitCodeForResult(result, Boolean(values['fail-on-violation']));
+}
+
+function isDirectCliRun(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
   }
 }
 
-main().catch((error: unknown) => {
-  const key = process.env.OPENROUTER_API_KEY?.trim();
-  const message = error instanceof Error ? error.message : 'Judging failed';
-  console.error(key ? message.replaceAll(key, '[redacted]') : message);
-  process.exitCode = 1;
-});
+if (isDirectCliRun()) {
+  main().catch((error: unknown) => {
+    const key = process.env.OPENROUTER_API_KEY?.trim();
+    const message = error instanceof Error ? error.message : 'Judging failed';
+    console.error(key ? message.replaceAll(key, '[redacted]') : message);
+    process.exitCode = EXIT_VIOLATION;
+  });
+}

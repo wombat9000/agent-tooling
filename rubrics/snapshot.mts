@@ -74,6 +74,7 @@ export interface RepoSnapshot {
     rubric_id: string;
     rubric_groups: Record<string, string[]>;
     exclude: string[];
+    ignore?: string[];
     model: string;
     returned_model: string | null;
     backend: JudgeBackend;

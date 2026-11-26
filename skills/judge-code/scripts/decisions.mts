@@ -46,6 +46,8 @@ export interface Judgment {
   note?: string;
   files_passed?: number;
   files_total?: number;
+  files_raw_failed?: number;
+  files_threshold_failed?: number;
   min_pass_probability?: number | null;
 }
 
@@ -83,6 +85,7 @@ export interface JudgeResult {
   rubric: string;
   rubric_groups: Record<string, string[]>;
   excluded_checks?: string[];
+  ignored_patterns?: string[];
   skipped_module_checks?: string[];
   pass_threshold: number | null;
   check_thresholds?: Record<string, number>;
@@ -99,6 +102,7 @@ export interface JudgeRunOptions {
   mode?: JudgeMode;
   files?: Record<string, string>;
   structure?: StructureManifest;
+  ignore?: string[];
   requirements?: string;
   conventions?: string;
   rubric: ResolvedRubric;
@@ -175,6 +179,10 @@ export function aggregatePerFile(
   for (const id of questionIds) {
     const perFile = fileResults.map((entry) => entry.checks![id]);
     const filesPassed = perFile.filter((c) => c.choice === 'pass').length;
+    const filesRawFailed = perFile.filter((c) => c.choice === 'fail' && c.model_choice === 'fail').length;
+    const filesThresholdFailed = perFile.filter(
+      (c) => c.choice === 'fail' && c.model_choice === 'pass' && typeof c.pass_probability === 'number',
+    ).length;
     const hasProbabilities = perFile.every((c) => typeof c.pass_probability === 'number');
     const hasConfidence = perFile.every((c) => typeof c.confidence === 'number');
     const meanProb = hasProbabilities
@@ -191,6 +199,8 @@ export function aggregatePerFile(
       choice: filesPassed === totalFiles ? 'pass' : 'fail',
       files_passed: filesPassed,
       files_total: totalFiles,
+      ...(filesRawFailed > 0 ? { files_raw_failed: filesRawFailed } : {}),
+      ...(filesThresholdFailed > 0 ? { files_threshold_failed: filesThresholdFailed } : {}),
       pass_probability: meanProb,
       min_pass_probability: minProb,
       confidence: meanConf,
@@ -236,6 +246,7 @@ export function prepareJudgeRun(
   };
   const body = saveJson(join(out, 'request.json'), request);
   const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
+  const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   const result: JudgeResult = {
     status: options.dryRun ? 'dry_run' : 'scored',
@@ -247,6 +258,7 @@ export function prepareJudgeRun(
     rubric: options.rubric.rubric,
     rubric_groups: options.rubric.groups,
     ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+    ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
     pass_threshold: passThreshold,
     ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: null,
@@ -335,6 +347,7 @@ export async function runPerFileJudge(
   const models = [...new Set(fileResults.map((entry) => entry.returned_model).filter((m): m is string => Boolean(m)))];
   const elapsedMs = Math.round(performance.now() - startMs);
   const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
+  const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   const result: JudgeResult = {
     status: options.dryRun ? 'dry_run' : errored.length > 0 ? 'error' : 'scored',
@@ -348,6 +361,7 @@ export async function runPerFileJudge(
     rubric: options.rubric.rubric,
     rubric_groups: options.rubric.groups,
     ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+    ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
     ...(options.rubric.skippedModuleChecks.length > 0
       ? { skipped_module_checks: options.rubric.skippedModuleChecks }
       : {}),
@@ -407,6 +421,28 @@ function computeRetryDelayMs(
   return Math.min(maxDelayMs, Math.max(0, Math.round(exponential * jitterFactor)));
 }
 
+function extractErrorDetail(rawText: string): string | null {
+  try {
+    const parsed = JSON.parse(rawText) as Record<string, unknown>;
+    const errObj = parsed?.error && typeof parsed.error === 'object' && !Array.isArray(parsed.error)
+      ? (parsed.error as Record<string, unknown>)
+      : null;
+    const rawMsg = typeof errObj?.message === 'string'
+      ? errObj.message
+      : typeof parsed?.error === 'string'
+        ? parsed.error
+        : typeof parsed?.message === 'string'
+          ? parsed.message
+          : null;
+    if (!rawMsg) return null;
+    const cleaned = rawMsg.replace(/\s+/g, ' ').trim();
+    if (!cleaned) return null;
+    return cleaned.length > 200 ? `${cleaned.slice(0, 197)}...` : cleaned;
+  } catch {
+    return null;
+  }
+}
+
 async function postDecisions(
   body: string,
   key: string,
@@ -455,11 +491,13 @@ async function postDecisions(
         throw new Error('OpenRouter returned invalid JSON');
       }
     }
+    const detail = extractErrorDetail(rawText);
+    const detailSuffix = detail ? `: ${detail}` : '';
     if (!RETRYABLE_HTTP_STATUSES.has(response.status)) {
-      throw new Error(`OpenRouter returned HTTP ${response.status}`);
+      throw new Error(`OpenRouter returned HTTP ${response.status}${detailSuffix}`);
     }
     if (attempt === maxAttempts) {
-      throw new Error(`OpenRouter returned HTTP ${response.status} after ${maxAttempts} attempts`);
+      throw new Error(`OpenRouter returned HTTP ${response.status} after ${maxAttempts} attempts${detailSuffix}`);
     }
     const delayMs = computeRetryDelayMs(
       attempt - 1,

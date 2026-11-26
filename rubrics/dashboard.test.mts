@@ -733,3 +733,100 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   assert.equal(third.fixture_outcome.status, 'scanned');
   assert.equal(mock3.calls, 2);
 });
+
+test('rubrics:scan supports optional per-repo ignore globs in file and structure modes and invalidates cache when ignore changes', async (t) => {
+  const root = makeTempDir(t, 'scan-ignore-test-');
+  const { repoPath } = createSyntheticGitRepo(
+    root,
+    'ignore-app',
+    {
+      'src/domain.ts': 'export const ok = 1;\n',
+      'src/booking-test-support.ts': 'export const helper = true;\n',
+      'src/legacy/old.ts': 'export const old = 0;\n',
+    },
+  );
+
+  const tempRubricsDir = join(root, 'rubrics');
+  mkdirSync(tempRubricsDir, { recursive: true });
+  cpSync(join(AUTHORITATIVE_RUBRICS_DIR, 'readability.json'), join(tempRubricsDir, 'readability.json'));
+  cpSync(join(AUTHORITATIVE_RUBRICS_DIR, 'project-structure.json'), join(tempRubricsDir, 'project-structure.json'));
+
+  const dataDir = join(root, 'data');
+  const configPath = join(root, 'config.json');
+  const writeConfig = (ignore?: string[]) => {
+    writeFileSync(configPath, JSON.stringify({
+      dataDir,
+      repos: [
+        {
+          name: 'ignore-app',
+          path: repoPath,
+          sources: ['src'],
+          modes: ['file', 'structure'],
+          ...(ignore !== undefined ? { ignore } : {}),
+        },
+      ],
+      fixtures: { enabled: false },
+    }));
+  };
+
+  // Empty or degenerate ignore patterns are rejected at config load time
+  writeConfig(['  ']);
+  assert.throws(() => loadScannerConfig(configPath), /must be a nonempty string/);
+  writeConfig(['./']);
+  assert.throws(() => loadScannerConfig(configPath), /Invalid --ignore pattern/);
+
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'sk-or-ignore-test-key';
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  });
+
+  // 1. Scan with ignore globs (both basename and repo-relative) filters file and structure modes
+  writeConfig(['*-test-support.*', 'src/legacy/**']);
+  const cfg1 = loadScannerConfig(configPath);
+  assert.deepEqual(cfg1.repos[0].ignore, ['*-test-support.*', 'src/legacy/**']);
+  const mock1 = makeMockOpenRouterTransport();
+  const run1 = await runScanner({
+    config: cfg1,
+    rubricsDir: tempRubricsDir,
+    noDashboard: true,
+    transport: mock1.transport,
+  });
+  assert.equal(run1.errors.length, 0);
+  const fileOut1 = run1.repo_outcomes.find((o) => o.mode === 'file')!;
+  const structOut1 = run1.repo_outcomes.find((o) => o.mode === 'structure')!;
+  assert.equal(fileOut1.status, 'scanned');
+  assert.equal(fileOut1.file_count, 1);
+  assert.equal(structOut1.status, 'scanned');
+  assert.equal(structOut1.file_count, 1);
+  const snap1 = JSON.parse(readFileSync(fileOut1.snapshot_file!, 'utf8')) as RepoSnapshot;
+  assert.deepEqual(snap1.scan.ignore, ['*-test-support.*', 'src/legacy/**']);
+  assert.deepEqual(snap1.files.map((f) => f.path), ['src/domain.ts']);
+
+  // 2. Unchanged ignore hits cache
+  const mock2 = makeMockOpenRouterTransport();
+  const run2 = await runScanner({
+    config: cfg1,
+    rubricsDir: tempRubricsDir,
+    noDashboard: true,
+    transport: mock2.transport,
+  });
+  assert.equal(mock2.calls, 0);
+  assert.deepEqual(run2.repo_outcomes.map((o) => o.status), ['skipped', 'skipped']);
+
+  // 3. Removing ignore invalidates cache and scans all 3 files
+  writeConfig();
+  const cfg3 = loadScannerConfig(configPath);
+  assert.deepEqual(cfg3.repos[0].ignore, []);
+  const mock3 = makeMockOpenRouterTransport();
+  const run3 = await runScanner({
+    config: cfg3,
+    rubricsDir: tempRubricsDir,
+    noDashboard: true,
+    transport: mock3.transport,
+  });
+  assert.equal(run3.errors.length, 0);
+  assert.equal(run3.repo_outcomes.find((o) => o.mode === 'file')?.file_count, 3);
+  assert.equal(run3.repo_outcomes.find((o) => o.mode === 'structure')?.file_count, 3);
+});
