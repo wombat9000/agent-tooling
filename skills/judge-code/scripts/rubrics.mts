@@ -23,6 +23,18 @@ export interface BundledRubricSummary {
   checks: string[];
   scopes: Record<string, CheckScope>;
   thresholds: Record<string, number>;
+  questions: Record<string, ChoiceQuestion>;
+}
+
+export interface RuleDefinition {
+  id: string;
+  rubricSlug: string;
+  rubricId: string;
+  target: RubricTarget;
+  scope: CheckScope;
+  threshold: number;
+  instructions: string;
+  criteria: { pass: string; fail: string };
 }
 
 export interface ResolvedRubric {
@@ -201,32 +213,21 @@ export function bundledRubrics(): BundledRubricSummary[] {
       checks: Object.keys(parsed.questions),
       scopes: parsed.scopes,
       thresholds: parsed.thresholds,
+      questions: parsed.questions,
     };
   });
 }
 
-export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
-  const explicitTarget = options.mode ? modeToTarget(options.mode) : undefined;
-  const requestedRubrics = options.rubrics ?? [];
+function loadRubricSpecs(
+  specs: string[],
+  fallbackTarget: RubricTarget,
+  allowTestCode: boolean,
+): ParsedRubricFile[] {
   const parsedSources: ParsedRubricFile[] = [];
   const seenBundled = new Set<string>();
   const seenLocal = new Set<string>();
 
-  const selectAllForTarget = (target: RubricTarget) => {
-    for (const slug of bundledSlugs()) {
-      const parsed = loadBundledRubric(slug);
-      if (parsed.target !== target || seenBundled.has(slug)) continue;
-      seenBundled.add(slug);
-      parsedSources.push(parsed);
-    }
-  };
-
-  // Default to all bundled rubrics for the active target when no --rubric is specified.
-  if (requestedRubrics.length === 0) {
-    selectAllForTarget(explicitTarget ?? 'production_code');
-  }
-
-  for (const spec of requestedRubrics) {
+  for (const spec of specs) {
     if (isLocalRubricPath(spec)) {
       const fullPath = resolve(spec);
       if (!statSync(fullPath, { throwIfNoEntry: false })?.isFile()) {
@@ -236,7 +237,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
       if (seenLocal.has(canonical)) throw new Error(`Duplicate rubric file: ${spec}`);
       seenLocal.add(canonical);
       parsedSources.push(
-        parseRubricJson(canonical, basename(canonical, '.json'), explicitTarget ?? 'production_code', Boolean(options.allowTestCode)),
+        parseRubricJson(canonical, basename(canonical, '.json'), fallbackTarget, allowTestCode),
       );
     } else {
       const { slug, expectedVersion } = parseBundledSpec(spec);
@@ -248,6 +249,89 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
       }
       parsedSources.push(parsed);
     }
+  }
+  return parsedSources;
+}
+
+export function explainRules(ruleIds: string[], rubricSpecs: string[] = []): RuleDefinition[] {
+  if (ruleIds.length === 0) {
+    throw new Error('Specify one or more check IDs for `judge-code explain <check-id...>`');
+  }
+
+  const parsedSources = rubricSpecs.length === 0
+    ? bundledSlugs().map((slug) => loadBundledRubric(slug))
+    : loadRubricSpecs(rubricSpecs, 'production_code', true);
+
+  const seenRubricIds = new Set<string>();
+  const byId = new Map<string, RuleDefinition>();
+  for (const parsed of parsedSources) {
+    if (seenRubricIds.has(parsed.id)) {
+      throw new Error(`Duplicate rubric ID: ${parsed.id}`);
+    }
+    seenRubricIds.add(parsed.id);
+
+    for (const [id, question] of Object.entries(parsed.questions)) {
+      const existing = byId.get(id);
+      if (existing !== undefined) {
+        throw new Error(`Overlapping question ID ${id} in rubrics ${existing.rubricId} and ${parsed.id}`);
+      }
+      byId.set(id, {
+        id,
+        rubricSlug: parsed.group,
+        rubricId: parsed.id,
+        target: parsed.target,
+        scope: parsed.scopes[id],
+        threshold: parsed.thresholds[id],
+        instructions: question.instructions,
+        criteria: question.criteria,
+      });
+    }
+  }
+
+  if (rubricSpecs.length === 0 && !byId.has(CONVENTIONS_CHECK_ID)) {
+    byId.set(CONVENTIONS_CHECK_ID, {
+      id: CONVENTIONS_CHECK_ID,
+      rubricSlug: 'conventions',
+      rubricId: 'repo-conventions',
+      target: 'production_code',
+      scope: 'module',
+      threshold: PASS_THRESHOLD,
+      instructions: 'Does the supplied production code (or project structure) follow the explicit conventions in state.conventions? (Enabled automatically when AGENTS.md is present or --conventions FILE is passed.)',
+      criteria: {
+        pass: 'The production code (or project structure) adheres to all applicable conventions stated in state.conventions, or none of the conventions apply.',
+        fail: 'The production code (or project structure) violates one or more explicit conventions stated in state.conventions.',
+      },
+    });
+  }
+
+  const requested = [...new Set(ruleIds)];
+  const unknown = requested.filter((id) => !byId.has(id));
+  if (unknown.length > 0) {
+    const suffix = rubricSpecs.length > 0
+      ? ` in selected rubric(s): ${rubricSpecs.join(', ')}`
+      : '. Run `judge-code list` to see available checks.';
+    throw new Error(`Unknown check ID${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}${suffix}`);
+  }
+
+  return requested.map((id) => byId.get(id)!);
+}
+
+export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
+  const explicitTarget = options.mode ? modeToTarget(options.mode) : undefined;
+  const requestedRubrics = options.rubrics ?? [];
+  const parsedSources: ParsedRubricFile[] = [];
+
+  if (requestedRubrics.length === 0) {
+    const target = explicitTarget ?? 'production_code';
+    for (const slug of bundledSlugs()) {
+      const parsed = loadBundledRubric(slug);
+      if (parsed.target !== target) continue;
+      parsedSources.push(parsed);
+    }
+  } else {
+    parsedSources.push(
+      ...loadRubricSpecs(requestedRubrics, explicitTarget ?? 'production_code', Boolean(options.allowTestCode)),
+    );
   }
 
   let resolvedTarget: RubricTarget = explicitTarget ?? parsedSources[0]?.target ?? 'production_code';
