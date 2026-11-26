@@ -255,6 +255,7 @@ def parse_amp_stream_usage(stream_path: Path) -> dict[str, int | float | None]:
 
 class AmpAgentOptions(InstalledAgentOptions):
     with_judge_code: bool = False
+    fast: bool = False
 
 
 class AmpAgent(BaseInstalledAgent):
@@ -345,6 +346,8 @@ class AmpAgent(BaseInstalledAgent):
             command += ["--model", self.model_name]
         if self.options.reasoning_effort:
             command += ["--effort", self.options.reasoning_effort]
+        if self.options.fast:
+            command += ["--fast"]
         command += ["-x", self._build_instruction(instruction)]
         await self.exec_as_agent(
             environment,

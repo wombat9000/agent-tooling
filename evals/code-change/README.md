@@ -271,19 +271,19 @@ pnpm eval smoke --task implement-mars-rover
 # First verify skill discovery with the canary, then run one Mars rover trial.
 PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
   harbor run -p evals/code-change/tasks/canary -a amp_agent:AmpAgent \
-  -m openai/gpt-6.1-terra --ak reasoning_effort=high -n 1 -k 1 \
+  -m openai/gpt-6.1-terra --ak reasoning_effort=high --ak fast=true -n 1 -k 1 \
   --skill skills/code-change --artifact /output/REVIEW.md \
   -o eval-results/harbor --job-name amp-canary
 
 PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
   harbor run -p evals/code-change/tasks/implement-mars-rover -a amp_agent:AmpAgent \
-  -m openai/gpt-6.1-terra --ak reasoning_effort=high -n 1 -k 1 \
+  -m openai/gpt-6.1-terra --ak reasoning_effort=high --ak fast=true -n 1 -k 1 \
   --skill skills/code-change -o eval-results/harbor --job-name amp-mars-rover
 
 # Opt-in Amp run with judge-code (requires OPENROUTER_API_KEY in host env; omit --skill skills/code-change for baseline + judge-code)
 PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
   harbor run -p evals/code-change/tasks/refactor-shipping-rates -a amp_agent:AmpAgent \
-  -m openai/gpt-6.1-terra --ak reasoning_effort=high --ak with_judge_code=true -n 1 -k 1 \
+  -m openai/gpt-6.1-terra --ak reasoning_effort=high --ak fast=true --ak with_judge_code=true -n 1 -k 1 \
   --skill skills/code-change --skill skills/judge-code \
   --ae 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}' \
   -o eval-results/harbor --job-name amp-shipping-rates-with-judge-code
@@ -291,7 +291,8 @@ PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
 
 Use a fresh job name for each run. Add `--install-only` to check container installation and
 skill registration without credentials or inference. Amp is installed with npm at setup time;
-use `--ak version=<npm-version>` to pin its version. Supplied skills are copied into Amp's
+use `--ak version=<npm-version>` to pin its version, and `--ak fast=true` to pass `--fast`
+to Amp (for example with `-m openai/gpt-6.1-terra --ak reasoning_effort=high --ak fast=true`). Supplied skills are copied into Amp's
 user skill directory without changing the task prompt. By default, `AmpAgent` never forwards
 host `OPENROUTER_API_KEY`; pass `--ak with_judge_code=true` (and `--skill skills/judge-code`,
 optionally paired with `--ae 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'`) to opt into in-container
