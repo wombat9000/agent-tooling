@@ -913,20 +913,21 @@ test('file mode scores concurrently with OpenRouter, aggregates metrics, formats
   ]);
   assert.equal(summaryProc.status, 1, summaryProc.stderr);
   assert.match(summaryProc.stdout, /judge-code \(file\)/);
-  assert.match(summaryProc.stdout, /Files: 4 scored \(2\/4 passed all checks, 2 with failures\)/);
-  assert.match(
-    summaryProc.stdout,
-    /Metrics: passed decisions 17\/20 \(85\.0%\) \| files passing all checks 2\/4 \(50\.0%\) \| checks passing on every file 3\/5 \(60\.0%\)/,
-  );
-  assert.match(summaryProc.stdout, /Failures: 3 failed decisions \(2 raw FAIL, 1 threshold fail\)/);
-  assert.match(summaryProc.stdout, /FAIL\s+no_long_functions\s+2\/4\s+min P\(pass\)=0\.15 \(1 raw FAIL, 1 threshold fail; threshold 0\.80\)/);
-  assert.match(summaryProc.stdout, /PASS\s+no_message_chains\s+4\/4\s+min P\(pass\)=0\.92/);
+  assert.match(summaryProc.stdout, /Findings: 3 across 2 of 4 files \(2 raw FAIL, 1 threshold borderline\)/);
+  assert.doesNotMatch(summaryProc.stdout, /%/);
+  assert.match(summaryProc.stdout, /Findings by rule \(2 of 5 rules\):/);
+  assert.match(summaryProc.stdout, /FAIL\s+no_long_functions\s+2\/4 files\s+\(1 raw FAIL, 1 threshold borderline; min P\(pass\)=0\.15; threshold 0\.80\)/);
+  assert.match(summaryProc.stdout, /FAIL\s+no_primitive_obsession\s+1\/4 files\s+\(1 raw FAIL; min P\(pass\)=0\.45; threshold 0\.65\)/);
+  assert.match(summaryProc.stdout, /Clean rules \(3\):.*no_message_chains/);
+  const longFnIdx = summaryProc.stdout.indexOf('FAIL  no_long_functions');
+  const primIdx = summaryProc.stdout.indexOf('FAIL  no_primitive_obsession');
+  assert.ok(longFnIdx !== -1 && primIdx !== -1 && longFnIdx < primIdx, 'rules with more findings must appear first');
+  assert.match(summaryProc.stdout, /Hotspot files \(2 of 4 files\):/);
+  assert.match(summaryProc.stdout, /Booking\.kt \(2 findings\): no_long_functions \[raw FAIL: P\(pass\)=0\.15 < 0\.80\], no_primitive_obsession \[raw FAIL: P\(pass\)=0\.45 < 0\.65\]/);
+  assert.match(summaryProc.stdout, /Room\.kt \(1 finding\): no_long_functions \[threshold borderline, raw PASS: P\(pass\)=0\.65 < 0\.80\]/);
   assert.match(summaryProc.stdout, /Skipped module checks \(4\): no_duplicated_code/);
-  assert.match(summaryProc.stdout, /Failing files \(2\):/);
-  assert.match(summaryProc.stdout, /Booking\.kt \(2 failed\): no_long_functions \[raw FAIL: P\(pass\)=0\.15 < 0\.80\], no_primitive_obsession \[raw FAIL: P\(pass\)=0\.45 < 0\.65\]/);
-  assert.match(summaryProc.stdout, /Room\.kt \(1 failed\): no_long_functions \[threshold fail, raw PASS: P\(pass\)=0\.65 < 0\.80\]/);
-  const bookingIdx = summaryProc.stdout.indexOf('Booking.kt (2 failed)');
-  const roomIdx = summaryProc.stdout.indexOf('Room.kt (1 failed)');
+  const bookingIdx = summaryProc.stdout.indexOf('Booking.kt (2 findings)');
+  const roomIdx = summaryProc.stdout.indexOf('Room.kt (1 finding)');
   assert.ok(bookingIdx !== -1 && roomIdx !== -1 && bookingIdx < roomIdx, 'worst failing file must appear first');
 
   // --fail-on-violation exits 0 when every check passes.
@@ -1181,8 +1182,8 @@ console.log(JSON.stringify({
     '--out', claudeOut,
   ], stubEnv);
   assert.equal(claudeProc.status, 0, claudeProc.stderr);
-  assert.match(claudeProc.stdout, /Files: 4 scored \(4\/4 passed all checks, 0 with failures\)/);
-  assert.match(claudeProc.stdout, /min P\(pass\)=n\/a/);
+  assert.match(claudeProc.stdout, /Findings: 0 across 4 files/);
+  assert.match(claudeProc.stdout, /Clean rules \(2\): direct_readability, named_domain_expressions/);
 });
 
 test('formatSummary does not round failing sub-threshold probabilities up to the pass threshold', async () => {
@@ -1232,7 +1233,7 @@ test('formatSummary does not round failing sub-threshold probabilities up to the
     ],
   }, '/tmp/out');
   assert.match(summary, /min P\(pass\)=0\.796/);
-  assert.match(summary, /direct_readability \[threshold fail, raw PASS: P\(pass\)=0\.796 < 0\.80\]/);
+  assert.match(summary, /direct_readability \[threshold borderline, raw PASS: P\(pass\)=0\.796 < 0\.80\]/);
   assert.doesNotMatch(summary, /P\(pass\)=0\.80/);
 });
 
@@ -1760,9 +1761,10 @@ test('formatSummary displays per-criterion thresholds in code, file, and dry-run
       },
     },
   }, '/tmp/out');
-  assert.match(codeSummary, /PASS\s+lenient_pass\s+P\(pass\)=0\.80 \(threshold 0\.70\)/);
-  assert.match(codeSummary, /FAIL\s+lenient_edge_fail\s+threshold fail \(raw PASS: P\(pass\)=0\.696 < 0\.70\)/);
-  assert.match(codeSummary, /FAIL\s+default_fail\s+threshold fail \(raw PASS: P\(pass\)=0\.72 < 0\.80\)/);
+  assert.match(codeSummary, /Findings: 2 across 1 file \(2 threshold borderline\) — 3 rules checked/);
+  assert.match(codeSummary, /FAIL\s+lenient_edge_fail\s+threshold borderline \(raw PASS: P\(pass\)=0\.696 < 0\.70\)/);
+  assert.match(codeSummary, /FAIL\s+default_fail\s+threshold borderline \(raw PASS: P\(pass\)=0\.72 < 0\.80\)/);
+  assert.match(codeSummary, /Clean rules \(1\): lenient_pass \(P\(pass\)=0\.80, threshold 0\.70\)/);
 
   // File mode with mixed thresholds shows per-check thresholds in the table and failing-file detail.
   const fileSummary = formatSummary({
@@ -1825,12 +1827,13 @@ test('formatSummary displays per-criterion thresholds in code, file, and dry-run
       },
     ],
   }, '/tmp/out');
-  assert.match(fileSummary, /PASS\s+lenient_check\s+1\/1\s+min P\(pass\)=0\.72 \(threshold 0\.70\)/);
-  assert.match(fileSummary, /FAIL\s+default_check\s+0\/1\s+min P\(pass\)=0\.72 \(1 threshold fail; threshold 0\.80\)/);
-  assert.match(fileSummary, /FAIL\s+strict_check\s+0\/1\s+min P\(pass\)=0\.896 \(1 threshold fail; threshold 0\.90\)/);
+  assert.match(fileSummary, /Findings: 2 across 1 of 1 file \(2 threshold borderline\)/);
+  assert.match(fileSummary, /FAIL\s+default_check\s+1\/1 file\s+\(1 threshold borderline; min P\(pass\)=0\.72; threshold 0\.80\)/);
+  assert.match(fileSummary, /FAIL\s+strict_check\s+1\/1 file\s+\(1 threshold borderline; min P\(pass\)=0\.896; threshold 0\.90\)/);
+  assert.match(fileSummary, /Clean rules \(1\): lenient_check \(min P\(pass\)=0\.72, threshold 0\.70\)/);
   assert.match(
     fileSummary,
-    /edge\.ts \(2 failed\): default_check \[threshold fail, raw PASS: P\(pass\)=0\.72 < 0\.80\], strict_check \[threshold fail, raw PASS: P\(pass\)=0\.896 < 0\.90\]/,
+    /edge\.ts \(2 findings\): default_check \[threshold borderline, raw PASS: P\(pass\)=0\.72 < 0\.80\], strict_check \[threshold borderline, raw PASS: P\(pass\)=0\.896 < 0\.90\]/,
   );
 
   // Dry-run summary highlights overridden check thresholds and leaves default checks plain.
@@ -1867,7 +1870,8 @@ test('formatSummary displays per-criterion thresholds in code, file, and dry-run
       },
     },
   }, '/tmp/out');
-  assert.match(defaultSummary, /PASS\s+direct_readability\s+P\(pass\)=0\.91$/m);
+  assert.match(defaultSummary, /Findings: 0 across 1 file — 1 rule checked/);
+  assert.match(defaultSummary, /Clean rules \(1\): direct_readability \(P\(pass\)=0\.91\)$|Clean rules \(1\): direct_readability \(P\(pass\)=0\.91\)\n/);
   assert.doesNotMatch(defaultSummary, /threshold/);
 });
 
@@ -2224,10 +2228,10 @@ test('scoring and transport errors exit with distinct non-zero status 2 across m
   assert.equal(JSON.parse(cliErrProc.stdout).status, 'error');
 });
 
-test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped FAIL and uses unambiguous aggregate labels', async () => {
+test('formatSummary renders linter-style punch-list leading with findings, worst-first rules, and top hotspot files without pass-rate percentages', async () => {
   const { formatSummary } = await import('../scripts/format.mts');
 
-  // Code mode with one PASS, one raw FAIL, and one threshold-flipped FAIL (raw PASS with P(pass)=0.72 < 0.80)
+  // Code mode with one PASS, one raw FAIL, and one threshold-flipped borderline (raw PASS with P(pass)=0.72 < 0.80)
   const codeSummary = formatSummary({
     status: 'scored',
     backend: 'openrouter',
@@ -2245,15 +2249,22 @@ test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped 
       pass_rate: 1 / 3,
       checks: {
         direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.94, confidence: 0.88 },
-        modular_organization: { choice: 'fail', model_choice: 'fail', pass_probability: 0.18, confidence: 0.64 },
         no_unnecessary_abstraction: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44 },
+        modular_organization: { choice: 'fail', model_choice: 'fail', pass_probability: 0.18, confidence: 0.64 },
       },
     },
   }, '/tmp/out');
-  assert.match(codeSummary, /Files: 3 \| Checks passed: 1\/3 \(33\.3%\) — 1 raw FAIL, 1 threshold fail/);
-  assert.match(codeSummary, /PASS\s+direct_readability\s+P\(pass\)=0\.94/);
+  assert.doesNotMatch(codeSummary, /%/);
+  assert.match(codeSummary, /Findings: 2 across 3 files \(1 raw FAIL, 1 threshold borderline\) — 3 rules checked/);
+  assert.match(codeSummary, /Findings by rule \(2 of 3 rules\):/);
   assert.match(codeSummary, /FAIL\s+modular_organization\s+raw FAIL \(P\(pass\)=0\.18 < 0\.80\)/);
-  assert.match(codeSummary, /FAIL\s+no_unnecessary_abstraction\s+threshold fail \(raw PASS: P\(pass\)=0\.72 < 0\.80\)/);
+  assert.match(codeSummary, /FAIL\s+no_unnecessary_abstraction\s+threshold borderline \(raw PASS: P\(pass\)=0\.72 < 0\.80\)/);
+  assert.match(codeSummary, /Clean rules \(1\): direct_readability \(P\(pass\)=0\.94\)/);
+  // Raw FAIL must sort ahead of threshold borderline
+  assert.ok(
+    codeSummary.indexOf('modular_organization') < codeSummary.indexOf('no_unnecessary_abstraction'),
+    'raw FAIL rule should sort before threshold borderline rule',
+  );
 
   // CLI backend distinguishes raw FAIL from borderline
   const cliSummary = formatSummary({
@@ -2269,16 +2280,17 @@ test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped 
     quality: {
       pass_rate: 0,
       checks: {
-        direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: null, confidence: null, note: 'Opaque names.' },
         named_domain_expressions: { choice: 'fail', model_choice: 'borderline', pass_probability: null, confidence: null, note: 'Mixed clarity.' },
+        direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: null, confidence: null, note: 'Opaque names.' },
       },
     },
   }, '/tmp/out');
-  assert.match(cliSummary, /Checks passed: 0\/2 \(0\.0%\) — 1 raw FAIL, 1 borderline/);
+  assert.doesNotMatch(cliSummary, /%/);
+  assert.match(cliSummary, /Findings: 2 across 2 files \(1 raw FAIL, 1 borderline\) — 2 rules checked/);
   assert.match(cliSummary, /FAIL\s+direct_readability\s+raw FAIL — Opaque names\./);
   assert.match(cliSummary, /FAIL\s+named_domain_expressions\s+borderline — Mixed clarity\./);
 
-  // File mode separates passed decisions, files passing all checks, and checks passing on every file
+  // File mode leads with findings count & split, worst-first rules, and worst-first hotspot files (no % scoreboard)
   const fileSummary = formatSummary({
     status: 'scored',
     backend: 'openrouter',
@@ -2288,12 +2300,29 @@ test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped 
     requested_model: 'typesafe/jev-1.14',
     returned_model: 'typesafe/jev-1.14',
     rubric: 'readability-v2',
-    rubric_groups: { readability: ['direct_readability', 'named_domain_expressions'] },
+    rubric_groups: { readability: ['direct_readability', 'named_domain_expressions', 'no_long_functions'] },
     pass_threshold: 0.8,
     quality: {
-      pass_rate: 4 / 6,
-      all_files_pass_rate: 1 / 2,
+      pass_rate: 6 / 9,
+      all_files_pass_rate: 1 / 3,
       checks: {
+        named_domain_expressions: {
+          choice: 'pass',
+          files_passed: 3,
+          files_total: 3,
+          pass_probability: 0.93,
+          min_pass_probability: 0.9,
+          confidence: 0.86,
+        },
+        no_long_functions: {
+          choice: 'fail',
+          files_passed: 2,
+          files_total: 3,
+          files_threshold_failed: 1,
+          pass_probability: 0.84,
+          min_pass_probability: 0.72,
+          confidence: 0.68,
+        },
         direct_readability: {
           choice: 'fail',
           files_passed: 1,
@@ -2303,14 +2332,6 @@ test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped 
           pass_probability: 0.61,
           min_pass_probability: 0.2,
           confidence: 0.5,
-        },
-        named_domain_expressions: {
-          choice: 'pass',
-          files_passed: 3,
-          files_total: 3,
-          pass_probability: 0.93,
-          min_pass_probability: 0.9,
-          confidence: 0.86,
         },
       },
     },
@@ -2325,40 +2346,101 @@ test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped 
         checks: {
           direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.91, confidence: 0.82 },
           named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 },
+          no_long_functions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.92, confidence: 0.84 },
         },
       },
       {
-        file: 'raw-fail.ts',
+        file: 'threshold-only.ts',
         status: 'scored',
         returned_model: 'typesafe/jev-1.14',
         elapsed_ms: 100,
-        pass_rate: 0.5,
-        result_dir: 'files/02-raw-fail.ts',
-        checks: {
-          direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: 0.2, confidence: 0.6 },
-          named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.9, confidence: 0.8 },
-        },
-      },
-      {
-        file: 'threshold-fail.ts',
-        status: 'scored',
-        returned_model: 'typesafe/jev-1.14',
-        elapsed_ms: 100,
-        pass_rate: 0.5,
-        result_dir: 'files/03-threshold-fail.ts',
+        pass_rate: 2 / 3,
+        result_dir: 'files/02-threshold-only.ts',
         checks: {
           direct_readability: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44 },
           named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.94, confidence: 0.88 },
+          no_long_functions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.88, confidence: 0.76 },
+        },
+      },
+      {
+        file: 'worst-hotspot.ts',
+        status: 'scored',
+        returned_model: 'typesafe/jev-1.14',
+        elapsed_ms: 100,
+        pass_rate: 1 / 3,
+        result_dir: 'files/03-worst-hotspot.ts',
+        checks: {
+          direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: 0.2, confidence: 0.6 },
+          named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.9, confidence: 0.8 },
+          no_long_functions: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44 },
         },
       },
     ],
   }, '/tmp/out');
-  assert.match(fileSummary, /Files: 3 scored \(1\/3 passed all checks, 2 with failures\)/);
+  assert.doesNotMatch(fileSummary, /%/);
+  assert.match(fileSummary, /Findings: 3 across 2 of 3 files \(1 raw FAIL, 2 threshold borderline\)/);
+  assert.match(fileSummary, /Findings by rule \(2 of 3 rules\):/);
+  assert.match(fileSummary, /FAIL\s+direct_readability\s+2\/3 files\s+\(1 raw FAIL, 1 threshold borderline; min P\(pass\)=0\.20; threshold 0\.80\)/);
+  assert.match(fileSummary, /FAIL\s+no_long_functions\s+1\/3 files\s+\(1 threshold borderline; min P\(pass\)=0\.72; threshold 0\.80\)/);
+  assert.match(fileSummary, /Clean rules \(1\): named_domain_expressions/);
+  assert.ok(
+    fileSummary.indexOf('FAIL  direct_readability') < fileSummary.indexOf('FAIL  no_long_functions'),
+    'rules with more findings must sort first',
+  );
+  assert.match(fileSummary, /Hotspot files \(2 of 3 files\):/);
   assert.match(
     fileSummary,
-    /Metrics: passed decisions 4\/6 \(66\.7%\) \| files passing all checks 1\/3 \(33\.3%\) \| checks passing on every file 1\/2 \(50\.0%\)/,
+    /worst-hotspot\.ts \(2 findings\): direct_readability \[raw FAIL: P\(pass\)=0\.20 < 0\.80\], no_long_functions \[threshold borderline, raw PASS: P\(pass\)=0\.72 < 0\.80\]/,
   );
-  assert.match(fileSummary, /Failures: 2 failed decisions \(1 raw FAIL, 1 threshold fail\)/);
-  assert.match(fileSummary, /raw-fail\.ts \(1 failed\): direct_readability \[raw FAIL: P\(pass\)=0\.20 < 0\.80\]/);
-  assert.match(fileSummary, /threshold-fail\.ts \(1 failed\): direct_readability \[threshold fail, raw PASS: P\(pass\)=0\.72 < 0\.80\]/);
+  assert.match(
+    fileSummary,
+    /threshold-only\.ts \(1 finding\): direct_readability \[threshold borderline, raw PASS: P\(pass\)=0\.72 < 0\.80\]/,
+  );
+  assert.ok(
+    fileSummary.indexOf('worst-hotspot.ts') < fileSummary.indexOf('threshold-only.ts'),
+    'worst hotspot file must sort first',
+  );
+
+  // Large scans cap displayed hotspot files at top 20 and note remaining count
+  const manyFiles = Array.from({ length: 23 }, (_, idx) => ({
+    file: `src/file-${String(idx + 1).padStart(2, '0')}.ts`,
+    status: 'scored' as const,
+    returned_model: 'typesafe/jev-1.14',
+    elapsed_ms: 10,
+    pass_rate: 0,
+    result_dir: `files/${idx + 1}`,
+    checks: {
+      direct_readability: { choice: 'fail' as const, model_choice: 'fail' as const, pass_probability: 0.1 + idx * 0.01, confidence: 0.6 },
+    },
+  }));
+  const largeSummary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'file',
+    file_count: 23,
+    elapsed_ms: 500,
+    requested_model: 'typesafe/jev-1.14',
+    returned_model: 'typesafe/jev-1.14',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability'] },
+    pass_threshold: 0.8,
+    quality: {
+      pass_rate: 0,
+      all_files_pass_rate: 0,
+      checks: {
+        direct_readability: {
+          choice: 'fail',
+          files_passed: 0,
+          files_total: 23,
+          files_raw_failed: 23,
+          pass_probability: 0.2,
+          min_pass_probability: 0.1,
+          confidence: 0.6,
+        },
+      },
+    },
+    file_results: manyFiles,
+  }, '/tmp/out');
+  assert.match(largeSummary, /Top 20 hotspot files \(23 of 23 files with findings\):/);
+  assert.match(largeSummary, /\.\.\. and 3 more files with findings \(see result\.json\)/);
 });
