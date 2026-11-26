@@ -163,7 +163,7 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
     assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
     assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
     assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=0\.60\]/);
-    assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
+    assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file, >=0\.65\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
   }
 
   const badList = run('reject', ['list', 'extra-arg']);
@@ -200,6 +200,7 @@ test('default file-by-file linter accepts positional paths, runs all file-scoped
   assert.deepEqual(res.check_thresholds, {
     no_primitive_obsession: 0.6,
     named_domain_expressions: 0.6,
+    single_responsibility: 0.65,
   });
 
   // Multiple positional paths deduplicate overlapping files
