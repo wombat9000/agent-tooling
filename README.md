@@ -29,8 +29,40 @@ opens an HTML report of saved judge scores and rubric criteria without another A
 
 Track code-quality rubric scores across local repositories and `rubrics/fixtures/` health over time without committing private repository data:
 
-- `pnpm rubrics:scan --config /path/to/private/config.json [--dry-run] [--force] [--repo <name>] [--skip-fixtures] [--no-dashboard]` — scans configured local repositories against authoritative `rubrics/*.json`, caches unchanged `(repo, commit, mode, sources, exclude, rubric_hashes, model)` runs at $0 cost, stores score-only JSON snapshots (never source code) in `<dataDir>/runs/`, and rebuilds the offline dashboard.
-- `pnpm rubrics:dashboard --data /path/to/private/data [--out /path/to/index.html]` — regenerates the self-contained, single-file offline HTML dashboard (inline SVG trend charts with rubric/judge change markers, cross-repo check heatmap, hotspot files, installed `judge-code` version check, and fixture health) directly from saved snapshots.
+- `pnpm rubrics:scan --config /path/to/private/config.json [--dry-run] [--force] [--repo <name>] [--modules | --skip-modules] [--module-root <dir>] [--skip-fixtures] [--no-dashboard]` — scans configured local repositories against authoritative `rubrics/*.json`, caches unchanged `(repo, commit, mode, sources, modules, exclude, ignore, rubric_hashes, model)` runs at $0 cost, stores score-only JSON snapshots (never source code) in `<dataDir>/runs/`, and rebuilds the offline dashboard.
+- `pnpm rubrics:dashboard --data /path/to/private/data [--out /path/to/index.html]` — regenerates the self-contained, single-file offline HTML dashboard (linter-style punch-list overview with hard vs. borderline findings, Feature / Module Architecture breakdown, inline SVG trend charts with rubric/judge change markers, worst-offending rules, hotspot files, cross-repo check heatmap, installed `judge-code` version check, and fixture health) directly from saved snapshots.
+
+### Optional feature / module architectural scanning
+
+`file` mode evaluates file-scoped checks and `structure` mode evaluates directory layout, leaving module-scoped architectural rubrics (`single_responsibility`, `boundary_separation`, `dependency_inversion`, `domain_invariants`, `no_duplicated_code`, `modular_organization`, etc.) unscored unless a repo opts into module scanning.
+
+Add optional `modules` and/or `moduleRoots` to any repository entry in your private `config.json` (both are language- and repo-agnostic, and existing configs without them continue working unchanged):
+
+```json
+{
+  "dataDir": "/path/to/private/rubric-data",
+  "repos": [
+    {
+      "name": "example-app",
+      "path": "/path/to/example-app",
+      "sources": ["src"],
+      "modes": ["file", "structure"],
+      "ignore": ["*-test-support.*"],
+      "conventions": "docs/conventions.md",
+      "moduleRoots": ["src/features/*"],
+      "modules": [
+        { "name": "billing", "path": "src/features/billing", "ignore": ["legacy/**"] },
+        { "name": "core-domain", "path": "src/domain" }
+      ],
+      "moduleModel": "liquid/d1.2-ultra"
+    }
+  ]
+}
+```
+
+- `moduleRoots`: repo-relative directory roots or single-segment `*` wildcards (e.g., `"app/features"`, `"app/features/*"`, `"src/main/kotlin/com/acme/*"`, or `"packages/*/src/features/*"`). Auto-discovers immediate code subdirectories, skipping hidden/build/test/ignored directories and directories with no production source files.
+- `modules`: explicit module declarations as strings (`"src/domain"`) or objects (`{ "name"?, "path", "ignore"? }`). Explicit entries override auto-discovered entries at the same path (useful for attaching per-module `ignore` globs or custom names).
+- When `modules` or `moduleRoots` is configured (or `--modules` / `--module-root` is passed on the CLI), `rubrics:scan` evaluates each module in `--mode code`, forwarding repo `conventions` and merged repo + module `ignore` globs. Modules that exceed `judge-code`'s 128 KiB input budget or contain no production files are recorded as skipped (`oversize` / `empty`) with size diagnostics instead of failing the rest of the scan. Pass `--skip-modules` to bypass module scans on a run.
 
 ## Install skills
 

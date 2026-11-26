@@ -26,6 +26,14 @@ export interface InstalledSkillInfo {
   skill_path: string | null;
 }
 
+export interface FindingCounts {
+  total: number;
+  hard: number;
+  borderline: number;
+}
+
+export type CheckFailureKind = 'hard' | 'borderline' | null;
+
 export interface SnapshotCheckSummary {
   threshold: number;
   rubric_group: string | null;
@@ -55,6 +63,33 @@ export interface SnapshotFileEntry {
   checks: Record<string, SnapshotFileCheckScore>;
 }
 
+export interface SnapshotModuleTarget {
+  name: string;
+  path: string;
+  ignore?: string[];
+}
+
+export type ModuleSkipReason = 'oversize' | 'empty';
+
+export interface SnapshotModuleEntry {
+  name: string;
+  path: string;
+  status: 'scored' | 'skipped' | 'error';
+  skip_reason?: ModuleSkipReason;
+  error?: string;
+  file_count: number;
+  bytes?: number;
+  ignore?: string[];
+  pass_rate: number | null;
+  raw_pass_rate: number | null;
+  mean_pass_probability: number | null;
+  min_pass_probability: number | null;
+  failed_count: number;
+  hard_fail_count: number;
+  borderline_count: number;
+  checks: Record<string, SnapshotFileCheckScore>;
+}
+
 export interface RepoSnapshot {
   schema_version: 1;
   kind: 'repo';
@@ -70,6 +105,8 @@ export interface RepoSnapshot {
   scan: {
     mode: JudgeMode;
     sources: string[];
+    module_roots?: string[];
+    module_targets?: SnapshotModuleTarget[];
     rubrics: string[];
     rubric_id: string;
     rubric_groups: Record<string, string[]>;
@@ -90,6 +127,10 @@ export interface RepoSnapshot {
     file_count: number;
     target_count: number;
     check_count: number;
+    module_count?: number;
+    modules_scored?: number;
+    modules_skipped?: number;
+    modules_errored?: number;
     calibrated_pass_rate: number;
     raw_pass_rate: number;
     all_files_pass_rate?: number;
@@ -101,6 +142,7 @@ export interface RepoSnapshot {
   };
   checks: Record<string, SnapshotCheckSummary>;
   files: SnapshotFileEntry[];
+  modules?: SnapshotModuleEntry[];
 }
 
 export interface FixtureCheckSnapshot {
@@ -198,6 +240,45 @@ export function compareCodepoint(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
+}
+
+export function classifyCheckFailure(
+  check: Pick<SnapshotFileCheckScore, 'choice' | 'model_choice' | 'pass_probability'>,
+): CheckFailureKind {
+  if (check.choice !== 'fail') return null;
+  if (check.model_choice === 'fail') return 'hard';
+  if (check.model_choice === 'pass' || check.model_choice === 'borderline') return 'borderline';
+  return typeof check.pass_probability === 'number' && check.pass_probability >= 0.5 ? 'borderline' : 'hard';
+}
+
+export function countChecksFindings(checks: Record<string, SnapshotFileCheckScore>): FindingCounts {
+  let hard = 0;
+  let borderline = 0;
+  for (const score of Object.values(checks)) {
+    const kind = classifyCheckFailure(score);
+    if (kind === 'hard') hard += 1;
+    else if (kind === 'borderline') borderline += 1;
+  }
+  return { total: hard + borderline, hard, borderline };
+}
+
+export function countSummaryFindings(summary: SnapshotCheckSummary): FindingCounts {
+  const total = Math.max(0, summary.total - summary.passed);
+  const hard = Math.max(0, Math.min(total, summary.total - summary.raw_passed));
+  const borderline = Math.max(0, total - hard);
+  return { total, hard, borderline };
+}
+
+export function sumFindingCounts(items: readonly FindingCounts[]): FindingCounts {
+  let total = 0;
+  let hard = 0;
+  let borderline = 0;
+  for (const item of items) {
+    total += item.total;
+    hard += item.hard;
+    borderline += item.borderline;
+  }
+  return { total, hard, borderline };
 }
 
 export function sha256String(text: string): string {
