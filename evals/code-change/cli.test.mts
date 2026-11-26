@@ -894,3 +894,71 @@ test('judge summary and HTML report record with_judge_code condition metadata fo
     assert.ok(html.includes(expectedBadge), `Expected HTML report badge "${expectedBadge}"`);
   }
 });
+
+test('judge and report surface Harbor trial tokens, cost, and duration with graceful null fallback', (t) => {
+  const f = fixture(t);
+  const job = join(f.root, 'run-skill-11111111-2222-3333-4444-555555555555');
+  mkdirSync(job);
+  writeFileSync(join(job, 'config.json'), JSON.stringify({
+    agents: [{ name: 'codex', model_name: 'openai/gpt-6.1-terra', skills: ['/skills/code-change'] }],
+  }));
+  writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-11-26T12:05:00Z', n_total_trials: 2 }));
+
+  // Trial 1 has full token, cost, and timing fields; Trial 2 has none (simulating oracle/nop fallback).
+  const t1Src = join(job, 'refactor-gilded-rose__t1/artifacts/workspace/src');
+  mkdirSync(t1Src, { recursive: true });
+  writeFileSync(join(t1Src, 'gilded-rose.ts'), 'export class Item {}\n');
+  writeFileSync(join(job, 'refactor-gilded-rose__t1/result.json'), JSON.stringify({
+    started_at: '2026-11-26T12:00:00Z',
+    finished_at: '2026-11-26T12:01:30Z',
+    agent_execution: { started_at: '2026-11-26T12:00:10Z', finished_at: '2026-11-26T12:01:10Z' },
+    agent_result: {
+      n_input_tokens: 50_000,
+      n_cache_tokens: 30_000,
+      n_output_tokens: 4_000,
+      cost_usd: 0.32,
+    },
+  }));
+
+  const t2Src = join(job, 'refactor-gilded-rose__t2/artifacts/workspace/src');
+  mkdirSync(t2Src, { recursive: true });
+  writeFileSync(join(t2Src, 'gilded-rose.ts'), 'export class Item {}\n');
+  writeFileSync(join(job, 'refactor-gilded-rose__t2/result.json'), JSON.stringify({
+    agent_result: null,
+  }));
+
+  const out = join(f.root, 'judge-usage');
+  const judged = f.run(['judge', '--run', job, '--out', out, '--dry-run'], { OPENROUTER_API_KEY: '' });
+  assert.equal(judged.status, 0, judged.stderr);
+  assert.match(judged.stdout, /Usage: tokens 50\.0k in \(30\.0k cache\) \/ 4\.00k out.*cost \$0\.32.*duration 1m 30s/);
+
+  const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+  assert.deepEqual(summary.reports[0].usage, {
+    n_input_tokens: 50_000,
+    n_cache_tokens: 30_000,
+    n_output_tokens: 4_000,
+    cost_usd: 0.32,
+    duration_sec: 90,
+    agent_duration_sec: 60,
+  });
+  assert.deepEqual(summary.reports[1].usage, {
+    n_input_tokens: null,
+    n_cache_tokens: null,
+    n_output_tokens: null,
+    cost_usd: null,
+    duration_sec: null,
+    agent_duration_sec: null,
+  });
+  assert.equal(summary.usage.n_input_tokens.total, 50_000);
+  assert.equal(summary.usage.n_input_tokens.count, 1);
+  assert.equal(summary.usage.cost_usd.mean, 0.32);
+  assert.equal(summary.usage.duration_sec.mean, 90);
+
+  const rebuilt = f.run(['report', out], { OPENROUTER_API_KEY: '' });
+  assert.equal(rebuilt.status, 0, rebuilt.stderr);
+  assert.match(rebuilt.stdout, /Usage: tokens 50\.0k in/);
+  const html = readFileSync(join(out, 'report.html'), 'utf8');
+  assert.ok(html.includes('Trial usage and timing'));
+  assert.ok(html.includes('$0.32'));
+  assert.ok(html.includes('1m 30s'));
+});

@@ -3,6 +3,16 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { basename, dirname, join, resolve } from 'node:path';
 import { inspectHarborJobName, inspectHarborRunCondition } from './run_condition.mts';
 import {
+  USAGE_METRIC_KEYS,
+  type ScorecardUsage,
+} from './scorecard_schema.mts';
+import {
+  aggregateTrialMetrics,
+  normalizeTrialMetrics,
+  readTrialMetrics,
+  type TrialUsageMetrics,
+} from './trial_metrics.mts';
+import {
   computeSkillHash,
   computeTaskHash,
   resolveGitRef,
@@ -54,6 +64,8 @@ interface BatchReportItem {
   status: string;
   result_dir: string;
   rewardPath?: string;
+  trialResultPath?: string;
+  usage?: unknown;
 }
 
 interface BatchSummaryJson {
@@ -273,7 +285,12 @@ function buildEntryFromTrials(params: {
   scope: ScorecardScope;
   withJudgeCode?: boolean;
   recordedAt: string;
-  trials: Array<{ status: string; result: SavedTrialResult | null; deterministic: Record<string, number> }>;
+  trials: Array<{
+    status: string;
+    result: SavedTrialResult | null;
+    deterministic: Record<string, number>;
+    usage: TrialUsageMetrics | null;
+  }>;
 }): ScorecardEntry {
   const {
     repoRoot,
@@ -368,6 +385,18 @@ function buildEntryFromTrials(params: {
     : undefined;
 
   const deterministic = aggregateDeterministic(trials.map((t) => t.deterministic));
+  const aggUsage = aggregateTrialMetrics(trials.map((t) => t.usage));
+  let usage: ScorecardUsage | undefined;
+  if (aggUsage) {
+    const built: ScorecardUsage = {};
+    for (const key of USAGE_METRIC_KEYS) {
+      const m = aggUsage[key];
+      if (m) {
+        built[key] = { total: round4(m.total), mean: round4(m.mean), count: m.count };
+      }
+    }
+    if (Object.keys(built).length > 0) usage = built;
+  }
 
   return {
     recorded_at: recordedAt,
@@ -383,6 +412,7 @@ function buildEntryFromTrials(params: {
       errored: errored.length,
     },
     deterministic,
+    ...(usage ? { usage } : {}),
     quality: {
       pass_rate: round4(meanTrialPassRate),
       mean_pass_probability: round4(meanPassProb),
@@ -460,7 +490,12 @@ export function recordJudgeBatches(options: RecordJudgeBatchOptions): RecordedEn
       task: string;
       target: ScorecardTarget;
       scope: ScorecardScope;
-      trials: Array<{ status: string; result: SavedTrialResult | null; deterministic: Record<string, number> }>;
+      trials: Array<{
+        status: string;
+        result: SavedTrialResult | null;
+        deterministic: Record<string, number>;
+        usage: TrialUsageMetrics | null;
+      }>;
     }>();
 
     for (const report of summary.reports) {
@@ -474,10 +509,13 @@ export function recordJudgeBatches(options: RecordJudgeBatchOptions): RecordedEn
       const det = result?.deterministic && Object.keys(result.deterministic).length > 0
         ? result.deterministic
         : (readFallbackDeterministic(harborDir, report.trial) ?? {});
+      const savedUsage = normalizeTrialMetrics(report.usage);
+      const fallbackTrialResult = harborDir ? join(harborDir, report.trial, 'result.json') : report.trialResultPath;
+      const usage = savedUsage ?? (fallbackTrialResult ? readTrialMetrics(fallbackTrialResult) : null);
 
       const key = `${report.task}::${target}`;
       const bucket = groups.get(key) ?? { task: report.task, target, scope, trials: [] };
-      bucket.trials.push({ status, result, deterministic: det });
+      bucket.trials.push({ status, result, deterministic: det, usage });
       groups.set(key, bucket);
     }
 

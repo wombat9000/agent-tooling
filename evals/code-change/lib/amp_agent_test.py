@@ -46,7 +46,11 @@ def _ensure_harbor_importable() -> None:
         pass
 
     class AgentContext:
-        pass
+        def __init__(self) -> None:
+            self.n_input_tokens: int | None = None
+            self.n_cache_tokens: int | None = None
+            self.n_output_tokens: int | None = None
+            self.cost_usd: float | None = None
 
     class BaseInstalledAgent:
         options_model = InstalledAgentOptions
@@ -200,6 +204,79 @@ class AmpAgentTests(unittest.TestCase):
         self.assertEqual(len(env.calls), 1)
         self.assertIn("cp -R /skills/.", env.calls[0]["command"])
         self.assertIn("$HOME/.config/agents/skills/", env.calls[0]["command"])
+
+    def test_populate_context_parses_result_event_usage_and_cost(self) -> None:
+        agent = self._make_agent()
+        stream = agent.logs_dir / "amp.stdout.jsonl"
+        stream.write_text(
+            "\n".join(
+                [
+                    '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":100,"cache_read_input_tokens":50,"output_tokens":20}}}',
+                    '{"type":"result","total_cost_usd":0.145,"usage":{"input_tokens":1200,"cache_read_input_tokens":800,"cache_creation_input_tokens":200,"output_tokens":450}}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ctx = AgentContext()
+        agent.populate_context_post_run(ctx)
+        self.assertEqual(ctx.n_input_tokens, 2200)
+        self.assertEqual(ctx.n_cache_tokens, 1000)
+        self.assertEqual(ctx.n_output_tokens, 450)
+        self.assertAlmostEqual(ctx.cost_usd or 0.0, 0.145, places=6)
+
+    def test_populate_context_sums_deduplicated_turn_events_when_no_result_event(self) -> None:
+        agent = self._make_agent()
+        stream = agent.logs_dir / "amp.stdout.jsonl"
+        stream.write_text(
+            "\n".join(
+                [
+                    "not json at all",
+                    '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":300,"cache_read_input_tokens":100,"output_tokens":40}}}',
+                    '{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":300,"cache_read_input_tokens":100,"output_tokens":60}}}',
+                    '{"type":"assistant","message":{"id":"m2","usage":{"prompt_tokens":500,"prompt_tokens_details":{"cached_tokens":200},"completion_tokens":80}},"cost_usd":0.03}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ctx = AgentContext()
+        agent.populate_context_post_run(ctx)
+        self.assertEqual(ctx.n_input_tokens, 900)
+        self.assertEqual(ctx.n_cache_tokens, 300)
+        self.assertEqual(ctx.n_output_tokens, 140)
+        self.assertAlmostEqual(ctx.cost_usd or 0.0, 0.03, places=6)
+
+    def test_populate_context_parses_model_usage_map_and_handles_missing_or_corrupt_streams(self) -> None:
+        agent = self._make_agent()
+        # Missing stream file never crashes and leaves fields None.
+        missing_ctx = AgentContext()
+        agent.populate_context_post_run(missing_ctx)
+        self.assertIsNone(missing_ctx.n_input_tokens)
+        self.assertIsNone(missing_ctx.n_cache_tokens)
+        self.assertIsNone(missing_ctx.n_output_tokens)
+        self.assertIsNone(missing_ctx.cost_usd)
+
+        # modelUsage breakdown sums across models.
+        stream = agent.logs_dir / "amp.stdout.jsonl"
+        stream.write_text(
+            '{"type":"result","modelUsage":{"mA":{"inputTokens":400,"cacheReadInputTokens":100,"outputTokens":50,"costUSD":0.02},"mB":{"inputTokens":600,"outputTokens":75,"costUSD":0.03}}}\n',
+            encoding="utf-8",
+        )
+        ctx = AgentContext()
+        agent.populate_context_post_run(ctx)
+        self.assertEqual(ctx.n_input_tokens, 1100)
+        self.assertEqual(ctx.n_cache_tokens, 100)
+        self.assertEqual(ctx.n_output_tokens, 125)
+        self.assertAlmostEqual(ctx.cost_usd or 0.0, 0.05, places=6)
+
+        # Malformed/non-numeric usage values never raise.
+        stream.write_text('{"type":"result","usage":{"input_tokens":"oops","output_tokens":-5},"total_cost_usd":null}\n', encoding="utf-8")
+        bad_ctx = AgentContext()
+        agent.populate_context_post_run(bad_ctx)
+        self.assertIsNone(bad_ctx.n_input_tokens)
+        self.assertIsNone(bad_ctx.n_output_tokens)
+        self.assertIsNone(bad_ctx.cost_usd)
 
 
 if __name__ == "__main__":

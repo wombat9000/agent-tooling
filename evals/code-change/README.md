@@ -157,8 +157,9 @@ lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, 
 lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighting
 lib/highlight_typescript.mts  zero-dependency build-time TypeScript and TSX syntax highlighting
 lib/run_condition.mts      shared run-condition metadata detection and opt-in judge-code prompt helper
-lib/amp_agent.py           experimental Amp-in-Harbor adapter (with opt-in with_judge_code support)
-lib/amp_agent_test.py      offline Python unit tests for AmpAgent key isolation and judge-code opt-in
+lib/trial_metrics.mts      Harbor trial token usage, cost, and wall-clock duration extraction, aggregation, and formatting
+lib/amp_agent.py           experimental Amp-in-Harbor adapter (with opt-in with_judge_code support and stream-json usage parsing)
+lib/amp_agent_test.py      offline Python unit tests for AmpAgent key isolation, judge-code opt-in, and stream-json usage parsing
 lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
 lib/scorecard_schema.mts   per-task scorecard JSON schema, canonical serialization, and strict validation
 lib/scorecard_hashes.mts   working-tree and git-ref content hashing (skill/task/rubric) and staleness rules
@@ -293,8 +294,9 @@ user skill directory without changing the task prompt. By default, `AmpAgent` ne
 host `OPENROUTER_API_KEY`; pass `--ak with_judge_code=true` (and `--skill skills/judge-code`,
 optionally paired with `--ae 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'`) to opt into in-container
 `judge-code` linting and append the self-check instruction note. The adapter enables automatic tool
-approval inside the disposable container and saves native stream logs under `agent/`.
-It does not yet export Harbor's normalized trajectory or token/cost metrics. Keep Amp results
+approval inside the disposable container, saves native stream logs under `agent/`, and parses token
+usage and cost from `amp.stdout.jsonl` into Harbor's `AgentContext` post-run (falling back
+gracefully to `None` when fields are absent). Keep Amp results
 separate from Codex results; `pnpm eval run` and automatic latest-run discovery remain Codex-only.
 Account-level Amp skills and plugins can also affect results; use a dedicated eval account if
 you need isolation from personal configuration.

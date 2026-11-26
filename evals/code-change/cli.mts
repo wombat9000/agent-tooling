@@ -22,6 +22,14 @@ import {
   inspectHarborRunCondition,
   type BaseRunCondition,
 } from './lib/run_condition.mts';
+import {
+  aggregateTrialMetrics,
+  formatAggregateUsageLine,
+  normalizeTrialMetrics,
+  readTrialMetrics,
+  type AggregateUsageMetrics,
+  type TrialUsageMetrics,
+} from './lib/trial_metrics.mts';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TASKS = join(ROOT, 'evals/code-change/tasks');
@@ -280,6 +288,8 @@ interface BatchSummaryReport {
   report: string;
   contextDir?: string;
   rewardPath?: string;
+  trialResultPath?: string;
+  usage?: TrialUsageMetrics;
   status: string;
   result_dir: string;
   quality_pass_rate: number | null;
@@ -293,6 +303,7 @@ interface BatchSummary {
   target?: 'test_code';
   condition?: BaseRunCondition;
   with_judge_code?: boolean;
+  usage?: AggregateUsageMetrics | null;
   reports: BatchSummaryReport[];
 }
 
@@ -337,8 +348,10 @@ function loadResumeSummary(directory: string): { out: string; summary: BatchSumm
       : raw.target === 'test_code'
         ? 'test_code'
         : taskTarget(taskDir);
+    const normalizedUsage = normalizeTrialMetrics(item.usage);
     return {
       ...(item as unknown as BatchSummaryReport),
+      ...(normalizedUsage ? { usage: normalizedUsage } : {}),
       target,
     };
   });
@@ -346,6 +359,7 @@ function loadResumeSummary(directory: string): { out: string; summary: BatchSumm
     ? raw.condition
     : undefined;
   const withJudgeCode = raw.with_judge_code === true ? true : undefined;
+  const aggregatedUsage = aggregateTrialMetrics(reports.map((entry) => entry.usage));
   return {
     out,
     summary: {
@@ -355,6 +369,7 @@ function loadResumeSummary(directory: string): { out: string; summary: BatchSumm
       ...(raw.target === 'test_code' ? { target: 'test_code' as const } : {}),
       ...(condition ? { condition } : {}),
       ...(withJudgeCode ? { with_judge_code: true } : {}),
+      ...(aggregatedUsage ? { usage: aggregatedUsage } : {}),
       reports,
     },
   };
@@ -369,6 +384,12 @@ async function runBatchJudge(
 ): Promise<number> {
   const resolvedOut = resolve(out);
   const saveSummary = () => {
+    const aggregatedUsage = aggregateTrialMetrics(summary.reports.map((entry) => entry.usage));
+    if (aggregatedUsage) {
+      summary.usage = aggregatedUsage;
+    } else {
+      delete summary.usage;
+    }
     writeFileSync(join(resolvedOut, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     writeHtmlReport(resolvedOut);
   };
@@ -414,6 +435,8 @@ async function runBatchJudge(
       return 1;
     }
   }
+  const usageLine = formatAggregateUsageLine(summary.usage);
+  if (usageLine) console.log(`Usage: ${usageLine}`);
   return showReport(join(resolvedOut, 'report.html'), open);
 }
 
@@ -544,7 +567,29 @@ async function main(): Promise<number> {
       console.log(`HTML report source: ${directory}`);
       return 0;
     }
-    return showReport(writeHtmlReport(directory, values.out), values.open);
+    const reportPath = writeHtmlReport(directory, values.out);
+    const summaryPath = join(directory, 'summary.json');
+    if (existsSync(summaryPath)) {
+      try {
+        const savedSummary = JSON.parse(readFileSync(summaryPath, 'utf8')) as {
+          source_run?: string;
+          usage?: AggregateUsageMetrics | null;
+          reports?: Array<{ trial?: string; usage?: unknown }>;
+        };
+        const usage = savedSummary.usage ?? aggregateTrialMetrics(
+          (savedSummary.reports ?? []).map((entry) =>
+            normalizeTrialMetrics(entry.usage)
+            ?? (savedSummary.source_run && entry.trial
+              ? readTrialMetrics(join(savedSummary.source_run, entry.trial, 'result.json'))
+              : null)),
+        );
+        const usageLine = formatAggregateUsageLine(usage);
+        if (usageLine) console.log(`Usage: ${usageLine}`);
+      } catch {
+        // Optional usage summary line.
+      }
+    }
+    return showReport(reportPath, values.open);
   }
   if (command === 'judge') {
     const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
@@ -611,13 +656,22 @@ async function main(): Promise<number> {
       mkdirSync(dirname(out), { recursive: true });
       mkdirSync(out);
       const runCondition = inspectHarborRunCondition(source);
+      const summaryReports: BatchSummaryReport[] = reports.map((entry) => ({
+        ...entry,
+        usage: readTrialMetrics(entry.trialResultPath),
+        status: 'pending',
+        result_dir: join(out, entry.trial),
+        quality_pass_rate: null as number | null,
+        error: null as string | null,
+      }));
+      const aggregatedUsage = aggregateTrialMetrics(summaryReports.map((entry) => entry.usage));
       const summary: BatchSummary = {
         source_run: source, model, scope,
         ...(isTestsTarget ? { target: 'test_code' as const } : {}),
         ...(runCondition.baseCondition ? { condition: runCondition.baseCondition } : {}),
         ...(runCondition.withJudgeCode ? { with_judge_code: true } : {}),
-        reports: reports.map((entry) => ({ ...entry, status: 'pending', result_dir: join(out, entry.trial),
-          quality_pass_rate: null as number | null, error: null as string | null })),
+        ...(aggregatedUsage ? { usage: aggregatedUsage } : {}),
+        reports: summaryReports,
       };
       console.log(`Run: ${source}`);
       console.log(`Judge: ${model} (${scope}${isTestsTarget ? ', test_code' : ''}); reports: ${reports.length}`);

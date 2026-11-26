@@ -10,6 +10,7 @@ import {
 } from './scorecard_discovery.mts';
 import { compareCodepoint, type ScorecardCheckStats } from './scorecard_schema.mts';
 import { escapeHtml } from './source_tokens.mts';
+import { formatCostUsd, formatDurationSec, formatTokenCount } from './trial_metrics.mts';
 
 function escape(value: unknown): string {
   return escapeHtml(String(value ?? ''));
@@ -227,6 +228,20 @@ function renderConditionCard(label: string, view: EvaluatedEntryView | null): st
     : '';
   const refBadge = e.source?.git_ref ? `<span class="chip">git ${escape(e.source.git_ref)}</span>` : '';
   const judgeCodeBadge = e.with_judge_code ? '<span class="chip">+judge-code</span>' : '';
+  const usageChips = e.usage
+    ? [
+      e.usage.n_input_tokens || e.usage.n_output_tokens
+        ? `<span class="chip">Mean tokens: ${escape([
+          e.usage.n_input_tokens ? `${formatTokenCount(e.usage.n_input_tokens.mean)} in` : null,
+          e.usage.n_output_tokens ? `${formatTokenCount(e.usage.n_output_tokens.mean)} out` : null,
+        ].filter(Boolean).join(' / '))}</span>`
+        : '',
+      e.usage.cost_usd ? `<span class="chip">Mean cost: ${escape(formatCostUsd(e.usage.cost_usd.mean))}</span>` : '',
+      (e.usage.duration_sec ?? e.usage.agent_duration_sec)
+        ? `<span class="chip">Mean duration: ${escape(formatDurationSec((e.usage.duration_sec ?? e.usage.agent_duration_sec)!.mean))}</span>`
+        : '',
+    ].filter(Boolean).join('')
+    : '';
   const condCls = view.condition === 'skill' ? 'cond-skill' : 'cond-baseline';
   return `<div class="cond-card">
     <div class="cond-card-head">
@@ -245,7 +260,7 @@ function renderConditionCard(label: string, view: EvaluatedEntryView | null): st
       <span>Rubric <strong>${escape(e.rubric)}</strong></span>
       ${refBadge}
     </div>
-    ${subMetrics ? `<div class="chip-row">${subMetrics}</div>` : ''}
+    ${subMetrics || usageChips ? `<div class="chip-row">${usageChips}${subMetrics}</div>` : ''}
     <details class="hash-details"><summary>Content hash provenance</summary>${renderHashDiffTable(view)}</details>
   </div>`;
 }

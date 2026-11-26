@@ -514,6 +514,17 @@ test('scorecard recording preserves with_judge_code metadata and classifies base
       agents: [{ name: 'codex', model_name: 'openai/gpt-6.1-terra', skills }],
     }));
     writeFileSync(join(harborDir, 'result.json'), JSON.stringify({ finished_at: '2026-11-26T15:00:00Z' }));
+    mkdirSync(join(harborDir, 'refactor-demo__t1'), { recursive: true });
+    writeFileSync(join(harborDir, 'refactor-demo__t1/result.json'), JSON.stringify({
+      started_at: '2026-11-26T14:58:00Z',
+      finished_at: '2026-11-26T14:59:30Z',
+      agent_result: {
+        n_input_tokens: 24_000,
+        n_cache_tokens: 12_000,
+        n_output_tokens: 3_000,
+        cost_usd: 0.18,
+      },
+    }));
 
     const batchDir = join(archive, 'eval-results/judges', runFolder, 'batch');
     const trialDir = join(batchDir, 'refactor-demo__t1');
@@ -554,12 +565,32 @@ test('scorecard recording preserves with_judge_code metadata and classifies base
   assert.equal(parsed.entries.baseline?.production_code?.with_judge_code, true);
   assert.equal(parsed.entries.baseline?.production_code?.hashes.skill_hash, null);
   assert.equal(parsed.entries.skill?.production_code?.with_judge_code, true);
+  assert.equal(parsed.entries.skill?.production_code?.usage?.n_input_tokens?.mean, 24_000);
+  assert.equal(parsed.entries.skill?.production_code?.usage?.cost_usd?.mean, 0.18);
+  assert.equal(parsed.entries.skill?.production_code?.usage?.duration_sec?.mean, 90);
 
   const snap = buildScorecardSnapshot(repo);
   const md = renderScorecardMarkdown(snap);
   assert.match(md, /\*\*Baseline \+ judge-code\*\*/);
   assert.match(md, /\*\*Skill \+ judge-code\*\*/);
+  assert.match(md, /mean tokens 24\.0k in \/ 3\.00k out, mean cost \$0\.18, mean duration 1m 30s/);
 
   const html = renderScorecardHtml(snap);
   assert.match(html, /\+judge-code/);
+  assert.match(html, /Mean tokens: 24\.0k in \/ 3\.00k out/);
+  assert.match(html, /Mean cost: \$0\.18/);
+  assert.match(html, /Mean duration: 1m 30s/);
+
+  // Invalid usage fields are rejected by schema validation.
+  assert.throws(() => validateTaskScorecard({
+    ...parsed,
+    entries: {
+      skill: {
+        production_code: {
+          ...parsed.entries.skill!.production_code!,
+          usage: { cost_usd: { total: -1, mean: -1, count: 1 } },
+        },
+      },
+    },
+  }), /non-negative/);
 });

@@ -5,6 +5,18 @@ import { highlightKotlinLines } from './highlight_kotlin.mts';
 import { highlightTypeScriptLines } from './highlight_typescript.mts';
 import { formatConditionBadge, inspectHarborRunCondition, type BaseRunCondition } from './run_condition.mts';
 import { escapeHtml } from './source_tokens.mts';
+import {
+  EMPTY_TRIAL_METRICS,
+  aggregateTrialMetrics,
+  formatCostUsd,
+  formatDurationSec,
+  formatExactInt,
+  formatTokenCount,
+  hasAnyTrialMetrics,
+  normalizeTrialMetrics,
+  readTrialMetrics,
+  type TrialUsageMetrics,
+} from './trial_metrics.mts';
 
 interface Check {
   choice: string;
@@ -60,6 +72,7 @@ interface Trial {
   error: string | null;
   result: SavedResult | null;
   request: SavedRequest | null;
+  usage: TrialUsageMetrics;
 }
 
 function readJson(path: string) {
@@ -132,6 +145,7 @@ function loadTrials(directory: string): { source: string; model: string; scope: 
     throw new Error(`No saved judge data in ${directory}. Choose a judge output directory or use --latest.`);
   }
   const summary = existsSync(summaryPath) ? readJson(summaryPath) : null;
+  const source = summary?.source_run ?? directory;
   const entries = summary ? summary.reports : [{ trial: basename(directory), result_dir: directory }];
   if (!Array.isArray(entries) || !entries.length) throw new Error('No trial data to report.');
   const trials: Trial[] = entries.map((entry) => {
@@ -144,12 +158,15 @@ function loadTrials(directory: string): { source: string; model: string; scope: 
     if (status === 'scored' && (!result?.quality || !request)) {
       throw new Error(`Scored trial is missing its request or quality data: ${entry.trial}`);
     }
+    const savedUsage = normalizeTrialMetrics(entry.usage);
+    const harborTrialResultPath = entry.trialResultPath
+      ?? (summary?.source_run ? join(summary.source_run, String(entry.trial), 'result.json') : undefined);
+    const usage = savedUsage ?? (harborTrialResultPath ? readTrialMetrics(harborTrialResultPath) : { ...EMPTY_TRIAL_METRICS });
     return {
       trial: String(entry.trial), task: String(entry.task ?? request?.state.task ?? 'Review'),
-      status, error: result?.error ?? entry.error ?? null, result, request,
+      status, error: result?.error ?? entry.error ?? null, result, request, usage,
     };
   });
-  const source = summary?.source_run ?? directory;
   return {
     source,
     model: summary?.model ?? trials[0].result?.requested_model ?? trials[0].request?.model ?? 'Unknown',
@@ -706,9 +723,32 @@ function trialHtml(trial: Trial, index: number): string {
   const strictMeta = result?.quality?.all_files_pass_rate !== undefined
     ? `<span>All-files-pass checks <strong>${percent(result.quality.all_files_pass_rate)}</strong></span>`
     : '';
+  const usage = trial.usage;
+  const hasTokens = usage.n_input_tokens !== null || usage.n_output_tokens !== null;
+  const tokenText = hasTokens
+    ? [
+      usage.n_input_tokens !== null
+        ? `${formatTokenCount(usage.n_input_tokens)} in${usage.n_cache_tokens !== null ? ` (${formatTokenCount(usage.n_cache_tokens)} cache)` : ''}`
+        : null,
+      usage.n_output_tokens !== null ? `${formatTokenCount(usage.n_output_tokens)} out` : null,
+    ].filter(Boolean).join(' / ')
+    : null;
+  const tokenTitle = hasTokens
+    ? `Input: ${formatExactInt(usage.n_input_tokens)}, Cache: ${formatExactInt(usage.n_cache_tokens)}, Output: ${formatExactInt(usage.n_output_tokens)}`
+    : '';
+  const tokensMeta = tokenText
+    ? `<span title="${escape(tokenTitle)}">Tokens <strong>${escape(tokenText)}</strong></span>`
+    : '';
+  const costMeta = usage.cost_usd !== null
+    ? `<span>Cost <strong>${escape(formatCostUsd(usage.cost_usd))}</strong></span>`
+    : '';
+  const wallDur = usage.duration_sec ?? usage.agent_duration_sec;
+  const durationMeta = wallDur !== null
+    ? `<span>Duration <strong>${escape(formatDurationSec(wallDur))}</strong>${usage.duration_sec !== null && usage.agent_duration_sec !== null ? ` <span class="muted">(agent ${escape(formatDurationSec(usage.agent_duration_sec))})</span>` : ''}</span>`
+    : '';
   return `<details class="trial" data-task="${escape(trial.task)}" data-state="${state(trial)}" ${index === 0 ? 'open ' : ''}id="trial-${index}">
     <summary><span class="trial-name">${escape(trial.trial)}</span><span class="badge ${state(trial) === 'passed' ? 'pass' : state(trial) === 'attention' ? 'fail' : 'neutral'}">${escape(score)}</span></summary>
-    <div class="trial-body"><div class="trial-meta"><span>Rubric <strong>${escape(result?.rubric ?? 'Pending')}</strong></span><span>Deterministic reward <strong>${deterministic === undefined ? '—' : escape(deterministic)}</strong></span><span>Returned model <strong>${escape(result?.returned_model ?? '—')}</strong></span>${scopeMeta}${contextMeta}${strictMeta}</div>
+    <div class="trial-body"><div class="trial-meta"><span>Rubric <strong>${escape(result?.rubric ?? 'Pending')}</strong></span><span>Deterministic reward <strong>${deterministic === undefined ? '—' : escape(deterministic)}</strong></span><span>Returned model <strong>${escape(result?.returned_model ?? '—')}</strong></span>${scopeMeta}${contextMeta}${strictMeta}${tokensMeta}${costMeta}${durationMeta}</div>
     ${trial.error ? `<p class="error">${escape(trial.error)}</p>` : ''}
     <div class="section-bar"><h3>Rubric and scores</h3>${Object.keys(questions).length ? `<button type="button" class="mini-btn" data-toggle-criteria="trial-${index}">Show all criteria</button>` : ''}</div>
     ${checksTableHtml(questions, checks)}
@@ -740,6 +780,7 @@ p{margin:6px 0}
 .subtitle,.muted{color:var(--muted)}
 .kpi-strip,.panel,.trial{background:white;border:1px solid var(--line);border-radius:12px}
 .kpi-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px;overflow:hidden}
+.usage-strip{grid-template-columns:repeat(3,minmax(0,1fr))}
 .kpi{padding:14px 18px;border-right:1px solid var(--line)}
 .kpi:last-child{border-right:0}
 .kpi-alert{background:#fff8f1}
@@ -1033,6 +1074,8 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
   const unscored = trials.length - scored.length;
   const tasks = [...new Set(trials.map((trial) => trial.task))];
   const rubrics = [...new Set(trials.map((trial) => trial.result?.rubric).filter((r): r is string => Boolean(r)))];
+  const runUsage = aggregateTrialMetrics(trials.map((trial) => trial.usage));
+  const hasRunUsage = runUsage !== null && trials.some((trial) => hasAnyTrialMetrics(trial.usage));
   const taskRows = tasks.map((task) => {
     const group = trials.filter((trial) => trial.task === task);
     const judged = group.filter((trial) => trial.status === 'scored');
@@ -1040,7 +1083,16 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
     const passed = checks.filter((check) => check.choice === 'pass').length;
     const taskMean = judged.length ? judged.reduce((sum, trial) => sum + trial.result!.quality!.pass_rate, 0) / judged.length : null;
     const deterministic = group.filter((trial) => trial.result?.deterministic?.reward === 1).length;
-    return `<tr><td class="task-name">${escape(task)}</td><td class="numeric">${judged.length}/${group.length}</td><td class="numeric">${percent(taskMean)}</td><td class="numeric">${passed}/${checks.length}</td><td class="numeric">${deterministic}/${group.filter((trial) => trial.result).length}</td></tr>`;
+    const taskUsage = aggregateTrialMetrics(group.map((trial) => trial.usage));
+    const taskTokensCell = taskUsage && (taskUsage.n_input_tokens || taskUsage.n_output_tokens)
+      ? `${taskUsage.n_input_tokens ? `${formatTokenCount(taskUsage.n_input_tokens.mean)} in` : '—'} / ${taskUsage.n_output_tokens ? `${formatTokenCount(taskUsage.n_output_tokens.mean)} out` : '—'}`
+      : '—';
+    const taskCostCell = formatCostUsd(taskUsage?.cost_usd?.mean);
+    const taskDurCell = formatDurationSec((taskUsage?.duration_sec ?? taskUsage?.agent_duration_sec)?.mean);
+    const usageCols = hasRunUsage
+      ? `<td class="numeric">${escape(taskTokensCell)}</td><td class="numeric">${escape(taskCostCell)}</td><td class="numeric">${escape(taskDurCell)}</td>`
+      : '';
+    return `<tr><td class="task-name">${escape(task)}</td><td class="numeric">${judged.length}/${group.length}</td><td class="numeric">${percent(taskMean)}</td><td class="numeric">${passed}/${checks.length}</td><td class="numeric">${deterministic}/${group.filter((trial) => trial.result).length}</td>${usageCols}</tr>`;
   }).join('');
   const isTestCode = trials.some((trial) => trial.result?.target === 'test_code' || Boolean(trial.request?.state.test_files));
   const isCode = isTestCode || trials.some((trial) => trial.result?.target === 'production_code' || Boolean(trial.request?.state.production_files));
@@ -1079,6 +1131,43 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
       })()
       : `<div class="kpi"><div class="kpi-label">${unitCap} scored</div><div class="kpi-value tone-good">${scored.length}<span class="muted"> / ${trials.length}</span></div><div class="kpi-note">0 errors · 0 missing</div></div>`;
 
+  const usageStripHtml = hasRunUsage && runUsage
+    ? (() => {
+      const inTotal = runUsage.n_input_tokens ? formatTokenCount(runUsage.n_input_tokens.total) : '—';
+      const outTotal = runUsage.n_output_tokens ? formatTokenCount(runUsage.n_output_tokens.total) : '—';
+      const tokensVal = runUsage.n_input_tokens || runUsage.n_output_tokens
+        ? `${inTotal} <span class="muted" style="font-size:.95rem;font-weight:500">in</span> · ${outTotal} <span class="muted" style="font-size:.95rem;font-weight:500">out</span>`
+        : '—';
+      const tokensNote = [
+        runUsage.n_input_tokens ? `mean ${formatTokenCount(runUsage.n_input_tokens.mean)} in` : null,
+        runUsage.n_cache_tokens ? `${formatTokenCount(runUsage.n_cache_tokens.total)} cache` : null,
+        runUsage.n_output_tokens ? `mean ${formatTokenCount(runUsage.n_output_tokens.mean)} out` : null,
+      ].filter(Boolean).join(' · ') || 'No token metrics recorded';
+      const costVal = formatCostUsd(runUsage.cost_usd?.total);
+      const costNote = runUsage.cost_usd
+        ? `mean ${formatCostUsd(runUsage.cost_usd.mean)} / trial (${runUsage.cost_usd.count}/${trials.length})`
+        : 'No cost recorded';
+      const wallMetric = runUsage.duration_sec ?? runUsage.agent_duration_sec;
+      const durVal = formatDurationSec(wallMetric?.mean);
+      const durNote = wallMetric
+        ? [
+          `total ${formatDurationSec(wallMetric.total)} (${wallMetric.count}/${trials.length})`,
+          runUsage.duration_sec && runUsage.agent_duration_sec
+            ? `mean agent ${formatDurationSec(runUsage.agent_duration_sec.mean)}`
+            : null,
+        ].filter(Boolean).join(' · ')
+        : 'No timing recorded';
+      return `<section class="kpi-strip usage-strip" aria-label="Trial usage and timing">
+        <div class="kpi"><div class="kpi-label">Total tokens</div><div class="kpi-value">${tokensVal}</div><div class="kpi-note">${escape(tokensNote)}</div></div>
+        <div class="kpi"><div class="kpi-label">Total cost</div><div class="kpi-value">${escape(costVal)}</div><div class="kpi-note">${escape(costNote)}</div></div>
+        <div class="kpi"><div class="kpi-label">Mean duration</div><div class="kpi-value">${escape(durVal)}</div><div class="kpi-note">${escape(durNote)}</div></div>
+      </section>`;
+    })()
+    : '';
+  const taskTableUsageHeaders = hasRunUsage
+    ? '<th scope="col">Mean tokens</th><th scope="col">Mean cost</th><th scope="col">Mean duration</th>'
+    : '';
+
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
   <title>${escape(headingTitle)}${meta.condition ? ` (${escape(meta.condition.label)})` : ''}${isTestCode ? ' · Tests' : ''} · Eval report</title><style>${STYLE}</style></head><body><main>
@@ -1089,11 +1178,12 @@ export function writeHtmlReport(inputDirectory: string, outputFile?: string): st
   <section class="kpi-strip" aria-label="Run overview">
     <div class="kpi"><div class="kpi-label">Mean trial score</div><div class="kpi-value${scoreTone(mean)}">${percent(mean)}</div><div class="kpi-note">${scored.length}/${trials.length} ${unitLow} scored</div></div>
     <div class="kpi"><div class="kpi-label">All checks passed</div><div class="kpi-value${allPassedTone}">${allPassed}<span class="muted"> / ${scored.length}</span></div><div class="kpi-note">100% rubric pass</div></div>
-    <div class="kpi"><div class="kpi-label">Deterministic passes</div><div class="kpi-value${detTone}">${detTotal ? `${detPassed}<span class="muted"> / ${detTotal}</span>` : '—'}</div><div class="kpi-note">${isCode ? 'Gradle + contract tests' : 'Verifier reward'}</div></div>
+    <div class="kpi"><div class="kpi-label">Deterministic passes</div><div class="kpi-value${detTone}">${detTotal ? `${detPassed}<span class="muted"> / ${detTotal}</span>` : '—'}</div><div class="kpi-note">${isCode ? 'Build + contract tests' : 'Verifier reward'}</div></div>
     ${fourthKpi}
   </section>
+  ${usageStripHtml}
   ${checkMatrixHtml(trials)}
-  <section class="panel"><h2>Results by task</h2><div class="table-scroll"><table><thead><tr><th scope="col">Task</th><th scope="col">Scored</th><th scope="col">Mean score</th><th scope="col">Rubric checks passed</th><th scope="col">Deterministic passes</th></tr></thead><tbody>${taskRows}</tbody></table></div><p class="note">A trial score is the fraction of rubric questions marked pass (mean across files in per-file mode, where each aggregated check is pass only when every file passes). P(pass) and confidence are separate model signals, shown below. Unscored trials are excluded from averages. Judge accuracy and confidence thresholds are not yet calibrated.</p></section>
+  <section class="panel"><h2>Results by task</h2><div class="table-scroll"><table><thead><tr><th scope="col">Task</th><th scope="col">Scored</th><th scope="col">Mean score</th><th scope="col">Rubric checks passed</th><th scope="col">Deterministic passes</th>${taskTableUsageHeaders}</tr></thead><tbody>${taskRows}</tbody></table></div><p class="note">A trial score is the fraction of rubric questions marked pass (mean across files in per-file mode, where each aggregated check is pass only when every file passes). P(pass) and confidence are separate model signals, shown below. Unscored trials are excluded from averages. Judge accuracy and confidence thresholds are not yet calibrated.</p></section>
   <h2>Rubric and trial details</h2><div class="filters"><label class="field">Task<select id="task-filter"><option value="">All tasks</option>${tasks.map((task) => `<option value="${escape(task)}">${escape(task)}</option>`).join('')}</select></label><label class="field">Result<select id="state-filter"><option value="">All results</option><option value="attention">Some checks failed</option><option value="passed">All checks passed</option><option value="unscored">Not scored</option></select></label><button id="expand" type="button">Expand trials</button><button id="collapse" type="button">Collapse trials</button><span class="count" id="visible-count" aria-live="polite"></span></div>
   ${trials.map(trialHtml).join('')}
   <footer>Generated from saved requests and scores. Rubric text and artifacts are shown as recorded; no new judge calls were made to build this page.</footer>

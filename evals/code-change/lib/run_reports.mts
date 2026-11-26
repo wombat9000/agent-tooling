@@ -11,6 +11,7 @@ export interface RunReport {
   report: string;
   contextDir?: string;
   rewardPath?: string;
+  trialResultPath?: string;
 }
 
 /** Select by completion time, excluding unfinished jobs and non-Codex agents. */
@@ -72,6 +73,10 @@ export function reportsFromRun(
     const trialDir = join(directory, trial.name);
     const rewardCandidate = join(trialDir, 'verifier/reward.json');
     const rewardPath = statSync(rewardCandidate, { throwIfNoEntry: false })?.isFile() ? rewardCandidate : undefined;
+    const trialResultCandidate = join(trialDir, 'result.json');
+    const trialResultPath = statSync(trialResultCandidate, { throwIfNoEntry: false })?.isFile()
+      ? trialResultCandidate
+      : undefined;
     if (targetOverride === 'test_code') {
       if (baseTarget === 'review') {
         if (taskFilter) {
@@ -85,19 +90,19 @@ export function reportsFromRun(
         throw new Error(`No exported test sources for ${trial.name}. Expected ${testRoot} under exported artifacts.`);
       }
       const contextDir = artifactSubdir(trialDir, taskSourceRoot(taskDir)) ?? undefined;
-      reports.push({ trial: trial.name, task, target: 'test_code', report: testDir, contextDir, rewardPath });
+      reports.push({ trial: trial.name, task, target: 'test_code', report: testDir, contextDir, rewardPath, trialResultPath });
     } else if (baseTarget === 'production_code') {
       const sourceDir = artifactSubdir(trialDir, taskSourceRoot(taskDir));
       if (!sourceDir) {
         throw new Error(`No exported production sources for ${trial.name}. Task needs artifacts = ["/workspace/src"].`);
       }
-      reports.push({ trial: trial.name, task, target: baseTarget, report: sourceDir, rewardPath });
+      reports.push({ trial: trial.name, task, target: baseTarget, report: sourceDir, rewardPath, trialResultPath });
     } else {
       const report = join(trialDir, 'artifacts/output/REVIEW.md');
       if (!statSync(report, { throwIfNoEntry: false })?.isFile()) {
         throw new Error(`No exported review for ${trial.name}. Future runs need --artifact /output/REVIEW.md.`);
       }
-      reports.push({ trial: trial.name, task, target: baseTarget, report, rewardPath });
+      reports.push({ trial: trial.name, task, target: baseTarget, report, rewardPath, trialResultPath });
     }
   }
   if (!reports.length) throw new Error(`Run has no reports${taskFilter ? ` for ${taskFilter}` : ''}: ${directory}`);
