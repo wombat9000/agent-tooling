@@ -6,16 +6,12 @@
  * score-only snapshots under <dataDir>/runs/, and rebuilds the static HTML dashboard.
  */
 import {
-  chmodSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -84,8 +80,8 @@ save sanitized score snapshots, and rebuild the offline HTML dashboard.
   --dry-run           Validate config, discover files/modules, report skip/run plan, rebuild dashboard (no API calls)
   --force             Re-run even when a matching snapshot already exists
   --repo NAME         Scan only the named repo(s) (repeatable)
-  --modules           Include module-level --mode code architectural scans (even if "code" is not in repo modes)
-  --skip-modules      Skip module-level --mode code architectural scans even if modules/moduleRoots are configured
+  --modules           Include module-level architectural scans (even if "code" is not in repo modes)
+  --skip-modules      Skip module-level architectural scans even if modules/moduleRoots are configured
   --module-root DIR   Additional repo-relative module root or wildcard (repeatable; e.g. app/features/*)
   --skip-fixtures     Skip rubrics/fixtures health check even if enabled in config
   --no-dashboard      Do not rebuild the HTML dashboard after scanning
@@ -660,7 +656,6 @@ export function resolveAuthoritativeRubricsForScan(options: {
   const resolved = resolveRubrics({
     mode: options.mode,
     rubrics: rubricPaths,
-    all: false,
     exclude: options.exclude,
     hasRequirements: options.hasRequirements,
     hasConventions: options.hasConventions,
@@ -919,7 +914,6 @@ function resolveIgnorePatternsForSource(srcRel: string, ignore: readonly string[
 
 function collectMultiSourceFiles(
   repo: RepoScanConfig,
-  scratchOut: string,
 ): { files: Record<string, string>; conventions?: string; requirements?: string } {
   const mergedFiles: Record<string, string> = {};
   let conventions: string | undefined;
@@ -933,7 +927,6 @@ function collectMultiSourceFiles(
     try {
       loaded = readPerFileInputs({
         source: absSrc,
-        out: join(scratchOut, `collect-${i}`),
         ignore,
         conventions: repo.conventions ?? undefined,
         requirements: repo.requirements ?? undefined,
@@ -1251,14 +1244,12 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
         continue;
       }
 
-      const scratchRoot = mkdtempSync(join(tmpdir(), 'rubric-scan-'));
-      chmodSync(scratchRoot, 0o700);
       const runStart = performance.now();
       const tracker = createCostTrackingTransport(options.transport ?? fetch);
 
       try {
         if (mode === 'file') {
-          const collected = collectMultiSourceFiles(repo, scratchRoot);
+          const collected = collectMultiSourceFiles(repo);
           const fileCount = Object.keys(collected.files).length;
           if (dryRun) {
             repoOutcomes.push({
@@ -1284,7 +1275,6 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               rubric: resolved,
               model,
               concurrency: repo.concurrency,
-              out: join(scratchRoot, 'judge'),
               dryRun: false,
             },
             tracker.transport,
@@ -1378,12 +1368,10 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
           for (let srcIdx = 0; srcIdx < repo.sources.length; srcIdx += 1) {
             const srcRel = repo.sources[srcIdx];
             const absSrc = resolve(repo.path, srcRel);
-            const targetOut = join(scratchRoot, `target-${srcIdx}`);
             const ignore = resolveIgnorePatternsForSource(srcRel, repo.ignore);
 
             const loaded = readStructureInputs({
               source: absSrc,
-              out: targetOut,
               ignore,
               conventions: repo.conventions ?? undefined,
               requirements: repo.requirements ?? undefined,
@@ -1401,7 +1389,6 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
                 requirements: loaded.requirements,
                 rubric: resolved,
                 model,
-                out: loaded.out,
                 dryRun: false,
               },
               tracker.transport,
@@ -1550,9 +1537,8 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
           const moduleResults = await runWithConcurrency(
             targetModules,
             repo.concurrency,
-            async (mod, modIdx): Promise<ModuleRunResult> => {
+            async (mod): Promise<ModuleRunResult> => {
               const absMod = resolve(repo.path, mod.path);
-              const targetOut = join(scratchRoot, `module-${modIdx}`);
               const effectiveIgnore = [
                 ...new Set([
                   ...resolveIgnorePatternsForSource(mod.path, repo.ignore),
@@ -1564,7 +1550,6 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               try {
                 loaded = readInputs({
                   source: absMod,
-                  out: targetOut,
                   ignore: effectiveIgnore,
                   conventions: repo.conventions ?? undefined,
                   requirements: repo.requirements ?? undefined,
@@ -1615,7 +1600,6 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
                     requirements: loaded.requirements,
                     rubric: resolved,
                     model,
-                    out: loaded.out,
                     dryRun: false,
                   },
                   tracker.transport,
@@ -1843,8 +1827,6 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
           cost_usd: tracker.hasCost ? tracker.costUsd : 0,
           error: msg,
         });
-      } finally {
-        rmSync(scratchRoot, { recursive: true, force: true });
       }
     }
   }
@@ -1983,7 +1965,7 @@ export function formatScanSummary(summary: ScanRunSummary): string {
         lines.push(`  SKIP  ${r.repo} [${r.mode}] @ ${r.commit_short}${dirtyTag} — skipped (no modules discovered)`);
       } else if (isModuleRun) {
         const findingsPart = r.findings_total !== undefined
-          ? `, ${r.findings_total} finding(s) (${r.findings_hard ?? 0} hard, ${r.findings_borderline ?? 0} borderline)`
+          ? `, ${r.findings_total} finding(s) (${r.findings_hard ?? 0} error(s), ${r.findings_borderline ?? 0} warning(s))`
           : '';
         lines.push(
           `  SKIP  ${r.repo} [${r.mode}] @ ${r.commit_short}${dirtyTag} — skipped (${r.reason ?? 'unchanged'}) `
@@ -2021,11 +2003,11 @@ export function formatScanSummary(summary: ScanRunSummary): string {
         lines.push(
           `  DONE  ${r.repo} [${r.mode}] @ ${r.commit_short}${dirtyTag} — `
           + `${r.modules_scored ?? 0}/${r.module_count} module(s), `
-          + `${r.findings_total ?? 0} finding(s) (${r.findings_hard ?? 0} hard, ${r.findings_borderline ?? 0} borderline${extra}${costStr})`,
+          + `${r.findings_total ?? 0} finding(s) (${r.findings_hard ?? 0} error(s), ${r.findings_borderline ?? 0} warning(s)${extra}${costStr})`,
         );
       } else {
         const findingsPart = r.findings_total !== undefined
-          ? `, ${r.findings_total} finding(s) (${r.findings_hard ?? 0} hard, ${r.findings_borderline ?? 0} borderline)`
+          ? `, ${r.findings_total} finding(s) (${r.findings_hard ?? 0} error(s), ${r.findings_borderline ?? 0} warning(s))`
           : '';
         lines.push(
           `  DONE  ${r.repo} [${r.mode}] @ ${r.commit_short}${dirtyTag} — `

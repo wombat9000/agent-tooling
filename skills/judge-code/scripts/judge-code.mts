@@ -1,74 +1,89 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
+import {
+  findRepoRoot,
+  loadJudgeConfig,
+  resolveConventionsPath,
+  resolveGitChangedFiles,
+  type ConfigModuleEntry,
+  type LoadedJudgeConfig,
+} from './config.mts';
 import {
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
   DEFAULT_OPENROUTER_CONCURRENCY,
+  countResultFindings,
   runDecisionJudge,
   type JudgeBackend,
   type JudgeResult,
+  type JudgeRunOptions,
+  type ModuleInput,
 } from './decisions.mts';
-import { formatSummary, formatThreshold } from './format.mts';
-import { readInputs, readPerFileInputs } from './inputs.mts';
+import { formatLinterOutput, formatThreshold } from './format.mts';
+import { readInputs, readPerFileInputs, resolveOutputOutsideSource } from './inputs.mts';
 import { PASS_THRESHOLD, bundledRubrics, resolveRubrics, type JudgeMode } from './rubrics.mts';
 import { readStructureInputs } from './structure.mts';
 
-type OutputFormat = 'json' | 'summary';
-
 export const EXIT_OK = 0;
-export const EXIT_VIOLATION = 1;
-export const EXIT_SCORING_ERROR = 2;
+export const EXIT_FINDINGS = 1;
+export const EXIT_ERROR = 2;
 
-const USAGE = `Usage: node judge-code.mts --source FILE_OR_DIRECTORY --out NEW_DIRECTORY [options]
+export type Subcommand = 'file' | 'module' | 'structure' | 'list';
 
-  --source PATH         Production Kotlin or TypeScript file or directory (required)
-  --out NEW_DIRECTORY   New private output directory (required)
-  --mode MODE           Scoring mode: code (default), file (per-file scan), or structure (directory manifest)
+export interface ExitCodeOptions {
+  failOnWarning?: boolean;
+  maxWarnings?: number;
+}
+
+const USAGE = `Usage:
+  judge-code <path...> [options]              Lint files/directories (file-scoped checks, fast model)
+  judge-code --changed [base-ref] [options]   Lint git-modified/untracked files (default base: main or HEAD)
+  judge-code module <path...> [options]       Lint module bundle(s) with file + module checks (deep model)
+  judge-code structure <path> [options]       Lint directory layout via structural manifest (deep model)
+  judge-code list                             List bundled rubrics, check IDs, scopes, and thresholds
+
+Options:
+  --deep                Use ${DEFAULT_DECISION_MODEL} instead of ${DEFAULT_FILE_MODE_DECISION_MODEL} (openrouter only)
+  --model ID            Explicit OpenRouter Decisions model ID (openrouter only)
   --backend BACKEND     Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
-  --rubric NAME_OR_PATH Bundled rubric name/ID or local .json rubric (repeatable)
-  --all                 Include all bundled rubrics for the selected mode
-  --exclude CHECK_ID    Exclude a specific check ID (repeatable)
-  --ignore GLOB         Exclude matching relative paths or basenames (repeatable; e.g. '*-test-support.*', 'legacy/**')
+  --quiet, -q           Show errors only; hide borderline warnings
+  --json                Emit structured JSON result to stdout instead of formatted linter output
+  --out NEW_DIRECTORY   Optional private directory for request.json, response.txt, and result.json artifacts
+  --config FILE         Explicit .judge-code.json path (auto-discovered at repo root by default)
+  --rubric NAME_OR_PATH Narrow to bundled rubric name/ID or load local .json rubric (repeatable)
+  --rule CHECK_ID       Narrow to specific check ID(s) (repeatable)
+  --exclude CHECK_ID    Exclude a specific check ID (repeatable; merges with .judge-code.json)
+  --ignore GLOB         Exclude matching paths or basenames (repeatable; merges with .judge-code.json)
+  --conventions FILE    Explicit Markdown/text conventions doc (overrides auto-loaded AGENTS.md)
+  --no-conventions      Disable auto-loaded AGENTS.md and config conventions
   --requirements FILE   Optional Markdown or text requirements document
-  --conventions FILE    Optional Markdown or text repo conventions document
-  --model ID            OpenRouter Decisions model ID (default: ${DEFAULT_DECISION_MODEL} for code/structure, ${DEFAULT_FILE_MODE_DECISION_MODEL} for file; openrouter only)
-  --concurrency N       Max concurrent per-file requests in --mode file (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
-  --format FORMAT       Output format: json (default) or summary
-  --fail-on-violation   Exit with status ${EXIT_VIOLATION} when any scored check fails
-  --dry-run             Save the exact request locally without sending anything
-  --allow-credentials   Allow inputs that match heuristic credential patterns after review
-  --list-rubrics        List bundled rubric names, versions, targets, check IDs, and scopes
+  --changed [REF]       Lint git-modified/untracked files vs. REF (default: main, fallback: HEAD)
+  --max-warnings N      Exit with status ${EXIT_FINDINGS} if warning count exceeds N (non-negative integer)
+  --fail-on-warning     Exit with status ${EXIT_FINDINGS} if any warning is found (same as --max-warnings 0)
+  --concurrency N       Max concurrent requests (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
+  --allow-credentials   Allow inputs matching heuristic credential patterns after review
+  --dry-run             Preview resolved files/checks without sending any requests
+  --list-rubrics        Alias for \`judge-code list\`
   --help, -h            Show this help
 
-Exit codes:
-  ${EXIT_OK}  Success (or scored run without --fail-on-violation)
-  ${EXIT_VIOLATION}  Scored check violation with --fail-on-violation (or invalid CLI arguments/inputs)
-  ${EXIT_SCORING_ERROR}  Scoring, transport, or backend error (e.g. API HTTP error, invalid model, or errored files)
+Severity & exit codes:
+  error    Raw model FAIL (P(pass) < 0.50, or CLI backend fail)
+  warning  Threshold borderline (raw PASS with P(pass) < pass_threshold, or CLI backend borderline)
 
-Select a production Kotlin or TypeScript module (or directory for --mode structure).
-Read SKILL.md before live scoring.
+  ${EXIT_OK}  Clean (0 errors, and warnings within --max-warnings / no --fail-on-warning)
+  ${EXIT_FINDINGS}  Findings (1+ errors, or warning limit exceeded)
+  ${EXIT_ERROR}  Error (scoring/transport/backend error, invalid CLI arguments, config error, or oversize input)
 `;
-
-function parseMode(value: string | undefined): JudgeMode | undefined {
-  if (value === undefined) return undefined;
-  if (value === 'code' || value === 'file' || value === 'structure') return value;
-  throw new Error(`Invalid --mode: ${value}. Choose code, file, or structure.`);
-}
 
 function parseBackend(value: string | undefined): JudgeBackend {
   if (value === undefined || value === 'openrouter') return 'openrouter';
   if (value === 'codex' || value === 'claude') return value;
   throw new Error(`Invalid --backend: ${value}. Choose openrouter, codex, or claude.`);
-}
-
-function parseFormat(value: string | undefined): OutputFormat {
-  if (value === undefined || value === 'json') return 'json';
-  if (value === 'summary') return 'summary';
-  throw new Error(`Invalid --format: ${value}. Choose json or summary.`);
 }
 
 function parseConcurrency(value: string | undefined): number | undefined {
@@ -80,14 +95,36 @@ function parseConcurrency(value: string | undefined): number | undefined {
   return parsed;
 }
 
-function resolveModel(backend: JudgeBackend, mode: JudgeMode, modelArg: string | undefined): string | undefined {
+function parseMaxWarnings(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new Error(`Invalid --max-warnings: ${value}. Expected a non-negative integer.`);
+  }
+  return parsed;
+}
+
+function resolveModel(
+  backend: JudgeBackend,
+  mode: JudgeMode,
+  modelArg: string | undefined,
+  deep: boolean,
+): string | undefined {
+  if (deep && modelArg !== undefined) {
+    throw new Error('Cannot combine --deep and --model');
+  }
   if (backend !== 'openrouter') {
     if (modelArg !== undefined) {
       throw new Error(`--model is only supported with --backend openrouter (codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`);
     }
+    if (deep) {
+      throw new Error(`--deep is only supported with --backend openrouter (codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`);
+    }
     return undefined;
   }
-  const defaultModel = mode === 'file' ? DEFAULT_FILE_MODE_DECISION_MODEL : DEFAULT_DECISION_MODEL;
+  const defaultModel = mode === 'file' && !deep
+    ? DEFAULT_FILE_MODE_DECISION_MODEL
+    : DEFAULT_DECISION_MODEL;
   const model = modelArg ?? defaultModel;
   if (!/^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i.test(model)) {
     throw new Error('Use a full OpenRouter model ID for --model (for example liquid/d1.2-ultra)');
@@ -95,149 +132,423 @@ function resolveModel(backend: JudgeBackend, mode: JudgeMode, modelArg: string |
   return model;
 }
 
-function hasViolation(result: JudgeResult): boolean {
-  if (result.status !== 'scored' || !result.quality) return false;
-  return Object.values(result.quality.checks).some((check) => check.choice === 'fail');
-}
-
 function hasScoringError(result: JudgeResult): boolean {
   if (result.status === 'error') return true;
-  return result.file_results?.some((entry) => entry.status === 'error') ?? false;
+  if (result.file_results?.some((entry) => entry.status === 'error')) return true;
+  if (result.module_results?.some((entry) => entry.status === 'error')) return true;
+  return false;
 }
 
 /**
- * Resolve CLI exit status from a JudgeResult:
- * - 2 on scoring/transport/backend error (even when --fail-on-violation is not set)
- * - 1 on scored rubric violations when --fail-on-violation is set
+ * Resolve standard linter exit code from a JudgeResult:
+ * - 2 on scoring/transport/backend error
+ * - 1 on 1+ errors, or warnings exceeding --fail-on-warning / --max-warnings
  * - 0 otherwise
  */
-export function exitCodeForResult(result: JudgeResult, failOnViolation: boolean): number {
-  if (hasScoringError(result)) return EXIT_SCORING_ERROR;
-  if (failOnViolation && hasViolation(result)) return EXIT_VIOLATION;
+export function exitCodeForResult(result: JudgeResult, options: ExitCodeOptions = {}): number {
+  if (hasScoringError(result)) return EXIT_ERROR;
+  if (result.status !== 'scored') return EXIT_OK;
+  const { errors, warnings } = countResultFindings(result);
+  if (errors > 0) return EXIT_FINDINGS;
+  if (options.failOnWarning && warnings > 0) return EXIT_FINDINGS;
+  if (options.maxWarnings !== undefined && warnings > options.maxWarnings) return EXIT_FINDINGS;
   return EXIT_OK;
 }
 
+function extractSubcommandAndChanged(rawArgs: string[], cwd: string): {
+  subcommand: Subcommand;
+  restArgs: string[];
+  changed: boolean;
+  changedBase?: string;
+} {
+  let subcommand: Subcommand = 'file';
+  let startIdx = 0;
+  if (rawArgs[0] === 'list' || rawArgs[0] === 'module' || rawArgs[0] === 'structure') {
+    subcommand = rawArgs[0];
+    startIdx = 1;
+  }
+
+  let changed = false;
+  let changedBase: string | undefined;
+  const restArgs: string[] = [];
+  let afterDoubleDash = false;
+
+  for (let i = startIdx; i < rawArgs.length; i += 1) {
+    const arg = rawArgs[i];
+    if (afterDoubleDash) {
+      restArgs.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      afterDoubleDash = true;
+      restArgs.push(arg);
+      continue;
+    }
+    if (arg === '--changed') {
+      changed = true;
+      const next = rawArgs[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        // Treat next token as base-ref unless it is an existing path on disk.
+        const maybePath = resolve(cwd, next);
+        if (!lstatSync(maybePath, { throwIfNoEntry: false })) {
+          changedBase = next;
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (arg.startsWith('--changed=')) {
+      changed = true;
+      const value = arg.slice('--changed='.length).trim();
+      if (!value) throw new Error('Invalid --changed value: expected a non-empty git ref');
+      changedBase = value;
+      continue;
+    }
+    restArgs.push(arg);
+  }
+
+  return { subcommand, restArgs, changed, changedBase };
+}
+
+function printRubricList(): void {
+  for (const rubric of bundledRubrics()) {
+    const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
+    const checks = rubric.checks.map((id) => {
+      const threshold = rubric.thresholds[id];
+      const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
+      return `${id} [${rubric.scopes[id]}${thresholdNote}]`;
+    }).join(', ');
+    console.log(`${rubric.slug} (${rubric.id})${tag}: ${checks}`);
+  }
+}
+
+function displayTargetPath(absPath: string, cwd: string): string {
+  const canonicalCwd = (() => {
+    try {
+      return realpathSync(cwd);
+    } catch {
+      return resolve(cwd);
+    }
+  })();
+  const canonicalPath = (() => {
+    try {
+      return realpathSync(absPath);
+    } catch {
+      return resolve(absPath);
+    }
+  })();
+  const rel = relative(canonicalCwd, canonicalPath);
+  if (!rel) return '.';
+  if (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel)) {
+    return rel.split(sep).join('/');
+  }
+  return canonicalPath;
+}
+
+function findMatchingModuleConfig(absPath: string, config: LoadedJudgeConfig): ConfigModuleEntry | undefined {
+  let canonical: string;
+  try {
+    canonical = realpathSync(absPath);
+  } catch {
+    canonical = resolve(absPath);
+  }
+  return config.modules.find((entry) => {
+    try {
+      return realpathSync(entry.path) === canonical;
+    } catch {
+      return resolve(entry.path) === canonical;
+    }
+  });
+}
+
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: {
-    source: { type: 'string' },
-    out: { type: 'string' },
-    mode: { type: 'string' },
-    backend: { type: 'string' },
-    rubric: { type: 'string', multiple: true },
-    all: { type: 'boolean' },
-    exclude: { type: 'string', multiple: true },
-    ignore: { type: 'string', multiple: true },
-    requirements: { type: 'string' },
-    conventions: { type: 'string' },
-    model: { type: 'string' },
-    concurrency: { type: 'string' },
-    format: { type: 'string' },
-    'fail-on-violation': { type: 'boolean' },
-    'dry-run': { type: 'boolean' },
-    'allow-credentials': { type: 'boolean' },
-    'list-rubrics': { type: 'boolean' },
-    help: { type: 'boolean', short: 'h' },
-  } });
+  const cwd = process.cwd();
+  const { subcommand, restArgs, changed, changedBase } = extractSubcommandAndChanged(process.argv.slice(2), cwd);
+
+  const { values, positionals } = parseArgs({
+    args: restArgs,
+    allowPositionals: true,
+    options: {
+      deep: { type: 'boolean', default: false },
+      model: { type: 'string' },
+      backend: { type: 'string' },
+      quiet: { type: 'boolean', short: 'q', default: false },
+      json: { type: 'boolean', default: false },
+      out: { type: 'string' },
+      config: { type: 'string' },
+      rubric: { type: 'string', multiple: true },
+      rule: { type: 'string', multiple: true },
+      exclude: { type: 'string', multiple: true },
+      ignore: { type: 'string', multiple: true },
+      conventions: { type: 'string' },
+      'no-conventions': { type: 'boolean', default: false },
+      requirements: { type: 'string' },
+      'max-warnings': { type: 'string' },
+      'fail-on-warning': { type: 'boolean', default: false },
+      concurrency: { type: 'string' },
+      'allow-credentials': { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
+      'list-rubrics': { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+  });
 
   if (values.help) {
     console.log(USAGE);
     return;
   }
-  if (values['list-rubrics']) {
-    for (const rubric of bundledRubrics()) {
-      const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
-      const checks = rubric.checks.map((id) => {
-        const threshold = rubric.thresholds[id];
-        const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
-        return `${id} [${rubric.scopes[id]}${thresholdNote}]`;
-      }).join(', ');
-      console.log(`${rubric.slug} (${rubric.id})${tag}: ${checks}`);
+  if (subcommand === 'list' || values['list-rubrics']) {
+    if (subcommand === 'list' && positionals.length > 0) {
+      throw new Error(`Unexpected arguments for \`judge-code list\`: ${positionals.join(' ')}`);
     }
+    printRubricList();
     return;
   }
-  if (!values.source?.trim() || !values.out?.trim()) {
-    throw new Error(USAGE);
+
+  if (changed && subcommand !== 'file') {
+    throw new Error(`--changed is only supported for file linting (not \`judge-code ${subcommand}\`)`);
   }
 
-  const mode = parseMode(values.mode);
   const backend = parseBackend(values.backend);
-  const format = parseFormat(values.format);
   const concurrency = parseConcurrency(values.concurrency);
+  const maxWarnings = parseMaxWarnings(values['max-warnings']);
+  const failOnWarning = Boolean(values['fail-on-warning']);
+  const cliIgnore = values.ignore ?? [];
 
-  const rubric = resolveRubrics({
-    mode,
-    rubrics: values.rubric ?? [],
-    all: values.all,
-    exclude: values.exclude,
-    hasRequirements: values.requirements !== undefined,
-    hasConventions: values.conventions !== undefined,
+  if (values.out !== undefined && !values.out.trim()) {
+    throw new Error('--out must be a non-empty directory path');
+  }
+  if (values.config !== undefined && !values.config.trim()) {
+    throw new Error('--config must be a non-empty file path');
+  }
+
+  const resolvedMode: JudgeMode = subcommand === 'structure'
+    ? 'structure'
+    : subcommand === 'module'
+      ? 'code'
+      : 'file';
+
+  const model = resolveModel(backend, resolvedMode, values.model, Boolean(values.deep));
+
+  // Determine repo root for auto-discovering .judge-code.json and AGENTS.md.
+  let changedFiles: string[] | undefined;
+  let repoRoot: string;
+  if (changed) {
+    const gitChanged = resolveGitChangedFiles({
+      cwd,
+      baseRef: changedBase,
+      pathFilters: positionals.length > 0 ? positionals : undefined,
+    });
+    repoRoot = gitChanged.repoRoot;
+    changedFiles = gitChanged.files;
+  } else {
+    const probeTarget = positionals[0] ? resolve(cwd, positionals[0]) : cwd;
+    repoRoot = findRepoRoot(probeTarget, cwd);
+  }
+
+  const config = loadJudgeConfig({ configPath: values.config, repoRoot });
+  const conventionsInfo = resolveConventionsPath({
+    cliConventions: values.conventions,
+    noConventions: values['no-conventions'],
+    config,
+    repoRoot,
   });
 
-  const resolvedMode: JudgeMode = rubric.target === 'project_structure'
-    ? 'structure'
-    : mode === 'file'
-      ? 'file'
-      : 'code';
+  const mergedIgnoreList = [...new Set([...config.ignore, ...cliIgnore])];
+  const configIgnore = config.ignore.length > 0
+    ? { baseDir: config.baseDir, patterns: config.ignore }
+    : undefined;
 
-  const model = resolveModel(backend, resolvedMode, values.model);
+  const rubric = resolveRubrics({
+    mode: resolvedMode,
+    rubrics: values.rubric ?? [],
+    rules: values.rule,
+    exclude: values.exclude,
+    configExclude: config.exclude,
+    hasRequirements: values.requirements !== undefined,
+    hasConventions: conventionsInfo.path !== undefined,
+  });
 
-  const runOptions = resolvedMode === 'structure'
-    ? (() => {
-      const inputs = readStructureInputs({
-        source: values.source!,
-        out: values.out!,
-        ignore: values.ignore,
-        requirements: values.requirements,
-        conventions: values.conventions,
-        allowCredentials: values['allow-credentials'],
+  const conventionsLabel = conventionsInfo.path !== undefined
+    ? `${displayTargetPath(conventionsInfo.path, cwd)} (${conventionsInfo.source})`
+    : undefined;
+
+  let runOptions: JudgeRunOptions;
+
+  if (resolvedMode === 'structure') {
+    if (positionals.length !== 1 || !positionals[0].trim()) {
+      throw new Error(`Expected exactly one directory path for \`judge-code structure <path>\`\n\n${USAGE}`);
+    }
+    const targetPath = positionals[0];
+    const inputs = readStructureInputs({
+      source: targetPath,
+      out: values.out,
+      ignore: cliIgnore,
+      configIgnore,
+      requirements: values.requirements,
+      conventions: conventionsInfo.path,
+      allowCredentials: values['allow-credentials'],
+    });
+    runOptions = {
+      mode: 'structure',
+      target: displayTargetPath(resolve(cwd, targetPath), cwd),
+      structure: inputs.manifest,
+      ignore: mergedIgnoreList,
+      requirements: inputs.requirements,
+      conventions: inputs.conventions,
+      rubric,
+      out: inputs.out,
+      model,
+      dryRun: values['dry-run'],
+    };
+  } else if (resolvedMode === 'code') {
+    // Module subcommand: explicit path(s) or configured modules in .judge-code.json.
+    if (positionals.length === 0 && config.modules.length === 0) {
+      throw new Error(`Specify one or more paths for \`judge-code module <path...>\` (or declare "modules" in .judge-code.json)\n\n${USAGE}`);
+    }
+
+    const useMultiModules = (() => {
+      if (positionals.length === 0) return config.modules.length > 1;
+      if (positionals.length === 1) return false;
+      return positionals.every((p) => Boolean(lstatSync(resolve(cwd, p), { throwIfNoEntry: false })?.isDirectory()));
+    })();
+
+    if (useMultiModules) {
+      const targetSpecs: Array<{ name: string; path: string; extraIgnore: string[] }> = positionals.length === 0
+        ? config.modules.map((m) => ({
+          name: m.name ?? displayTargetPath(m.path, cwd),
+          path: m.path,
+          extraIgnore: m.ignore,
+        }))
+        : positionals.map((p) => {
+          const abs = resolve(cwd, p);
+          const matched = findMatchingModuleConfig(abs, config);
+          return {
+            name: matched?.name ?? displayTargetPath(abs, cwd),
+            path: abs,
+            extraIgnore: matched?.ignore ?? [],
+          };
+        });
+
+      const resolvedOut = values.out !== undefined ? resolve(values.out) : undefined;
+      const loadedModules: ModuleInput[] = targetSpecs.map((spec) => {
+        if (resolvedOut !== undefined) {
+          const st = lstatSync(spec.path, { throwIfNoEntry: false });
+          if (st?.isDirectory()) {
+            resolveOutputOutsideSource(realpathSync(spec.path), true, resolvedOut);
+          }
+        }
+        const loaded = readInputs({
+          source: spec.path,
+          ignore: [...cliIgnore, ...spec.extraIgnore],
+          configIgnore,
+          requirements: values.requirements,
+          conventions: conventionsInfo.path,
+          allowCredentials: values['allow-credentials'],
+        });
+        return {
+          name: spec.name,
+          files: loaded.files,
+          requirements: loaded.requirements,
+          conventions: loaded.conventions,
+        };
       });
-      return {
-        mode: resolvedMode,
-        structure: inputs.manifest,
-        ignore: values.ignore,
-        requirements: inputs.requirements,
-        conventions: inputs.conventions,
+
+      runOptions = {
+        mode: 'code',
+        modules: loadedModules,
+        ignore: mergedIgnoreList,
         rubric,
-        out: inputs.out,
-        model,
-        dryRun: values['dry-run'],
-      };
-    })()
-    : (() => {
-      const reader = resolvedMode === 'file' ? readPerFileInputs : readInputs;
-      const inputs = reader({
-        source: values.source!,
-        out: values.out!,
-        ignore: values.ignore,
-        requirements: values.requirements,
-        conventions: values.conventions,
-        allowCredentials: values['allow-credentials'],
-      });
-      return {
-        mode: resolvedMode,
-        files: inputs.files,
-        ignore: values.ignore,
-        requirements: inputs.requirements,
-        conventions: inputs.conventions,
-        rubric,
-        out: inputs.out,
+        out: resolvedOut,
         model,
         concurrency,
         dryRun: values['dry-run'],
       };
-    })();
+    } else {
+      const singleTargetPaths = positionals.length === 0
+        ? [config.modules[0].path]
+        : positionals.map((p) => resolve(cwd, p));
+      const matchedMod = positionals.length === 0
+        ? config.modules[0]
+        : positionals.length === 1
+          ? findMatchingModuleConfig(singleTargetPaths[0], config)
+          : undefined;
+      const extraModIgnore = matchedMod?.ignore ?? [];
+      const targetLabel = matchedMod?.name
+        ?? (singleTargetPaths.length === 1
+          ? displayTargetPath(singleTargetPaths[0], cwd)
+          : singleTargetPaths.map((p) => displayTargetPath(p, cwd)).join(', '));
+      const useDisplayBase = singleTargetPaths.length > 1;
+      const inputs = readInputs({
+        sources: singleTargetPaths,
+        displayBaseDir: useDisplayBase ? cwd : undefined,
+        out: values.out,
+        ignore: [...cliIgnore, ...extraModIgnore],
+        configIgnore,
+        requirements: values.requirements,
+        conventions: conventionsInfo.path,
+        allowCredentials: values['allow-credentials'],
+      });
+      runOptions = {
+        mode: 'code',
+        target: targetLabel,
+        files: inputs.files,
+        ignore: [...new Set([...mergedIgnoreList, ...extraModIgnore])],
+        requirements: inputs.requirements,
+        conventions: inputs.conventions,
+        rubric,
+        out: inputs.out,
+        model,
+        dryRun: values['dry-run'],
+      };
+    }
+  } else {
+    // Default file-by-file linter mode.
+    if (!changed && positionals.length === 0) {
+      throw new Error(USAGE);
+    }
+    const sources = changed ? changedFiles! : positionals.map((p) => resolve(cwd, p));
+    const inputs = readPerFileInputs({
+      sources,
+      displayBaseDir: cwd,
+      out: values.out,
+      ignore: cliIgnore,
+      configIgnore,
+      requirements: values.requirements,
+      conventions: conventionsInfo.path,
+      allowCredentials: values['allow-credentials'],
+      allowEmpty: changed,
+    });
+    runOptions = {
+      mode: 'file',
+      files: inputs.files,
+      ignore: mergedIgnoreList,
+      requirements: inputs.requirements,
+      conventions: inputs.conventions,
+      rubric,
+      out: inputs.out,
+      model,
+      concurrency,
+      dryRun: values['dry-run'],
+      allowEmpty: changed,
+    };
+  }
 
   const result = backend === 'openrouter'
     ? await runDecisionJudge(runOptions)
     : await runCliJudge(runOptions, backend);
 
-  if (format === 'summary') {
-    console.log(formatSummary(result, runOptions.out));
-  } else {
+  if (values.json) {
     console.log(JSON.stringify(result));
+  } else {
+    console.log(formatLinterOutput(result, {
+      quiet: values.quiet,
+      outDir: runOptions.out,
+      conventionsLabel,
+    }));
   }
 
-  process.exitCode = exitCodeForResult(result, Boolean(values['fail-on-violation']));
+  process.exitCode = exitCodeForResult(result, { failOnWarning, maxWarnings });
 }
 
 function isDirectCliRun(): boolean {
@@ -254,6 +565,6 @@ if (isDirectCliRun()) {
     const key = process.env.OPENROUTER_API_KEY?.trim();
     const message = error instanceof Error ? error.message : 'Judging failed';
     console.error(key ? message.replaceAll(key, '[redacted]') : message);
-    process.exitCode = EXIT_VIOLATION;
+    process.exitCode = EXIT_ERROR;
   });
 }

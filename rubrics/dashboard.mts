@@ -830,8 +830,8 @@ function findingsTone(counts: FindingCounts): string {
 function renderFindingsBadges(counts: FindingCounts): string {
   if (counts.total === 0) return '<span class="pill pass">0 clean</span>';
   const parts: string[] = [];
-  if (counts.hard > 0) parts.push(`<span class="pill fail">${counts.hard} hard</span>`);
-  if (counts.borderline > 0) parts.push(`<span class="pill warn">${counts.borderline} borderline</span>`);
+  if (counts.hard > 0) parts.push(`<span class="pill fail">${counts.hard} ${counts.hard === 1 ? 'error' : 'errors'}</span>`);
+  if (counts.borderline > 0) parts.push(`<span class="pill warn">${counts.borderline} ${counts.borderline === 1 ? 'warning' : 'warnings'}</span>`);
   return `<div class="badge-row"><strong class="numeric${findingsTone(counts)}">${counts.total}</strong> ${parts.join(' ')}</div>`;
 }
 
@@ -1057,8 +1057,8 @@ const CLIENT_SCRIPT = `
   function renderFindingsPills(fc) {
     if (!fc || fc.total === 0) return '<span class="pill pass">0 clean</span>';
     const parts = [];
-    if (fc.hard > 0) parts.push('<span class="pill fail">' + fc.hard + ' hard</span>');
-    if (fc.borderline > 0) parts.push('<span class="pill warn">' + fc.borderline + ' borderline</span>');
+    if (fc.hard > 0) parts.push('<span class="pill fail">' + fc.hard + (fc.hard === 1 ? ' error' : ' errors') + '</span>');
+    if (fc.borderline > 0) parts.push('<span class="pill warn">' + fc.borderline + (fc.borderline === 1 ? ' warning' : ' warnings') + '</span>');
     return '<div class="badge-row"><strong class="numeric">' + fc.total + '</strong> ' + parts.join(' ') + '</div>';
   }
   function checkLabelWithTip(cid) {
@@ -1074,9 +1074,9 @@ const CLIENT_SCRIPT = `
     const cls = severity === 'hard' ? 'fail-chip fail-chip-hard' : 'fail-chip fail-chip-borderline';
     const pText = typeof prob === 'number' ? prob.toFixed(2) : 'fail';
     const detail = severity === 'hard'
-      ? 'hard ' + pText
-      : 'borderline ' + pText + ' < ' + thr.toFixed(2);
-    const title = (severity === 'hard' ? 'Hard model FAIL' : 'Borderline threshold flip (raw PASS, P < ' + thr.toFixed(2) + ')')
+      ? 'error ' + pText
+      : 'warning ' + pText + ' < ' + thr.toFixed(2);
+    const title = (severity === 'hard' ? 'Error (raw model FAIL)' : 'Warning (threshold borderline, P < ' + thr.toFixed(2) + ')')
       + (cat && cat.instructions ? ' — ' + cat.instructions : '');
     return '<span class="' + cls + '" title="' + esc(title) + '">' + esc(cid) + ' (' + esc(detail) + ')</span>';
   }
@@ -1145,7 +1145,7 @@ const CLIENT_SCRIPT = `
       const isActive = i === activeIdx;
       const tip = esc(
         shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' hard, ' + p.findings.borderline + ' borderline)'
+        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' errors, ' + p.findings.borderline + ' warnings)'
         + '\\nCalibrated pass: ' + pct(p.calibrated_pass_rate) + ' | Raw pass: ' + pct(p.raw_pass_rate)
         + (p.version_changed ? '\\nVersion change: ' + p.change_reasons.join('; ') : '')
       );
@@ -1210,7 +1210,7 @@ const CLIENT_SCRIPT = `
         shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
         + '\\nCalibrated: ' + pct(p.calibrated_pass_rate) + ' | Raw: ' + pct(p.raw_pass_rate)
         + ' | Mean P(pass): ' + pct(p.mean_pass_probability)
-        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' hard, ' + p.findings.borderline + ' borderline)'
+        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' errors, ' + p.findings.borderline + ' warnings)'
       );
       return '<g class="chart-point" data-select-run="' + i + '">'
         + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#3158cf" stroke-opacity="0.22" stroke-width="10"/>' : '')
@@ -1343,7 +1343,7 @@ const CLIENT_SCRIPT = `
     return '<div class="arch-card" id="module-architecture-section">'
       + '<div class="panel-head">'
       + '<div><h3>Feature / Module Architecture (' + allModules.length + ' module' + (allModules.length === 1 ? '' : 's') + ')</h3>'
-      + '<div class="muted" style="font-size:.78rem">Ranked worst-first · hard model FAILs vs. borderline threshold flips · ' + esc(shortDate(codeRun.timestamp)) + ' · <code>' + esc(codeRun.commit_short) + '</code></div></div>'
+      + '<div class="muted" style="font-size:.78rem">Ranked worst-first · errors (raw FAIL) vs. warnings (threshold borderline) · ' + esc(shortDate(codeRun.timestamp)) + ' · <code>' + esc(codeRun.commit_short) + '</code></div></div>'
       + '<div class="badge-row">' + summaryPills.join(' ') + '</div>'
       + '</div>'
       + '<div class="controls" style="margin-bottom:10px">'
@@ -1475,7 +1475,7 @@ const CLIENT_SCRIPT = `
 
     const legendItems = trendMetric === 'findings'
       ? '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Total findings</span>'
-        + '<span class="legend-item"><span class="legend-swatch dashed-red"></span>Hard model FAILs</span>'
+        + '<span class="legend-item"><span class="legend-swatch dashed-red"></span>Errors (raw FAIL)</span>'
         + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>'
       : '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Calibrated pass rate</span>'
         + '<span class="legend-item"><span class="legend-swatch dashed"></span>Raw pass rate</span>'
@@ -1505,7 +1505,7 @@ const CLIENT_SCRIPT = `
       + '<div class="split-grid">'
       + '<div class="sub-card">'
       + '<div class="panel-head"><h3>Worst-offending rules (' + checkEntries.filter(([, c]) => c.passed < c.total).length + ' failing / ' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(shortDate(run.timestamp)) + ' · ' + esc(run.commit_short) + '</span></div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Failed</th><th>Hard / Borderline</th><th>Min P</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
+      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Failed</th><th>Errors / Warnings</th><th>Min P</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
       + '</div>'
       + '<div class="sub-card">'
       + '<div class="panel-head"><h3>Top hotspot ' + (selectedMode === 'code' ? 'modules' : 'files / targets') + ' (' + filteredFiles.length + ' shown / ' + run.files.length + ')</h3>'
@@ -1568,8 +1568,8 @@ const CLIENT_SCRIPT = `
         const topLine = c.failed === 0 ? 'clean' : c.failed + '/' + c.total + ' fail';
         const subLine = c.failed === 0
           ? 'P=' + (c.mean_pass_probability !== null ? c.mean_pass_probability.toFixed(2) : '—')
-          : c.hard_failed + 'h · ' + c.borderline_failed + 'b · ' + pct(c.pass_rate, 0);
-        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Findings: ' + c.failed + '/' + c.total + ' (' + c.hard_failed + ' hard, ' + c.borderline_failed + ' borderline) | Calibrated ' + pct(c.pass_rate) + ' | Mean P ' + pct(c.mean_pass_probability) + '"><strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span></span></td>';
+          : c.hard_failed + 'e · ' + c.borderline_failed + 'w · ' + pct(c.pass_rate, 0);
+        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Findings: ' + c.failed + '/' + c.total + ' (' + c.hard_failed + ' errors, ' + c.borderline_failed + ' warnings) | Calibrated ' + pct(c.pass_rate) + ' | Mean P ' + pct(c.mean_pass_probability) + '"><strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span></span></td>';
       }).join('');
       return '<tr><td>' + label + (row.rubric_slug ? ' <span class="muted" style="font-size:.75rem">' + esc(row.rubric_slug) + '</span>' : '') + '</td><td class="numeric">' + thrBadge + '</td>' + cells + '</tr>';
     }).join('');
@@ -1743,7 +1743,7 @@ export function renderDashboardHtml(model: DashboardModel): string {
 
     const worstRulesCell = repo.worst_rules.length > 0
       ? `<div class="fail-chips">${repo.worst_rules.slice(0, 2).map((wr) =>
-        `<span class="fail-chip ${wr.hard > 0 ? 'fail-chip-hard' : 'fail-chip-borderline'}" title="${escapeHtml(`${wr.mode}: ${wr.hard} hard, ${wr.borderline} borderline`)}">${escapeHtml(wr.check_id)} (${wr.failed})</span>`,
+        `<span class="fail-chip ${wr.hard > 0 ? 'fail-chip-hard' : 'fail-chip-borderline'}" title="${escapeHtml(`${wr.mode}: ${wr.hard} errors, ${wr.borderline} warnings`)}">${escapeHtml(wr.check_id)} (${wr.failed})</span>`,
       ).join('')}</div>`
       : '<span class="pill pass">clean</span>';
 
@@ -1784,7 +1784,7 @@ export function renderDashboardHtml(model: DashboardModel): string {
     ? `${modFindings.total} finding${modFindings.total === 1 ? '' : 's'}`
     : 'Not scanned';
   const modKpiNote = model.totals.modules_scanned > 0
-    ? `${model.totals.modules_with_findings}/${model.totals.modules_scanned} modules · ${modFindings.hard} hard · ${modFindings.borderline} borderline`
+    ? `${model.totals.modules_with_findings}/${model.totals.modules_scanned} modules · ${modFindings.hard} errors · ${modFindings.borderline} warnings`
       + (model.totals.modules_skipped > 0 ? ` · ${model.totals.modules_skipped} skipped` : '')
       + (model.totals.modules_errored > 0 ? ` · ${model.totals.modules_errored} err` : '')
     : 'Configure modules / moduleRoots for arch checks';
@@ -1806,7 +1806,7 @@ export function renderDashboardHtml(model: DashboardModel): string {
 ${warningsHtml}
 
 <section class="kpi-strip" aria-label="Dashboard punch-list overview">
-  <div class="kpi${findingsKpiClass}"><div class="kpi-label">Open findings</div><div class="kpi-value${findingsTone(totalFindings)}">${totalFindings.total}</div><div class="kpi-note">${totalFindings.hard} hard fails · ${totalFindings.borderline} borderline across ${model.totals.repo_count} repo(s)</div></div>
+  <div class="kpi${findingsKpiClass}"><div class="kpi-label">Open findings</div><div class="kpi-value${findingsTone(totalFindings)}">${totalFindings.total}</div><div class="kpi-note">${totalFindings.hard} errors · ${totalFindings.borderline} warnings across ${model.totals.repo_count} repo(s)</div></div>
   <div class="kpi${modKpiClass}"><div class="kpi-label">Module architecture</div><div class="kpi-value${model.totals.modules_scanned > 0 ? findingsTone(modFindings) : ''}">${escapeHtml(modKpiValue)}</div><div class="kpi-note">${escapeHtml(modKpiNote)}</div></div>
   <div class="kpi"><div class="kpi-label">Findings by scope</div><div class="kpi-value">${model.totals.repo_count} repo(s)</div><div class="kpi-note">${model.totals.file_findings.total} file · ${model.totals.structure_findings.total} structure · ${modFindings.total} module (${model.totals.repo_runs} runs)</div></div>
   <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-note">Latest release tag: ${escapeHtml(latestTag ?? 'n/a')}</div></div>
@@ -1826,7 +1826,7 @@ ${warningsHtml}
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Cross-repo rule heatmap (latest runs, worst-first)</h2><span class="muted">Failing targets, hard/borderline split &amp; thresholds per rule</span></div>
+  <div class="panel-head"><h2>Cross-repo rule heatmap (latest runs, worst-first)</h2><span class="muted">Failing targets, errors/warnings split &amp; thresholds per rule</span></div>
   <div id="heatmap-root"></div>
 </section>
 

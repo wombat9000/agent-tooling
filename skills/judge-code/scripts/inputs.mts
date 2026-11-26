@@ -20,13 +20,22 @@ const SENSITIVE_CONTENT = [
   /(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)['"]?\s*[:=]\s*['"][^\s'"]{8,}['"]/i,
 ];
 
+export interface ConfigIgnoreSpec {
+  baseDir: string;
+  patterns: string[];
+}
+
 export interface ReadInputsOptions {
-  source: string;
-  out: string;
+  source?: string;
+  sources?: string[];
+  displayBaseDir?: string;
+  out?: string;
   ignore?: string[];
+  configIgnore?: ConfigIgnoreSpec;
   requirements?: string;
   conventions?: string;
   allowCredentials?: boolean;
+  allowEmpty?: boolean;
 }
 
 export interface IgnoreMatcher {
@@ -39,7 +48,7 @@ export interface LoadedInputs {
   files: Record<string, string>;
   requirements?: string;
   conventions?: string;
-  out: string;
+  out?: string;
 }
 
 export interface DocReadContext {
@@ -241,7 +250,7 @@ export function compileIgnoreMatcher(rawPatterns: readonly string[] = []): Ignor
   };
 }
 
-function isProductionSource(relPath: string): boolean {
+export function isProductionSource(relPath: string): boolean {
   const name = basename(relPath);
   if (name.startsWith('.')) return false;
   if (isTestOrSupportPath(relPath)) return false;
@@ -317,63 +326,172 @@ export function readOptionalDoc(arg: string, flag: string, label: string, ctx: D
   return text;
 }
 
-function resolveSourceAndOut(options: ReadInputsOptions): {
-  source: string;
+interface ResolvedSourceEntry {
+  path: string;
   isDirectory: boolean;
-  out: string;
-} {
-  const sourceInput = resolve(options.source);
-  const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
-  if (!sourceStat?.isDirectory() && !sourceStat?.isFile()) {
-    throw new Error('Select a regular source file or directory with --source');
-  }
-  const source = realpathSync(sourceInput);
-  if (sourceStat.isDirectory() && (source === dirname(source) || source === realpathSync(homedir()))) {
-    throw new Error('Select a specific production module with --source');
-  }
-  const out = resolveOutputOutsideSource(source, sourceStat.isDirectory(), options.out);
-  return { source, isDirectory: sourceStat.isDirectory(), out };
 }
 
-function collectProductionFiles(
-  source: string,
-  isDirectory: boolean,
-  ignoreMatcher: IgnoreMatcher,
-  readFile: (path: string, label: string) => string,
-): Record<string, string> {
-  const files: Record<string, string> = {};
-  function collect(dir: string, prefix = '') {
-    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const isAllowedDot = entry.isDirectory() && ALLOWED_DOT_DIRS.has(entry.name);
-      if (entry.name.startsWith('.') && !isAllowedDot) continue;
-      const path = join(dir, entry.name);
-      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        if (
-          SKIP_DIRS.has(entry.name.toLowerCase())
-          || isTestOrSupportDirName(entry.name)
-          || ignoreMatcher.isIgnoredDir(name)
-        ) {
-          continue;
-        }
-        collect(path, name);
-      } else if (entry.isFile() && !ignoreMatcher.isIgnoredFile(name) && isProductionSource(name)) {
-        files[name] = readFile(path, `source file ${name}`);
+function resolveSourcesAndOut(options: ReadInputsOptions): {
+  entries: ResolvedSourceEntry[];
+  out?: string;
+} {
+  const rawSources = options.sources ?? (options.source !== undefined ? [options.source] : []);
+  if (rawSources.length === 0 && !options.allowEmpty) {
+    throw new Error('Select at least one production source file or directory');
+  }
+  const home = realpathSync(homedir());
+  const entries: ResolvedSourceEntry[] = [];
+  for (const rawSource of rawSources) {
+    const sourceInput = resolve(rawSource);
+    const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
+    if (!sourceStat?.isDirectory() && !sourceStat?.isFile()) {
+      throw new Error(`Select a regular source file or directory: ${rawSource}`);
+    }
+    const canonical = realpathSync(sourceInput);
+    if (sourceStat.isDirectory() && (canonical === dirname(canonical) || canonical === home)) {
+      throw new Error('Select a specific production file or directory');
+    }
+    entries.push({ path: canonical, isDirectory: sourceStat.isDirectory() });
+  }
+
+  let out: string | undefined;
+  if (options.out !== undefined) {
+    if (entries.length === 0) {
+      out = resolve(options.out);
+    } else {
+      for (const entry of entries) {
+        out = resolveOutputOutsideSource(entry.path, entry.isDirectory, options.out);
       }
     }
   }
-  if (isDirectory) {
-    collect(source);
-  } else {
-    const singleName = basename(source);
-    if (!ignoreMatcher.isIgnoredFile(singleName) && isProductionSource(singleName)) {
-      files[singleName] = readFile(source, 'the selected source file');
+  return { entries, out };
+}
+
+function toPosixRelative(fromDir: string, absPath: string): string | null {
+  const rel = relative(fromDir, absPath);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return null;
+  }
+  return rel.split(sep).join('/');
+}
+
+function isSkippedDirPath(relPath: string): boolean {
+  const parts = relPath.replaceAll('\\', '/').split('/');
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const seg = parts[i];
+    if (seg.startsWith('.') && !ALLOWED_DOT_DIRS.has(seg)) return true;
+    if (SKIP_DIRS.has(seg.toLowerCase()) || isTestOrSupportDirName(seg)) return true;
+  }
+  return false;
+}
+
+function collectProductionFiles(
+  entries: ResolvedSourceEntry[],
+  options: {
+    displayBaseDir?: string;
+    ignoreMatcher: IgnoreMatcher;
+    configMatcher?: { baseDir: string; matcher: IgnoreMatcher };
+    allowEmpty?: boolean;
+  },
+  readFile: (path: string, label: string) => string,
+): Record<string, string> {
+  const files: Record<string, string> = {};
+  const seenCanonical = new Set<string>();
+  const canonicalDisplayBase = options.displayBaseDir
+    ? (() => {
+      try {
+        return realpathSync(options.displayBaseDir);
+      } catch {
+        return resolve(options.displayBaseDir);
+      }
+    })()
+    : undefined;
+  const canonicalConfigBase = options.configMatcher
+    ? (() => {
+      try {
+        return realpathSync(options.configMatcher.baseDir);
+      } catch {
+        return resolve(options.configMatcher.baseDir);
+      }
+    })()
+    : undefined;
+
+  const isIgnoredByConfigDir = (absDir: string): boolean => {
+    if (!options.configMatcher || !canonicalConfigBase) return false;
+    const rel = toPosixRelative(canonicalConfigBase, absDir);
+    return rel !== null && options.configMatcher.matcher.isIgnoredDir(rel);
+  };
+
+  const isIgnoredByConfigFile = (absFile: string): boolean => {
+    if (!options.configMatcher || !canonicalConfigBase) return false;
+    const rel = toPosixRelative(canonicalConfigBase, absFile);
+    return rel !== null && options.configMatcher.matcher.isIgnoredFile(rel);
+  };
+
+  const displayKeyFor = (absFile: string, fallbackRel: string): string => {
+    if (canonicalDisplayBase) {
+      const fromBase = toPosixRelative(canonicalDisplayBase, absFile);
+      if (fromBase !== null) return fromBase;
+    }
+    return fallbackRel;
+  };
+
+  const addFile = (absFile: string, relInSource: string, isSingleFile: boolean) => {
+    const canonical = realpathSync(absFile);
+    if (seenCanonical.has(canonical)) return;
+    const displayKey = displayKeyFor(canonical, relInSource);
+    const matchTargets = [relInSource, displayKey];
+    if (matchTargets.some((t) => options.ignoreMatcher.isIgnoredFile(t)) || isIgnoredByConfigFile(canonical)) {
+      return;
+    }
+    // Check both source-relative and repo/display-relative paths for test/support or skipped dirs.
+    const checkRel = isSingleFile && canonicalConfigBase
+      ? (toPosixRelative(canonicalConfigBase, canonical) ?? displayKey)
+      : relInSource;
+    if (isSingleFile && isSkippedDirPath(checkRel)) return;
+    if (!isProductionSource(checkRel)) return;
+    seenCanonical.add(canonical);
+    const label = isSingleFile && entries.length === 1 && !canonicalDisplayBase
+      ? 'the selected source file'
+      : `source file ${displayKey}`;
+    files[displayKey] = readFile(canonical, label);
+  };
+
+  function collectDir(rootDir: string, dir: string, prefix = '') {
+    const dirEntries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of dirEntries) {
+      const isAllowedDot = entry.isDirectory() && ALLOWED_DOT_DIRS.has(entry.name);
+      if (entry.name.startsWith('.') && !isAllowedDot) continue;
+      const fullPath = join(dir, entry.name);
+      const relName = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        const displayDir = canonicalDisplayBase ? toPosixRelative(canonicalDisplayBase, fullPath) : null;
+        if (
+          SKIP_DIRS.has(entry.name.toLowerCase())
+          || isTestOrSupportDirName(entry.name)
+          || options.ignoreMatcher.isIgnoredDir(relName)
+          || (displayDir !== null && options.ignoreMatcher.isIgnoredDir(displayDir))
+          || isIgnoredByConfigDir(fullPath)
+        ) {
+          continue;
+        }
+        collectDir(rootDir, fullPath, relName);
+      } else if (entry.isFile()) {
+        addFile(fullPath, relName, false);
+      }
     }
   }
 
-  if (Object.keys(files).length === 0) {
-    throw new Error('No supported production Kotlin or TypeScript files in --source');
+  for (const entry of entries) {
+    if (entry.isDirectory) {
+      collectDir(entry.path, entry.path);
+    } else {
+      addFile(entry.path, basename(entry.path), true);
+    }
+  }
+
+  if (Object.keys(files).length === 0 && !options.allowEmpty) {
+    throw new Error('No supported production Kotlin or TypeScript files found');
   }
   return files;
 }
@@ -381,6 +499,9 @@ function collectProductionFiles(
 export function readInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
+  const configMatcher = options.configIgnore && options.configIgnore.patterns.length > 0
+    ? { baseDir: options.configIgnore.baseDir, matcher: compileIgnoreMatcher(options.configIgnore.patterns) }
+    : undefined;
   let remaining = MAX_INPUT_BYTES;
   const ctx: DocReadContext = {
     allowCredentials: options.allowCredentials,
@@ -391,7 +512,7 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
     },
   };
 
-  const { source, isDirectory, out } = resolveSourceAndOut(options);
+  const { entries, out } = resolveSourcesAndOut(options);
 
   const requirements = options.requirements !== undefined
     ? readOptionalDoc(options.requirements, '--requirements', 'the requirements document', ctx)
@@ -401,9 +522,13 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
     : undefined;
 
   const files = collectProductionFiles(
-    source,
-    isDirectory,
-    ignoreMatcher,
+    entries,
+    {
+      displayBaseDir: options.displayBaseDir,
+      ignoreMatcher,
+      configMatcher,
+      allowEmpty: options.allowEmpty,
+    },
     (path, label) => readUtf8File(path, label, ctx),
   );
 
@@ -415,13 +540,16 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
 }
 
 /**
- * Read production files for --mode file, applying the 128 KiB budget per individual file + optional docs.
+ * Read production files for file-by-file linting, applying the 128 KiB budget per individual file + optional docs.
  * Validates all selected files up front so oversized, binary, or credential-bearing files fail before any live request.
  */
 export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
-  const { source, isDirectory, out } = resolveSourceAndOut(options);
+  const configMatcher = options.configIgnore && options.configIgnore.patterns.length > 0
+    ? { baseDir: options.configIgnore.baseDir, matcher: compileIgnoreMatcher(options.configIgnore.patterns) }
+    : undefined;
+  const { entries, out } = resolveSourcesAndOut(options);
 
   let docsBytes = 0;
   const docCtx: DocReadContext = {
@@ -443,20 +571,29 @@ export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
     : undefined;
 
   const perFileBudget = MAX_INPUT_BYTES - docsBytes;
-  const files = collectProductionFiles(source, isDirectory, ignoreMatcher, (path, label) => {
-    const fileCtx: DocReadContext = {
-      allowCredentials: options.allowCredentials,
-      key,
-      maxBytes: perFileBudget,
-      consumeBudget(bytes, fileLabel) {
-        if (bytes > perFileBudget) {
-          const docNote = docsBytes > 0 ? ` + ${docsBytes} bytes documents` : '';
-          throw new Error(`${fileLabel} exceeds 128 KiB per-file budget (${bytes} bytes${docNote})`);
-        }
-      },
-    };
-    return readUtf8File(path, label, fileCtx);
-  });
+  const files = collectProductionFiles(
+    entries,
+    {
+      displayBaseDir: options.displayBaseDir,
+      ignoreMatcher,
+      configMatcher,
+      allowEmpty: options.allowEmpty,
+    },
+    (path, label) => {
+      const fileCtx: DocReadContext = {
+        allowCredentials: options.allowCredentials,
+        key,
+        maxBytes: perFileBudget,
+        consumeBudget(bytes, fileLabel) {
+          if (bytes > perFileBudget) {
+            const docNote = docsBytes > 0 ? ` + ${docsBytes} bytes documents` : '';
+            throw new Error(`${fileLabel} exceeds 128 KiB per-file budget (${bytes} bytes${docNote})`);
+          }
+        },
+      };
+      return readUtf8File(path, label, fileCtx);
+    },
+  );
 
   if (key && Object.keys(files).some((path) => path.includes(key))) {
     throw new Error('OPENROUTER_API_KEY appears in a selected source path');
