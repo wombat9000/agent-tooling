@@ -2,7 +2,8 @@
 /**
  * Static offline HTML dashboard generator (`pnpm rubrics:dashboard`).
  * Reads snapshot JSONs from <data>/runs/*.json and authoritative rubrics/*.json
- * to build a single-file interactive HTML dashboard with inline SVG charts.
+ * to build a single-file interactive HTML dashboard with inline SVG charts,
+ * linter-style punch-list overviews, and Feature / Module Architecture breakdowns.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -11,17 +12,23 @@ import { parseArgs } from 'node:util';
 import type { JudgeMode } from '../skills/judge-code/scripts/rubrics.mts';
 import {
   REPO_ROOT,
+  classifyCheckFailure,
   compareCodepoint,
+  countChecksFindings,
+  countSummaryFindings,
   diffRubricHashes,
   equalStringRecords,
   escapeHtml,
   loadRubricCatalog,
   loadSnapshotsFromDir,
   safeJsonForScript,
+  sumFindingCounts,
   type CatalogCheckInfo,
+  type FindingCounts,
   type FixtureCheckSnapshot,
   type InstalledSkillInfo,
   type LoadedSnapshotRecord,
+  type ModuleSkipReason,
   type RepoSnapshot,
   type RubricCatalog,
   type RubricFixturesSnapshot,
@@ -39,6 +46,65 @@ Build a self-contained offline HTML dashboard from rubric scanner snapshots.
   --help, -h     Show this help
 `;
 
+export interface DashboardModuleCheckFinding {
+  check_id: string;
+  rubric_slug: string | null;
+  scope: string | null;
+  severity: 'hard' | 'borderline';
+  pass_probability: number | null;
+  threshold: number;
+}
+
+export interface DashboardModuleView {
+  name: string;
+  path: string;
+  status: 'scored' | 'skipped' | 'error';
+  skip_reason?: ModuleSkipReason;
+  error?: string;
+  file_count: number;
+  bytes?: number;
+  failed_count: number;
+  hard_fail_count: number;
+  borderline_count: number;
+  passed_count: number;
+  total_checks: number;
+  min_pass_probability: number | null;
+  failing_checks: DashboardModuleCheckFinding[];
+}
+
+export interface RepoModuleArchitecture {
+  timestamp: string;
+  commit_short: string;
+  total_modules: number;
+  scored_modules: number;
+  skipped_modules: number;
+  errored_modules: number;
+  modules_with_findings: number;
+  findings: FindingCounts;
+  modules: DashboardModuleView[];
+}
+
+export interface RepoRuleFindingSummary {
+  check_id: string;
+  mode: JudgeMode;
+  rubric_slug: string | null;
+  failed: number;
+  hard: number;
+  borderline: number;
+  total: number;
+  min_pass_probability: number | null;
+  threshold: number;
+}
+
+export interface RepoHotspotSummary {
+  path: string;
+  failed_count: number;
+  hard_fail_count: number;
+  borderline_count: number;
+  min_pass_probability: number | null;
+  failing_checks: string[];
+}
+
 export interface TrendPoint {
   id: string;
   file: string;
@@ -50,6 +116,9 @@ export interface TrendPoint {
   file_count: number;
   target_count: number;
   check_count: number;
+  findings: FindingCounts;
+  affected_targets: number;
+  delta_findings: number | null;
   calibrated_pass_rate: number;
   raw_pass_rate: number;
   all_files_pass_rate: number | null;
@@ -68,6 +137,10 @@ export interface TrendPoint {
   delta_mean_prob: number | null;
   checks: Record<string, SnapshotCheckSummary>;
   files: SnapshotFileEntry[];
+  modules: DashboardModuleView[];
+  modules_scored: number;
+  modules_skipped: number;
+  modules_errored: number;
 }
 
 export interface RepoModeSeries {
@@ -92,6 +165,13 @@ export interface RepoSummary {
   latest_timestamp: string;
   total_runs: number;
   total_cost_usd: number;
+  total_findings: FindingCounts;
+  file_findings: FindingCounts | null;
+  structure_findings: FindingCounts | null;
+  module_findings: FindingCounts | null;
+  worst_rules: RepoRuleFindingSummary[];
+  top_hotspots: RepoHotspotSummary[];
+  module_architecture: RepoModuleArchitecture | null;
   by_mode: Partial<Record<JudgeMode, RepoModeSeries>>;
 }
 
@@ -108,10 +188,15 @@ export interface HeatmapRow {
     raw_pass_rate: number;
     passed: number;
     total: number;
+    failed: number;
+    hard_failed: number;
+    borderline_failed: number;
     mean_pass_probability: number | null;
     min_pass_probability: number | null;
     threshold: number;
   }>;
+  total_findings: number;
+  total_hard_fails: number;
   worst_pass_rate: number;
 }
 
@@ -155,6 +240,14 @@ export interface DashboardModel {
     repo_runs: number;
     fixture_runs: number;
     total_cost_usd: number;
+    total_findings: FindingCounts;
+    file_findings: FindingCounts;
+    structure_findings: FindingCounts;
+    module_findings: FindingCounts;
+    modules_scanned: number;
+    modules_with_findings: number;
+    modules_skipped: number;
+    modules_errored: number;
     latest_calibrated_mean: number | null;
     latest_raw_mean: number | null;
     outdated_repos: number;
@@ -181,12 +274,137 @@ function summarizeVersionChange(
 }
 
 function sortHotspotFiles(files: SnapshotFileEntry[]): SnapshotFileEntry[] {
-  return [...files].sort((a, b) =>
-    (b.failed_count - a.failed_count)
-    || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
-    || (a.pass_rate - b.pass_rate)
-    || compareCodepoint(a.path, b.path),
+  return [...files].sort((a, b) => {
+    const ca = countChecksFindings(a.checks);
+    const cb = countChecksFindings(b.checks);
+    return (cb.hard - ca.hard)
+      || (cb.total - ca.total)
+      || (b.failed_count - a.failed_count)
+      || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
+      || (a.pass_rate - b.pass_rate)
+      || compareCodepoint(a.path, b.path);
+  });
+}
+
+function buildFailingModuleChecks(
+  checks: Record<string, { choice: 'pass' | 'fail'; model_choice?: 'pass' | 'borderline' | 'fail'; pass_probability: number | null }>,
+  snapChecks: Record<string, SnapshotCheckSummary>,
+  catalog: RubricCatalog,
+): DashboardModuleCheckFinding[] {
+  const findings: DashboardModuleCheckFinding[] = [];
+  for (const [checkId, score] of Object.entries(checks)) {
+    const severity = classifyCheckFailure(score);
+    if (!severity) continue;
+    const cat = catalog.checks_by_id[checkId];
+    const summary = snapChecks[checkId];
+    findings.push({
+      check_id: checkId,
+      rubric_slug: cat?.rubric_slug ?? summary?.rubric_group ?? null,
+      scope: cat?.scope ?? null,
+      severity,
+      pass_probability: score.pass_probability,
+      threshold: summary?.threshold ?? cat?.pass_threshold ?? 0.8,
+    });
+  }
+  findings.sort((a, b) =>
+    (Number(b.severity === 'hard') - Number(a.severity === 'hard'))
+    || ((a.pass_probability ?? 0) - (b.pass_probability ?? 0))
+    || compareCodepoint(a.check_id, b.check_id),
   );
+  return findings;
+}
+
+function moduleSortTier(mod: DashboardModuleView): number {
+  if (mod.status === 'scored' && mod.failed_count > 0) return 0;
+  if (mod.status === 'error') return 1;
+  if (mod.status === 'skipped') return 2;
+  return 3;
+}
+
+function sortModuleViews(modules: DashboardModuleView[]): DashboardModuleView[] {
+  return [...modules].sort((a, b) => {
+    const tierDiff = moduleSortTier(a) - moduleSortTier(b);
+    if (tierDiff !== 0) return tierDiff;
+    if (a.status === 'scored' && b.status === 'scored') {
+      return (b.hard_fail_count - a.hard_fail_count)
+        || (b.failed_count - a.failed_count)
+        || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
+        || compareCodepoint(a.name, b.name)
+        || compareCodepoint(a.path, b.path);
+    }
+    return compareCodepoint(a.name, b.name) || compareCodepoint(a.path, b.path);
+  });
+}
+
+function buildModuleViewsForSnapshot(snap: RepoSnapshot, catalog: RubricCatalog): DashboardModuleView[] {
+  if (Array.isArray(snap.modules)) {
+    return sortModuleViews(
+      snap.modules.map((m) => {
+        const failing = buildFailingModuleChecks(m.checks ?? {}, snap.checks, catalog);
+        const totalChecks = Object.keys(m.checks ?? {}).length;
+        const hardCount = failing.filter((c) => c.severity === 'hard').length;
+        const borderlineCount = failing.filter((c) => c.severity === 'borderline').length;
+        return {
+          name: m.name,
+          path: m.path,
+          status: m.status,
+          ...(m.skip_reason ? { skip_reason: m.skip_reason } : {}),
+          ...(m.error ? { error: m.error } : {}),
+          file_count: m.file_count,
+          ...(m.bytes !== undefined ? { bytes: m.bytes } : {}),
+          failed_count: m.status === 'scored' ? failing.length : 0,
+          hard_fail_count: m.status === 'scored' ? hardCount : 0,
+          borderline_count: m.status === 'scored' ? borderlineCount : 0,
+          passed_count: m.status === 'scored' ? Math.max(0, totalChecks - failing.length) : 0,
+          total_checks: totalChecks,
+          min_pass_probability: m.min_pass_probability,
+          failing_checks: failing,
+        };
+      }),
+    );
+  }
+
+  // Backwards-compatible fallback for legacy mode === 'code' snapshots without `modules`.
+  if (snap.scan.mode === 'code' && snap.files.length > 0) {
+    return sortModuleViews(
+      snap.files.map((f) => {
+        const failing = buildFailingModuleChecks(f.checks ?? {}, snap.checks, catalog);
+        const totalChecks = Object.keys(f.checks ?? {}).length;
+        const hardCount = failing.filter((c) => c.severity === 'hard').length;
+        const borderlineCount = failing.filter((c) => c.severity === 'borderline').length;
+        return {
+          name: f.path === '.' ? snap.repo.name : f.path,
+          path: f.path,
+          status: 'scored' as const,
+          file_count: snap.files.length === 1 ? snap.metrics.file_count : 0,
+          failed_count: failing.length,
+          hard_fail_count: hardCount,
+          borderline_count: borderlineCount,
+          passed_count: Math.max(0, totalChecks - failing.length),
+          total_checks: totalChecks,
+          min_pass_probability: f.min_pass_probability,
+          failing_checks: failing,
+        };
+      }),
+    );
+  }
+
+  return [];
+}
+
+function computeSnapshotFindings(snap: RepoSnapshot): FindingCounts {
+  const checkSummaries = Object.values(snap.checks ?? {});
+  if (checkSummaries.length > 0) {
+    return sumFindingCounts(checkSummaries.map(countSummaryFindings));
+  }
+  if (Array.isArray(snap.modules) && snap.modules.length > 0) {
+    return sumFindingCounts(
+      snap.modules
+        .filter((m) => m.status === 'scored')
+        .map((m) => countChecksFindings(m.checks ?? {})),
+    );
+  }
+  return sumFindingCounts((snap.files ?? []).map((f) => countChecksFindings(f.checks ?? {})));
 }
 
 function classifyInstalledStatus(
@@ -255,6 +473,9 @@ export function buildDashboardModel(options: {
         const prev = idx > 0 ? records[idx - 1].snapshot : null;
         const changeReasons = prev ? summarizeVersionChange(prev, snap) : [];
         const versionChanged = changeReasons.length > 0;
+        const findings = computeSnapshotFindings(snap);
+        const prevFindings = prev ? computeSnapshotFindings(prev) : null;
+        const deltaFindings = prevFindings ? findings.total - prevFindings.total : null;
         const deltaCalibrated = prev
           ? snap.metrics.calibrated_pass_rate - prev.metrics.calibrated_pass_rate
           : null;
@@ -267,6 +488,15 @@ export function buildDashboardModel(options: {
           ? snap.metrics.mean_pass_probability - prev.metrics.mean_pass_probability
           : null;
 
+        const modules = buildModuleViewsForSnapshot(snap, catalog);
+        const sortedFiles = sortHotspotFiles(snap.files ?? []);
+        const affectedTargets = modules.length > 0
+          ? modules.filter((m) => m.status === 'scored' && m.failed_count > 0).length
+          : sortedFiles.filter((f) => f.failed_count > 0).length;
+        const modulesScored = modules.filter((m) => m.status === 'scored').length;
+        const modulesSkipped = modules.filter((m) => m.status === 'skipped').length;
+        const modulesErrored = modules.filter((m) => m.status === 'error').length;
+
         return {
           id: `${repoName}::${mode}::${idx}`,
           file: rec.file,
@@ -278,6 +508,9 @@ export function buildDashboardModel(options: {
           file_count: snap.metrics.file_count,
           target_count: snap.metrics.target_count,
           check_count: snap.metrics.check_count,
+          findings,
+          affected_targets: affectedTargets,
+          delta_findings: deltaFindings,
           calibrated_pass_rate: snap.metrics.calibrated_pass_rate,
           raw_pass_rate: snap.metrics.raw_pass_rate,
           all_files_pass_rate: snap.metrics.all_files_pass_rate ?? null,
@@ -295,7 +528,11 @@ export function buildDashboardModel(options: {
           delta_raw: deltaRaw,
           delta_mean_prob: deltaMeanProb,
           checks: snap.checks,
-          files: sortHotspotFiles(snap.files),
+          files: sortedFiles,
+          modules,
+          modules_scored: modulesScored,
+          modules_skipped: modulesSkipped,
+          modules_errored: modulesErrored,
         };
       });
 
@@ -313,6 +550,77 @@ export function buildDashboardModel(options: {
       };
     }
 
+    const fileFindings = byMode.file?.latest.findings ?? null;
+    const structureFindings = byMode.structure?.latest.findings ?? null;
+    const moduleFindings = byMode.code?.latest.findings ?? null;
+    const totalFindings = sumFindingCounts(
+      [fileFindings, structureFindings, moduleFindings].filter((f): f is FindingCounts => f !== null),
+    );
+
+    const worstRules: RepoRuleFindingSummary[] = [];
+    for (const mode of modes) {
+      const latestPoint = byMode[mode]!.latest;
+      for (const [checkId, summary] of Object.entries(latestPoint.checks)) {
+        const fc = countSummaryFindings(summary);
+        if (fc.total === 0) continue;
+        worstRules.push({
+          check_id: checkId,
+          mode,
+          rubric_slug: catalog.checks_by_id[checkId]?.rubric_slug ?? summary.rubric_group,
+          failed: fc.total,
+          hard: fc.hard,
+          borderline: fc.borderline,
+          total: summary.total,
+          min_pass_probability: summary.min_pass_probability,
+          threshold: summary.threshold,
+        });
+      }
+    }
+    worstRules.sort((a, b) =>
+      (b.hard - a.hard)
+      || (b.failed - a.failed)
+      || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
+      || compareCodepoint(a.check_id, b.check_id),
+    );
+
+    const topHotspots: RepoHotspotSummary[] = (byMode.file?.latest.files ?? [])
+      .filter((f) => f.failed_count > 0)
+      .slice(0, 6)
+      .map((f) => {
+        const fc = countChecksFindings(f.checks);
+        const failingIds = Object.entries(f.checks)
+          .filter(([, s]) => s.choice === 'fail')
+          .sort((a, b) =>
+            (Number(classifyCheckFailure(b[1]) === 'hard') - Number(classifyCheckFailure(a[1]) === 'hard'))
+            || ((a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0))
+            || compareCodepoint(a[0], b[0]),
+          )
+          .map(([cid]) => cid);
+        return {
+          path: f.path,
+          failed_count: fc.total,
+          hard_fail_count: fc.hard,
+          borderline_count: fc.borderline,
+          min_pass_probability: f.min_pass_probability,
+          failing_checks: failingIds,
+        };
+      });
+
+    const latestCode = byMode.code?.latest ?? null;
+    const moduleArchitecture: RepoModuleArchitecture | null = latestCode && latestCode.modules.length > 0
+      ? {
+        timestamp: latestCode.timestamp,
+        commit_short: latestCode.commit_short,
+        total_modules: latestCode.modules.length,
+        scored_modules: latestCode.modules_scored,
+        skipped_modules: latestCode.modules_skipped,
+        errored_modules: latestCode.modules_errored,
+        modules_with_findings: latestCode.modules.filter((m) => m.status === 'scored' && m.failed_count > 0).length,
+        findings: latestCode.findings,
+        modules: latestCode.modules,
+      }
+      : null;
+
     const latestRef = latestOverall!;
     const installed = latestRef.repo.installed_judge_code;
     repos.push({
@@ -327,9 +635,23 @@ export function buildDashboardModel(options: {
       latest_timestamp: latestRef.timestamp,
       total_runs: totalRuns,
       total_cost_usd: totalCost,
+      total_findings: totalFindings,
+      file_findings: fileFindings,
+      structure_findings: structureFindings,
+      module_findings: moduleFindings,
+      worst_rules: worstRules.slice(0, 10),
+      top_hotspots: topHotspots,
+      module_architecture: moduleArchitecture,
       by_mode: byMode,
     });
   }
+
+  // Sort repos worst-first by hard fails -> total findings -> repo name
+  repos.sort((a, b) =>
+    (b.total_findings.hard - a.total_findings.hard)
+    || (b.total_findings.total - a.total_findings.total)
+    || compareCodepoint(a.name, b.name),
+  );
 
   const modesPresent = modeOrder.filter((m) => modesPresentSet.has(m));
 
@@ -346,6 +668,8 @@ export function buildDashboardModel(options: {
       const catalogInfo: CatalogCheckInfo | undefined = catalog.checks_by_id[checkId];
       const byRepo: HeatmapRow['by_repo'] = {};
       let worst = 1;
+      let totalFindingsForCheck = 0;
+      let totalHardFailsForCheck = 0;
       let fallbackThreshold = 0.8;
       let fallbackGroup: string | null = null;
       for (const rName of modeRepos) {
@@ -353,11 +677,17 @@ export function buildDashboardModel(options: {
         if (!check) continue;
         fallbackThreshold = check.threshold;
         if (check.rubric_group) fallbackGroup = check.rubric_group;
+        const fc = countSummaryFindings(check);
+        totalFindingsForCheck += fc.total;
+        totalHardFailsForCheck += fc.hard;
         byRepo[rName] = {
           pass_rate: check.pass_rate,
           raw_pass_rate: check.raw_pass_rate,
           passed: check.passed,
           total: check.total,
+          failed: fc.total,
+          hard_failed: fc.hard,
+          borderline_failed: fc.borderline,
           mean_pass_probability: check.mean_pass_probability,
           min_pass_probability: check.min_pass_probability,
           threshold: check.threshold,
@@ -373,10 +703,17 @@ export function buildDashboardModel(options: {
         pass_criteria: catalogInfo?.criteria.pass ?? '',
         fail_criteria: catalogInfo?.criteria.fail ?? '',
         by_repo: byRepo,
+        total_findings: totalFindingsForCheck,
+        total_hard_fails: totalHardFailsForCheck,
         worst_pass_rate: worst,
       };
     });
-    rows.sort((a, b) => a.worst_pass_rate - b.worst_pass_rate || compareCodepoint(a.check_id, b.check_id));
+    rows.sort((a, b) =>
+      (b.total_hard_fails - a.total_hard_fails)
+      || (b.total_findings - a.total_findings)
+      || (a.worst_pass_rate - b.worst_pass_rate)
+      || compareCodepoint(a.check_id, b.check_id),
+    );
     heatmaps[mode] = { repos: modeRepos, rows };
   }
 
@@ -419,7 +756,7 @@ export function buildDashboardModel(options: {
     };
   });
 
-  // Aggregate latest calibrated/raw means across repo latest primary runs (prefer file, else structure/code)
+  // Aggregate latest calibrated/raw means (kept for backwards compatibility) and punch-list totals
   const latestPrimaries = repos
     .map((r) => r.by_mode.file?.latest ?? r.by_mode.structure?.latest ?? r.by_mode.code?.latest)
     .filter((p): p is TrendPoint => p !== undefined);
@@ -430,6 +767,20 @@ export function buildDashboardModel(options: {
     ? latestPrimaries.reduce((sum, p) => sum + p.raw_pass_rate, 0) / latestPrimaries.length
     : null;
 
+  const totalFindings = sumFindingCounts(repos.map((r) => r.total_findings));
+  const totalFileFindings = sumFindingCounts(
+    repos.map((r) => r.file_findings).filter((f): f is FindingCounts => f !== null),
+  );
+  const totalStructureFindings = sumFindingCounts(
+    repos.map((r) => r.structure_findings).filter((f): f is FindingCounts => f !== null),
+  );
+  const totalModuleFindings = sumFindingCounts(
+    repos.map((r) => r.module_findings).filter((f): f is FindingCounts => f !== null),
+  );
+  const modulesScanned = repos.reduce((sum, r) => sum + (r.module_architecture?.total_modules ?? 0), 0);
+  const modulesWithFindings = repos.reduce((sum, r) => sum + (r.module_architecture?.modules_with_findings ?? 0), 0);
+  const modulesSkipped = repos.reduce((sum, r) => sum + (r.module_architecture?.skipped_modules ?? 0), 0);
+  const modulesErrored = repos.reduce((sum, r) => sum + (r.module_architecture?.errored_modules ?? 0), 0);
   const totalCostUsd = repos.reduce((sum, r) => sum + r.total_cost_usd, 0) + fixtureCost;
 
   return {
@@ -448,23 +799,19 @@ export function buildDashboardModel(options: {
       repo_runs: repoSnapshots.length,
       fixture_runs: fixtureSnapshots.length,
       total_cost_usd: totalCostUsd,
+      total_findings: totalFindings,
+      file_findings: totalFileFindings,
+      structure_findings: totalStructureFindings,
+      module_findings: totalModuleFindings,
+      modules_scanned: modulesScanned,
+      modules_with_findings: modulesWithFindings,
+      modules_skipped: modulesSkipped,
+      modules_errored: modulesErrored,
       latest_calibrated_mean: latestCalibratedMean,
       latest_raw_mean: latestRawMean,
       outdated_repos: repos.filter((r) => r.installed_status === 'outdated').length,
     },
   };
-}
-
-function pct(value: number | null | undefined, decimals = 1): string {
-  return typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(decimals)}%` : '—';
-}
-
-function deltaPp(delta: number | null | undefined): string {
-  if (typeof delta !== 'number' || !Number.isFinite(delta)) return '—';
-  const pp = delta * 100;
-  const rounded = Math.abs(pp) < 0.05 ? 0 : pp;
-  const sign = rounded > 0 ? '+' : '';
-  return `${sign}${rounded.toFixed(1)}pp`;
 }
 
 function fmtUsd(value: number | null | undefined): string {
@@ -474,11 +821,26 @@ function fmtUsd(value: number | null | undefined): string {
   return `$${value.toFixed(3)}`;
 }
 
-function scoreTone(rate: number | null | undefined): string {
-  if (typeof rate !== 'number' || !Number.isFinite(rate)) return '';
-  if (rate >= 0.9) return ' tone-good';
-  if (rate >= 0.75) return ' tone-warn';
-  return ' tone-bad';
+function findingsTone(counts: FindingCounts): string {
+  if (counts.hard > 0) return ' tone-bad';
+  if (counts.borderline > 0) return ' tone-warn';
+  return ' tone-good';
+}
+
+function renderFindingsBadges(counts: FindingCounts): string {
+  if (counts.total === 0) return '<span class="pill pass">0 clean</span>';
+  const parts: string[] = [];
+  if (counts.hard > 0) parts.push(`<span class="pill fail">${counts.hard} hard</span>`);
+  if (counts.borderline > 0) parts.push(`<span class="pill warn">${counts.borderline} borderline</span>`);
+  return `<div class="badge-row"><strong class="numeric${findingsTone(counts)}">${counts.total}</strong> ${parts.join(' ')}</div>`;
+}
+
+function renderDeltaFindingsBadge(delta: number | null, versionChanged: boolean): string {
+  if (delta === null) return '';
+  const cls = delta < 0 ? 'pass' : delta > 0 ? 'fail' : 'neutral';
+  const label = delta > 0 ? `+${delta}` : String(delta);
+  const title = versionChanged ? 'Crossed rubric/judge change' : 'Change in total findings vs previous run';
+  return `<span class="pill ${cls}" title="${escapeHtml(title)}">${escapeHtml(label)}${versionChanged ? ' *' : ''}</span>`;
 }
 
 function renderInstalledBadge(repo: RepoSummary, latestTag: string | null): string {
@@ -527,7 +889,7 @@ const STYLE = `
 :root{color-scheme:light;--ink:#16243b;--muted:#5c687b;--line:#dce3ed;--bg:#f4f6fa;--surface:#ffffff;--blue:#3158cf;--teal:#0d9488;--purple:#7c3aed;--green:#116547;--green-bg:#e7f6ee;--amber:#9a3412;--amber-bg:#ffedd5;--red:#b91c1c;--red-bg:#fee2e2}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-main{max-width:1420px;margin:0 auto;padding:22px 26px 64px}
+main{max-width:1440px;margin:0 auto;padding:22px 26px 64px}
 header{border-top:3px solid var(--blue);padding:12px 0 18px}
 .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 h1{font-size:1.6rem;line-height:1.2;letter-spacing:-.03em;margin:0}
@@ -544,6 +906,7 @@ code{font:500 .84em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;bac
 .kpi{padding:14px 16px;border-right:1px solid var(--line)}
 .kpi:last-child{border-right:0}
 .kpi-alert{background:#fff8f1}
+.kpi-danger{background:#fef2f2}
 .kpi-label{color:var(--muted);font-size:.73rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
 .kpi-value{font-size:1.5rem;font-weight:700;letter-spacing:-.03em;line-height:1.25;margin:3px 0}
 .kpi-note{font-size:.77rem;color:var(--muted);line-height:1.35}
@@ -569,6 +932,7 @@ details[open]>.panel-summary::before{content:'− '}
 .target-project_structure{background:#f3e8ff;color:#6b21a8}
 .target-test_code{background:#dcfce7;color:#166534}
 .target-review{background:#fef3c7;color:#92400e}
+.badge-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
 .table-scroll{overflow-x:auto}
 table{width:100%;border-collapse:collapse;text-align:left}
 th{font-size:.76rem;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:1px solid var(--line)}
@@ -586,27 +950,36 @@ label.toggle{display:inline-flex;align-items:center;gap:6px;font-size:.82rem;col
 .repo-row{cursor:pointer}
 .repo-row:hover td{background:#f8faff}
 .repo-row.selected td{background:#eff4ff}
+.punch-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.punch-tile{border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#fcfdff}
+.punch-tile-label{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.punch-tile-val{font-size:1.15rem;font-weight:700;margin:2px 0}
+.punch-tile-sub{font-size:.75rem;color:var(--muted)}
+.arch-card{border:1px solid #c7d2fe;border-radius:10px;padding:14px 16px;background:#fafbff;margin-bottom:16px}
 .chart-box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#fcfdff;margin-bottom:16px}
 .chart-legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:.78rem;color:var(--muted);margin-bottom:8px}
 .legend-item{display:inline-flex;align-items:center;gap:6px}
 .legend-swatch{display:inline-block;width:16px;height:3px;border-radius:2px}
 .legend-swatch.dashed{background:repeating-linear-gradient(90deg,var(--teal) 0 5px,transparent 5px 8px)}
+.legend-swatch.dashed-red{background:repeating-linear-gradient(90deg,var(--red) 0 5px,transparent 5px 8px)}
 .legend-swatch.dotted{background:repeating-linear-gradient(90deg,var(--purple) 0 2px,transparent 2px 5px)}
 .legend-marker{display:inline-block;width:9px;height:9px;transform:rotate(45deg);background:#f59e0b;border:1px solid #b45309}
 .svg-wrap{width:100%;overflow-x:auto}
 svg.trend-svg{display:block;width:100%;max-width:100%;height:auto}
 .chart-point{cursor:pointer}
 .chart-point:hover{stroke-width:3}
-.split-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:start}
+.split-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:16px;align-items:start}
 .sub-card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fcfdff}
-.bar-wrap{display:flex;align-items:center;gap:7px;min-width:118px}
-.bar-track{width:56px;height:7px;background:#e6ecf5;border-radius:999px;overflow:hidden;flex-shrink:0}
+.bar-wrap{display:flex;align-items:center;gap:7px;min-width:108px}
+.bar-track{width:52px;height:7px;background:#e6ecf5;border-radius:999px;overflow:hidden;flex-shrink:0}
 .bar-fill{height:100%;border-radius:999px}
-.heat-cell{display:inline-flex;flex-direction:column;align-items:flex-end;gap:1px;padding:4px 8px;border-radius:6px;min-width:86px;font-variant-numeric:tabular-nums}
+.heat-cell{display:inline-flex;flex-direction:column;align-items:flex-end;gap:1px;padding:4px 8px;border-radius:6px;min-width:92px;font-variant-numeric:tabular-nums}
 .heat-cell strong{font-size:.82rem;line-height:1.2}
-.heat-cell span{font-size:.71rem;opacity:.85}
+.heat-cell span{font-size:.71rem;opacity:.88}
 .fail-chips{display:flex;flex-wrap:wrap;gap:4px}
-.fail-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:4px;font-size:.73rem;background:#fff1f2;color:#9f1239;border:1px solid #fecdd3;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fail-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:4px;font-size:.73rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fail-chip-hard{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;font-weight:600}
+.fail-chip-borderline{background:#fff7ed;color:#9a3412;border:1px solid #fdba74}
 .version-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:.82rem;margin-bottom:12px}
 .warn-banner{padding:10px 14px;border-radius:8px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:.82rem;margin-bottom:14px}
 .run-row{cursor:pointer}
@@ -614,14 +987,14 @@ svg.trend-svg{display:block;width:100%;max-width:100%;height:auto}
 .run-row.active-run td{background:#eff4ff}
 .tip-wrap{position:relative;display:inline-flex;align-items:center}
 .tip-trigger{border-bottom:1px dotted #94a3b8;cursor:help}
-.tip-card{display:none;position:absolute;left:0;top:calc(100% + 6px);width:min(440px,74vw);padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 24px rgba(15,23,42,.14);z-index:50;white-space:normal;font-weight:400;line-height:1.4}
+.tip-card{display:none;position:absolute;left:0;top:calc(100% + 6px);width:min(440px,74vw);padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 24px rgba(15,23,42,.14);z-index:50;white-space:normal;font-weight:400;line-height:1.4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink)}
 .tip-wrap:hover .tip-card,.tip-wrap:focus-within .tip-card{display:block}
 .tip-pass{background:#f0fdf4;border-left:3px solid #16a34a;padding:5px 8px;border-radius:5px;margin-top:6px;font-size:.77rem}
 .tip-fail{background:#fff7ed;border-left:3px solid #ea580c;padding:5px 8px;border-radius:5px;margin-top:5px;font-size:.77rem}
 .empty-state{padding:24px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px;background:#fafbfd}
 footer{font-size:.8rem;color:var(--muted);margin-top:24px}
 [hidden]{display:none!important}
-@media(max-width:1024px){.kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{border-bottom:1px solid var(--line)}.split-grid{grid-template-columns:1fr}}
+@media(max-width:1024px){.kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{border-bottom:1px solid var(--line)}.punch-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.split-grid{grid-template-columns:1fr}}
 `;
 
 const CLIENT_SCRIPT = `
@@ -641,45 +1014,82 @@ const CLIENT_SCRIPT = `
   function pct(v, d = 1) {
     return typeof v === 'number' && Number.isFinite(v) ? (v * 100).toFixed(d) + '%' : '—';
   }
-  function deltaPp(v) {
-    if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
-    const pp = v * 100;
-    const r = Math.abs(pp) < 0.05 ? 0 : pp;
-    return (r > 0 ? '+' : '') + r.toFixed(1) + 'pp';
-  }
   function fmtUsd(v) {
     if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
     if (v === 0) return '$0.00';
     return v < 0.01 ? '$' + v.toFixed(4) : '$' + v.toFixed(3);
   }
+  function fmtKiB(bytes) {
+    if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return '';
+    return (bytes / 1024).toFixed(1) + ' KiB';
+  }
   function shortDate(ts) {
     if (!ts) return '—';
     return ts.replace('T', ' ').slice(0, 16) + 'Z';
   }
-  function barColor(rate) {
-    if (rate >= 0.9) return '#15803d';
-    if (rate >= 0.75) return '#ca8a04';
-    return '#dc2626';
+  function classifyScore(score) {
+    if (!score || score.choice !== 'fail') return null;
+    if (score.model_choice === 'fail') return 'hard';
+    if (score.model_choice === 'pass' || score.model_choice === 'borderline') return 'borderline';
+    return typeof score.pass_probability === 'number' && score.pass_probability >= 0.5 ? 'borderline' : 'hard';
+  }
+  function countFileFindings(checks) {
+    let hard = 0, borderline = 0;
+    for (const score of Object.values(checks || {})) {
+      const k = classifyScore(score);
+      if (k === 'hard') hard += 1;
+      else if (k === 'borderline') borderline += 1;
+    }
+    return { total: hard + borderline, hard, borderline };
+  }
+  function countCheckSummaryFindings(c) {
+    const total = Math.max(0, c.total - c.passed);
+    const hard = Math.max(0, Math.min(total, c.total - c.raw_passed));
+    return { total, hard, borderline: Math.max(0, total - hard) };
   }
   function heatColors(rate) {
-    if (rate >= 0.95) return { bg: '#dcfce7', fg: '#14532d' };
+    if (rate >= 0.999) return { bg: '#dcfce7', fg: '#14532d' };
     if (rate >= 0.85) return { bg: '#ecfccb', fg: '#365314' };
     if (rate >= 0.7) return { bg: '#fef9c3', fg: '#713f12' };
     if (rate >= 0.5) return { bg: '#ffedd5', fg: '#9a3412' };
     return { bg: '#fee2e2', fg: '#991b1b' };
   }
-  function scoreBar(rate) {
-    if (typeof rate !== 'number' || !Number.isFinite(rate)) return '<span class="muted">—</span>';
-    const w = Math.max(0, Math.min(100, Math.round(rate * 100)));
-    return '<div class="bar-wrap"><div class="bar-track"><div class="bar-fill" style="width:' + w + '%;background:' + barColor(rate) + '"></div></div><span class="numeric">' + pct(rate) + '</span></div>';
+  function renderFindingsPills(fc) {
+    if (!fc || fc.total === 0) return '<span class="pill pass">0 clean</span>';
+    const parts = [];
+    if (fc.hard > 0) parts.push('<span class="pill fail">' + fc.hard + ' hard</span>');
+    if (fc.borderline > 0) parts.push('<span class="pill warn">' + fc.borderline + ' borderline</span>');
+    return '<div class="badge-row"><strong class="numeric">' + fc.total + '</strong> ' + parts.join(' ') + '</div>';
+  }
+  function checkLabelWithTip(cid) {
+    const cat = DATA.catalog && DATA.catalog.checks_by_id ? DATA.catalog.checks_by_id[cid] : null;
+    if (!cat) return '<code>' + esc(cid) + '</code>';
+    return '<span class="tip-wrap"><span class="tip-trigger" tabindex="0">' + esc(cid) + '</span>'
+      + '<div class="tip-card"><strong>' + esc(cat.instructions) + '</strong>'
+      + '<div class="tip-pass"><strong>Pass:</strong> ' + esc(cat.criteria.pass) + '</div>'
+      + '<div class="tip-fail"><strong>Fail:</strong> ' + esc(cat.criteria.fail) + '</div></div></span>';
+  }
+  function renderFindingChip(cid, severity, prob, thr) {
+    const cat = DATA.catalog && DATA.catalog.checks_by_id ? DATA.catalog.checks_by_id[cid] : null;
+    const cls = severity === 'hard' ? 'fail-chip fail-chip-hard' : 'fail-chip fail-chip-borderline';
+    const pText = typeof prob === 'number' ? prob.toFixed(2) : 'fail';
+    const detail = severity === 'hard'
+      ? 'hard ' + pText
+      : 'borderline ' + pText + ' < ' + thr.toFixed(2);
+    const title = (severity === 'hard' ? 'Hard model FAIL' : 'Borderline threshold flip (raw PASS, P < ' + thr.toFixed(2) + ')')
+      + (cat && cat.instructions ? ' — ' + cat.instructions : '');
+    return '<span class="' + cls + '" title="' + esc(title) + '">' + esc(cid) + ' (' + esc(detail) + ')</span>';
   }
 
   let selectedRepo = DATA.repos && DATA.repos.length > 0 ? DATA.repos[0].name : null;
   let selectedMode = null;
   let selectedRunIdx = null;
+  let trendMetric = 'findings';
   let heatmapMode = DATA.modes_present && DATA.modes_present.length > 0 ? DATA.modes_present[0] : 'file';
   let fileSearch = '';
   let failingOnly = true;
+  let moduleSearch = '';
+  let moduleFailingOnly = false;
   let heatSearch = '';
   let heatGroup = '';
 
@@ -698,7 +1108,69 @@ const CLIENT_SCRIPT = `
     return { repoObj, series, run: series.points[selectedRunIdx] };
   }
 
-  function renderTrendSvg(points, activeIdx) {
+  function renderFindingsTrendSvg(points, activeIdx) {
+    const W = 820, H = 225, padL = 48, padR = 24, padT = 22, padB = 34;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const maxVal = Math.max(4, ...points.map((p) => p.findings ? p.findings.total : 0));
+    const yMax = Math.ceil(maxVal * 1.15);
+    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
+    const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / yMax))) * plotH;
+
+    const tickVals = [...new Set([0, Math.round(yMax / 2), yMax])];
+    const gridLines = tickVals.map((g) => {
+      const y = yAt(g).toFixed(1);
+      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#e2e8f0" stroke-width="1"/>'
+        + '<text x="' + (padL - 8) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + g + '</text>';
+    }).join('');
+
+    const versionLines = points.map((p, i) => {
+      if (!p.version_changed) return '';
+      const x = xAt(i).toFixed(1);
+      const label = esc(p.change_reasons.join(' | '));
+      return '<g><line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>'
+        + '<polygon points="' + x + ',' + (padT - 7) + ' ' + (Number(x) + 5) + ',' + (padT - 2) + ' ' + x + ',' + (padT + 3) + ' ' + (Number(x) - 5) + ',' + (padT - 2) + '" fill="#f59e0b" stroke="#b45309" stroke-width="1"><title>Rubric / judge change: ' + label + '</title></polygon></g>';
+    }).join('');
+
+    const polyline = (getter, stroke, dash) => {
+      const coords = points.map((p, i) => xAt(i).toFixed(1) + ',' + yAt(getter(p)).toFixed(1));
+      if (coords.length < 2) return '';
+      return '<polyline fill="none" stroke="' + stroke + '" stroke-width="2.2" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
+    };
+
+    const dots = points.map((p, i) => {
+      const x = xAt(i).toFixed(1);
+      const yt = yAt(p.findings.total).toFixed(1);
+      const yh = yAt(p.findings.hard).toFixed(1);
+      const isActive = i === activeIdx;
+      const tip = esc(
+        shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
+        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' hard, ' + p.findings.borderline + ' borderline)'
+        + '\\nCalibrated pass: ' + pct(p.calibrated_pass_rate) + ' | Raw pass: ' + pct(p.raw_pass_rate)
+        + (p.version_changed ? '\\nVersion change: ' + p.change_reasons.join('; ') : '')
+      );
+      return '<g class="chart-point" data-select-run="' + i + '">'
+        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#3158cf" stroke-opacity="0.22" stroke-width="10"/>' : '')
+        + '<circle cx="' + x + '" cy="' + yh + '" r="' + (isActive ? 4.8 : 3.5) + '" fill="#b91c1c" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>'
+        + '<circle cx="' + x + '" cy="' + yt + '" r="' + (isActive ? 6 : 4.2) + '" fill="#3158cf" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>'
+        + '</g>';
+    }).join('');
+
+    const step = Math.max(1, Math.ceil(points.length / 6));
+    const xLabels = points.map((p, i) => {
+      if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
+      const x = xAt(i).toFixed(1);
+      return '<text x="' + x + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.commit_short) + '</text>';
+    }).join('');
+
+    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Findings trend chart">'
+      + gridLines + versionLines
+      + polyline((p) => p.findings.hard, '#b91c1c', '6 3')
+      + polyline((p) => p.findings.total, '#3158cf', '')
+      + dots + xLabels + '</svg>';
+  }
+
+  function renderRateTrendSvg(points, activeIdx) {
     const W = 820, H = 225, padL = 48, padR = 24, padT = 22, padB = 34;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
@@ -720,12 +1192,10 @@ const CLIENT_SCRIPT = `
     }).join('');
 
     const polyline = (getter, stroke, dash) => {
-      const coords = points
-        .map((p, i) => {
-          const val = getter(p);
-          return typeof val === 'number' && Number.isFinite(val) ? xAt(i).toFixed(1) + ',' + yAt(val).toFixed(1) : null;
-        })
-        .filter(Boolean);
+      const coords = points.map((p, i) => {
+        const val = getter(p);
+        return typeof val === 'number' && Number.isFinite(val) ? xAt(i).toFixed(1) + ',' + yAt(val).toFixed(1) : null;
+      }).filter(Boolean);
       if (coords.length < 2) return '';
       return '<polyline fill="none" stroke="' + stroke + '" stroke-width="2.2" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
     };
@@ -738,13 +1208,12 @@ const CLIENT_SCRIPT = `
       const isActive = i === activeIdx;
       const tip = esc(
         shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nCalibrated: ' + pct(p.calibrated_pass_rate)
-        + ' | Raw: ' + pct(p.raw_pass_rate)
+        + '\\nCalibrated: ' + pct(p.calibrated_pass_rate) + ' | Raw: ' + pct(p.raw_pass_rate)
         + ' | Mean P(pass): ' + pct(p.mean_pass_probability)
-        + (p.version_changed ? '\\nVersion change: ' + p.change_reasons.join('; ') : '')
+        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' hard, ' + p.findings.borderline + ' borderline)'
       );
       return '<g class="chart-point" data-select-run="' + i + '">'
-        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#3158cf" stroke-opacity="0.25" stroke-width="10"/>' : '')
+        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#3158cf" stroke-opacity="0.22" stroke-width="10"/>' : '')
         + '<circle cx="' + x + '" cy="' + yr + '" r="' + (isActive ? 4.5 : 3.2) + '" fill="#0d9488" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>'
         + (ym !== null ? '<circle cx="' + x + '" cy="' + ym + '" r="' + (isActive ? 4.2 : 3) + '" fill="#7c3aed" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>' : '')
         + '<circle cx="' + x + '" cy="' + yc + '" r="' + (isActive ? 6 : 4.2) + '" fill="#3158cf" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>'
@@ -758,15 +1227,12 @@ const CLIENT_SCRIPT = `
       return '<text x="' + x + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.commit_short) + '</text>';
     }).join('');
 
-    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Score trend chart">'
-      + gridLines
-      + versionLines
+    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Pass rate trend chart">'
+      + gridLines + versionLines
       + polyline((p) => p.raw_pass_rate, '#0d9488', '6 3')
       + polyline((p) => p.mean_pass_probability, '#7c3aed', '2 4')
       + polyline((p) => p.calibrated_pass_rate, '#3158cf', '')
-      + dots
-      + xLabels
-      + '</svg>';
+      + dots + xLabels + '</svg>';
   }
 
   function renderFixtureTrendSvg(points) {
@@ -808,10 +1274,87 @@ const CLIENT_SCRIPT = `
     }).join('');
 
     return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Rubric fixture health trend">'
-      + grid
-      + line((p) => p.check_pass_rate, '#15803d', '')
-      + line((p) => p.max_jitter, '#ea580c', '4 3')
+      + grid + line((p) => p.check_pass_rate, '#15803d', '') + line((p) => p.max_jitter, '#ea580c', '4 3')
       + dots + labels + '</svg>';
+  }
+
+  function renderModuleArchitectureSection(repoObj, activeRun) {
+    const codeRun = selectedMode === 'code' && activeRun && activeRun.modules && activeRun.modules.length > 0
+      ? activeRun
+      : (repoObj.by_mode.code && repoObj.by_mode.code.latest && repoObj.by_mode.code.latest.modules.length > 0
+        ? repoObj.by_mode.code.latest
+        : null);
+    if (!codeRun) return '';
+
+    const allModules = codeRun.modules || [];
+    const filtered = allModules.filter((m) => {
+      if (moduleFailingOnly && m.status === 'scored' && m.failed_count === 0) return false;
+      if (moduleSearch) {
+        const q = moduleSearch.toLowerCase();
+        const checkIds = (m.failing_checks || []).map((c) => c.check_id).join(' ').toLowerCase();
+        return m.name.toLowerCase().includes(q)
+          || m.path.toLowerCase().includes(q)
+          || checkIds.includes(q)
+          || (m.error || '').toLowerCase().includes(q);
+      }
+      return true;
+    });
+
+    const rows = filtered.map((m) => {
+      const sizeBits = [];
+      if (m.file_count > 0) sizeBits.push(m.file_count + ' file' + (m.file_count === 1 ? '' : 's'));
+      const kb = fmtKiB(m.bytes);
+      if (kb) sizeBits.push(kb);
+      const subMeta = '<div class="muted" style="font-size:.75rem"><code>' + esc(m.path) + '</code>' + (sizeBits.length ? ' · ' + esc(sizeBits.join(' · ')) : '') + '</div>';
+
+      let statusCell;
+      let detailCell;
+      if (m.status === 'skipped') {
+        statusCell = '<span class="pill warn">skipped: ' + esc(m.skip_reason || 'oversize') + '</span>';
+        detailCell = '<span class="muted">' + esc(m.error || 'Skipped during scan') + '</span>';
+      } else if (m.status === 'error') {
+        statusCell = '<span class="pill fail">error</span>';
+        detailCell = '<span class="tone-bad" style="font-size:.82rem">' + esc(m.error || 'Module scan failed') + '</span>';
+      } else if (m.failed_count === 0) {
+        statusCell = '<span class="pill pass">0 clean</span>';
+        detailCell = '<span class="pill pass">all ' + m.total_checks + ' architectural checks passed</span>';
+      } else {
+        statusCell = renderFindingsPills({ total: m.failed_count, hard: m.hard_fail_count, borderline: m.borderline_count });
+        detailCell = '<div class="fail-chips">' + m.failing_checks.map((c) =>
+          renderFindingChip(c.check_id, c.severity, c.pass_probability, c.threshold)
+        ).join('') + '</div>';
+      }
+
+      return '<tr>'
+        + '<td><strong>' + esc(m.name) + '</strong>' + subMeta + '</td>'
+        + '<td class="numeric">' + statusCell + '</td>'
+        + '<td class="numeric">' + (typeof m.min_pass_probability === 'number' ? m.min_pass_probability.toFixed(2) : '—') + '</td>'
+        + '<td>' + detailCell + '</td>'
+        + '</tr>';
+    }).join('');
+
+    const summaryPills = [
+      renderFindingsPills(codeRun.findings),
+      '<span class="pill neutral">' + codeRun.modules_scored + '/' + allModules.length + ' scored</span>',
+    ];
+    if (codeRun.modules_skipped > 0) summaryPills.push('<span class="pill warn">' + codeRun.modules_skipped + ' skipped</span>');
+    if (codeRun.modules_errored > 0) summaryPills.push('<span class="pill fail">' + codeRun.modules_errored + ' errored</span>');
+
+    return '<div class="arch-card" id="module-architecture-section">'
+      + '<div class="panel-head">'
+      + '<div><h3>Feature / Module Architecture (' + allModules.length + ' module' + (allModules.length === 1 ? '' : 's') + ')</h3>'
+      + '<div class="muted" style="font-size:.78rem">Ranked worst-first · hard model FAILs vs. borderline threshold flips · ' + esc(shortDate(codeRun.timestamp)) + ' · <code>' + esc(codeRun.commit_short) + '</code></div></div>'
+      + '<div class="badge-row">' + summaryPills.join(' ') + '</div>'
+      + '</div>'
+      + '<div class="controls" style="margin-bottom:10px">'
+      + '<input type="search" id="module-search-input" placeholder="Filter module, path, or rule..." value="' + esc(moduleSearch) + '">'
+      + '<label class="toggle"><input type="checkbox" id="module-failing-only-toggle"' + (moduleFailingOnly ? ' checked' : '') + '> Failing &amp; skipped only</label>'
+      + '<span class="muted numeric" style="margin-left:auto">' + filtered.length + ' of ' + allModules.length + ' shown</span>'
+      + '</div>'
+      + (filtered.length > 0
+        ? '<div class="table-scroll"><table><thead><tr><th>Module</th><th>Findings / Status</th><th>Min P</th><th>Failing architectural checks</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        : '<p class="muted">No modules match the current filter.</p>')
+      + '</div>';
   }
 
   function renderRepoDetail() {
@@ -824,17 +1367,34 @@ const CLIENT_SCRIPT = `
     }
     const { repoObj, series, run } = sel;
 
-    // Highlight overview table row
     document.querySelectorAll('.repo-row').forEach((tr) => {
       tr.classList.toggle('selected', tr.dataset.repo === repoObj.name);
     });
 
     const repoTabs = DATA.repos.map((r) =>
-      '<button type="button" class="tab-btn' + (r.name === repoObj.name ? ' active' : '') + '" data-pick-repo="' + esc(r.name) + '">' + esc(r.name) + '</button>'
+      '<button type="button" class="tab-btn' + (r.name === repoObj.name ? ' active' : '') + '" data-pick-repo="' + esc(r.name) + '">' + esc(r.name)
+      + (r.total_findings.total > 0 ? ' (' + r.total_findings.total + ')' : '') + '</button>'
     ).join('');
-    const modeTabs = repoObj.modes.map((m) =>
-      '<button type="button" class="tab-btn' + (m === selectedMode ? ' active' : '') + '" data-pick-mode="' + esc(m) + '">' + esc(m) + ' (' + repoObj.by_mode[m].points.length + ')</button>'
-    ).join('');
+    const modeTabs = repoObj.modes.map((m) => {
+      const mLatest = repoObj.by_mode[m].latest;
+      const label = m === 'code' ? 'modules (code)' : m;
+      return '<button type="button" class="tab-btn' + (m === selectedMode ? ' active' : '') + '" data-pick-mode="' + esc(m) + '">' + esc(label)
+        + ' · ' + mLatest.findings.total + '</button>';
+    }).join('');
+
+    const punchTiles =
+      '<div class="punch-summary">'
+      + '<div class="punch-tile"><div class="punch-tile-label">Repo open findings</div><div class="punch-tile-val">' + renderFindingsPills(repoObj.total_findings) + '</div><div class="punch-tile-sub">Latest across ' + repoObj.modes.length + ' mode(s)</div></div>'
+      + '<div class="punch-tile"><div class="punch-tile-label">File checks</div><div class="punch-tile-val">' + (repoObj.file_findings ? renderFindingsPills(repoObj.file_findings) : '<span class="muted">—</span>') + '</div><div class="punch-tile-sub">' + (repoObj.by_mode.file ? repoObj.by_mode.file.latest.affected_targets + '/' + repoObj.by_mode.file.latest.file_count + ' files with findings' : 'Not scanned') + '</div></div>'
+      + '<div class="punch-tile"><div class="punch-tile-label">Module architecture</div><div class="punch-tile-val">' + (repoObj.module_findings ? renderFindingsPills(repoObj.module_findings) : '<span class="muted">—</span>') + '</div><div class="punch-tile-sub">' + (repoObj.module_architecture ? repoObj.module_architecture.modules_with_findings + '/' + repoObj.module_architecture.total_modules + ' modules affected' + (repoObj.module_architecture.skipped_modules > 0 ? ' · ' + repoObj.module_architecture.skipped_modules + ' skipped' : '') : 'Add modules/moduleRoots to enable') + '</div></div>'
+      + '<div class="punch-tile"><div class="punch-tile-label">Worst offending rules</div><div class="punch-tile-val" style="font-size:.82rem">'
+      + (repoObj.worst_rules && repoObj.worst_rules.length > 0
+        ? '<div class="fail-chips">' + repoObj.worst_rules.slice(0, 3).map((wr) =>
+            '<span class="fail-chip ' + (wr.hard > 0 ? 'fail-chip-hard' : 'fail-chip-borderline') + '">' + esc(wr.check_id) + ' (' + wr.failed + ')</span>'
+          ).join('') + '</div>'
+        : '<span class="pill pass">all rules clean</span>')
+      + '</div><div class="punch-tile-sub">' + (repoObj.worst_rules ? repoObj.worst_rules.length + ' failing rule(s) total' : '') + '</div></div>'
+      + '</div>';
 
     const versionBanner = run.version_changed
       ? '<div class="version-banner"><strong>Rubric / judge change at this run:</strong> ' + esc(run.change_reasons.join(' · ')) + ' <span class="muted">(deltas vs previous run reflect rubric/judge changes as well as code changes)</span></div>'
@@ -851,102 +1411,118 @@ const CLIENT_SCRIPT = `
     });
 
     const hotspotRows = filteredFiles.slice(0, 40).map((f) => {
+      const fc = countFileFindings(f.checks);
       const failedChecks = Object.entries(f.checks)
         .filter(([, c]) => c.choice === 'fail')
-        .sort((a, b) => (a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0));
+        .sort((a, b) =>
+          (Number(classifyScore(b[1]) === 'hard') - Number(classifyScore(a[1]) === 'hard'))
+          || ((a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0))
+          || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
+        );
       const chips = failedChecks.length > 0
         ? '<div class="fail-chips">' + failedChecks.map(([cid, c]) => {
             const thr = run.checks[cid] ? run.checks[cid].threshold : 0.8;
-            const pText = typeof c.pass_probability === 'number' ? c.pass_probability.toFixed(2) : 'fail';
-            return '<span class="fail-chip" title="Threshold &ge; ' + thr.toFixed(2) + '">' + esc(cid) + ' (' + pText + ')</span>';
+            return renderFindingChip(cid, classifyScore(c) || 'hard', c.pass_probability, thr);
           }).join('') + '</div>'
         : '<span class="pill pass">all checks passed</span>';
       return '<tr>'
         + '<td><code>' + esc(f.path) + '</code></td>'
-        + '<td class="numeric">' + (f.failed_count > 0 ? '<span class="pill fail">' + f.failed_count + '</span>' : '<span class="pill pass">0</span>') + '</td>'
-        + '<td>' + scoreBar(f.pass_rate) + '</td>'
+        + '<td class="numeric">' + renderFindingsPills(fc) + '</td>'
         + '<td class="numeric">' + (typeof f.min_pass_probability === 'number' ? f.min_pass_probability.toFixed(2) : '—') + '</td>'
         + '<td>' + chips + '</td>'
         + '</tr>';
     }).join('');
 
-    const checkEntries = Object.entries(run.checks).sort((a, b) =>
-      (a[1].pass_rate - b[1].pass_rate)
-      || ((a[1].mean_pass_probability ?? 1) - (b[1].mean_pass_probability ?? 1))
-      || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
-    );
+    const checkEntries = Object.entries(run.checks).sort((a, b) => {
+      const fa = countCheckSummaryFindings(a[1]);
+      const fb = countCheckSummaryFindings(b[1]);
+      return (fb.hard - fa.hard)
+        || (fb.total - fa.total)
+        || ((a[1].min_pass_probability ?? 1) - (b[1].min_pass_probability ?? 1))
+        || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    });
     const checkRows = checkEntries.map(([cid, c]) => {
-      const cat = DATA.catalog && DATA.catalog.checks_by_id ? DATA.catalog.checks_by_id[cid] : null;
-      const label = cat
-        ? '<span class="tip-wrap"><span class="tip-trigger" tabindex="0">' + esc(cid) + '</span><div class="tip-card"><strong>' + esc(cat.instructions) + '</strong><div class="tip-pass"><strong>Pass:</strong> ' + esc(cat.criteria.pass) + '</div><div class="tip-fail"><strong>Fail:</strong> ' + esc(cat.criteria.fail) + '</div></div></span>'
-        : '<code>' + esc(cid) + '</code>';
+      const fc = countCheckSummaryFindings(c);
       const thrBadge = Math.abs(c.threshold - 0.8) > 1e-9
         ? '<span class="pill warn">&ge;' + c.threshold.toFixed(2) + '</span>'
         : '<span class="pill neutral">&ge;' + c.threshold.toFixed(2) + '</span>';
       return '<tr>'
-        + '<td>' + label + (c.rubric_group ? ' <span class="muted" style="font-size:.75rem">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
+        + '<td>' + checkLabelWithTip(cid) + (c.rubric_group ? ' <span class="muted" style="font-size:.75rem">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
         + '<td class="numeric">' + thrBadge + '</td>'
-        + '<td class="numeric">' + c.passed + '/' + c.total + '</td>'
-        + '<td>' + scoreBar(c.pass_rate) + '</td>'
-        + '<td class="numeric">' + pct(c.raw_pass_rate) + '</td>'
+        + '<td class="numeric">' + (fc.total > 0 ? '<strong>' + fc.total + '/' + c.total + '</strong>' : '<span class="muted">0/' + c.total + '</span>') + '</td>'
+        + '<td class="numeric">' + renderFindingsPills(fc) + '</td>'
+        + '<td class="numeric">' + (typeof c.min_pass_probability === 'number' ? c.min_pass_probability.toFixed(2) : '—') + '</td>'
         + '<td class="numeric">' + pct(c.mean_pass_probability) + '</td>'
         + '</tr>';
     }).join('');
 
     const runRows = [...series.points].reverse().map((p, revIdx) => {
       const idx = series.points.length - 1 - revIdx;
-      const dClass = p.delta_calibrated === null ? 'neutral' : p.delta_calibrated > 0.005 ? 'pass' : p.delta_calibrated < -0.005 ? 'fail' : 'neutral';
+      const df = p.delta_findings;
+      const dClass = df === null ? 'neutral' : df < 0 ? 'pass' : df > 0 ? 'fail' : 'neutral';
+      const dText = df === null ? '—' : (df > 0 ? '+' + df : String(df));
       return '<tr class="run-row' + (idx === selectedRunIdx ? ' active-run' : '') + '" data-select-run="' + idx + '">'
         + '<td class="numeric">' + esc(shortDate(p.timestamp)) + '</td>'
         + '<td><code>' + esc(p.commit_short) + '</code>' + (p.dirty ? ' <span class="pill warn">dirty</span>' : '') + (p.branch ? ' <span class="muted">' + esc(p.branch) + '</span>' : '') + '</td>'
-        + '<td class="numeric">' + p.file_count + '</td>'
-        + '<td class="numeric"><strong>' + pct(p.calibrated_pass_rate) + '</strong></td>'
-        + '<td class="numeric">' + pct(p.raw_pass_rate) + '</td>'
-        + '<td class="numeric">' + pct(p.mean_pass_probability) + '</td>'
-        + '<td class="numeric"><span class="pill ' + dClass + '">' + esc(deltaPp(p.delta_calibrated)) + '</span>' + (p.version_changed ? ' <span class="pill warn" title="' + esc(p.change_reasons.join('; ')) + '">rubric &Delta;</span>' : '') + '</td>'
+        + '<td class="numeric">' + (selectedMode === 'code' && p.modules.length > 0 ? p.modules_scored + '/' + p.modules.length + ' mod' : p.file_count) + '</td>'
+        + '<td class="numeric">' + renderFindingsPills(p.findings) + '</td>'
+        + '<td class="numeric"><span class="pill ' + dClass + '">' + esc(dText) + '</span>' + (p.version_changed ? ' <span class="pill warn" title="' + esc(p.change_reasons.join('; ')) + '">rubric &Delta;</span>' : '') + '</td>'
+        + '<td class="numeric muted">' + pct(p.calibrated_pass_rate) + '</td>'
         + '<td><code>' + esc(p.judge_version) + '</code></td>'
         + '<td class="numeric">' + esc(fmtUsd(p.cost_usd)) + '</td>'
         + '</tr>';
     }).join('');
 
+    const legendItems = trendMetric === 'findings'
+      ? '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Total findings</span>'
+        + '<span class="legend-item"><span class="legend-swatch dashed-red"></span>Hard model FAILs</span>'
+        + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>'
+      : '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Calibrated pass rate</span>'
+        + '<span class="legend-item"><span class="legend-swatch dashed"></span>Raw pass rate</span>'
+        + '<span class="legend-item"><span class="legend-swatch dotted"></span>Mean P(pass)</span>'
+        + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>';
+
     container.innerHTML =
       '<div class="controls">'
       + '<div class="tabs" role="tablist" aria-label="Select repository">' + repoTabs + '</div>'
       + '<div class="tabs" role="tablist" aria-label="Select mode">' + modeTabs + '</div>'
-      + '<span class="muted numeric" style="margin-left:auto">Inspecting run ' + (selectedRunIdx + 1) + ' of ' + series.points.length + ' · ' + esc(run.model) + '</span>'
+      + '<span class="muted numeric" style="margin-left:auto">Run ' + (selectedRunIdx + 1) + '/' + series.points.length + ' · ' + esc(run.model) + '</span>'
       + '</div>'
+      + punchTiles
+      + renderModuleArchitectureSection(repoObj, run)
       + '<div class="chart-box">'
       + '<div class="chart-legend">'
-      + '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Calibrated pass rate</span>'
-      + '<span class="legend-item"><span class="legend-swatch dashed"></span>Raw pass rate (model choice)</span>'
-      + '<span class="legend-item"><span class="legend-swatch dotted"></span>Mean P(pass)</span>'
-      + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>'
+      + '<div class="tabs" role="tablist" aria-label="Trend metric">'
+      + '<button type="button" class="tab-btn' + (trendMetric === 'findings' ? ' active' : '') + '" data-trend-metric="findings">Findings</button>'
+      + '<button type="button" class="tab-btn' + (trendMetric === 'rates' ? ' active' : '') + '" data-trend-metric="rates">Pass rates</button>'
+      + '</div>'
+      + legendItems
       + '<span class="muted" style="margin-left:auto">Click any point or history row to inspect</span>'
       + '</div>'
-      + '<div class="svg-wrap">' + renderTrendSvg(series.points, selectedRunIdx) + '</div>'
+      + '<div class="svg-wrap">' + (trendMetric === 'findings' ? renderFindingsTrendSvg(series.points, selectedRunIdx) : renderRateTrendSvg(series.points, selectedRunIdx)) + '</div>'
       + '</div>'
       + versionBanner
       + '<div class="split-grid">'
       + '<div class="sub-card">'
-      + '<div class="panel-head"><h3>Hotspot files (' + filteredFiles.length + ' shown / ' + run.files.length + ' total)</h3>'
+      + '<div class="panel-head"><h3>Worst-offending rules (' + checkEntries.filter(([, c]) => c.passed < c.total).length + ' failing / ' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(shortDate(run.timestamp)) + ' · ' + esc(run.commit_short) + '</span></div>'
+      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Failed</th><th>Hard / Borderline</th><th>Min P</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
+      + '</div>'
+      + '<div class="sub-card">'
+      + '<div class="panel-head"><h3>Top hotspot ' + (selectedMode === 'code' ? 'modules' : 'files / targets') + ' (' + filteredFiles.length + ' shown / ' + run.files.length + ')</h3>'
       + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-      + '<input type="search" id="file-search-input" placeholder="Filter file or check..." value="' + esc(fileSearch) + '">'
+      + '<input type="search" id="file-search-input" placeholder="Filter path or rule..." value="' + esc(fileSearch) + '">'
       + '<label class="toggle"><input type="checkbox" id="failing-only-toggle"' + (failingOnly ? ' checked' : '') + '> Failing only</label>'
       + '</div></div>'
       + (filteredFiles.length > 0
-        ? '<div class="table-scroll"><table><thead><tr><th>File / Target</th><th>Failed</th><th>Calibrated</th><th>Min P</th><th>Failing checks</th></tr></thead><tbody>' + hotspotRows + '</tbody></table></div>'
+        ? '<div class="table-scroll"><table><thead><tr><th>Target</th><th>Findings</th><th>Min P</th><th>Failing rules</th></tr></thead><tbody>' + hotspotRows + '</tbody></table></div>'
         : '<p class="muted">' + (failingOnly && selectedMode === 'file' && !fileSearch && run.files.length > 0
           ? 'All ' + run.files.length + ' file(s) passed every check. Uncheck "Failing only" to inspect all files.'
-          : 'No files match the current filter.') + '</p>')
-      + '</div>'
-      + '<div class="sub-card">'
-      + '<div class="panel-head"><h3>Per-check breakdown (' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(shortDate(run.timestamp)) + ' · ' + esc(run.commit_short) + '</span></div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Check</th><th>Threshold</th><th>Passed</th><th>Calibrated</th><th>Raw</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
+          : 'No targets match the current filter.') + '</p>')
       + '</div>'
       + '</div>'
       + '<details style="margin-top:14px"' + (series.points.length <= 10 ? ' open' : '') + '>'
       + '<summary class="panel-summary" style="font-size:.9rem"><span><strong>Run history</strong> (' + series.points.length + ' snapshots)</span></summary>'
-      + '<div class="table-scroll" style="margin-top:8px"><table><thead><tr><th>Timestamp</th><th>Commit / Branch</th><th>Files</th><th>Calibrated</th><th>Raw</th><th>Mean P</th><th>Delta</th><th>Judge version</th><th>Cost</th></tr></thead><tbody>' + runRows + '</tbody></table></div>'
+      + '<div class="table-scroll" style="margin-top:8px"><table><thead><tr><th>Timestamp</th><th>Commit / Branch</th><th>Scope</th><th>Findings</th><th>Delta</th><th>Calibrated</th><th>Judge version</th><th>Cost</th></tr></thead><tbody>' + runRows + '</tbody></table></div>'
       + '</details>';
   }
 
@@ -971,7 +1547,7 @@ const CLIENT_SCRIPT = `
     });
 
     const modeTabs = modes.map((m) =>
-      '<button type="button" class="tab-btn' + (m === heatmapMode ? ' active' : '') + '" data-heat-mode="' + esc(m) + '">' + esc(m) + '</button>'
+      '<button type="button" class="tab-btn' + (m === heatmapMode ? ' active' : '') + '" data-heat-mode="' + esc(m) + '">' + esc(m === 'code' ? 'modules (code)' : m) + '</button>'
     ).join('');
     const groupOptions = '<option value="">All rubrics</option>' + groups.map((g) =>
       '<option value="' + esc(g) + '"' + (g === heatGroup ? ' selected' : '') + '>' + esc(g) + '</option>'
@@ -989,7 +1565,11 @@ const CLIENT_SCRIPT = `
         const c = row.by_repo[rName];
         if (!c) return '<td class="numeric muted">—</td>';
         const col = heatColors(c.pass_rate);
-        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Calibrated ' + pct(c.pass_rate) + ' | Raw ' + pct(c.raw_pass_rate) + ' | Mean P ' + pct(c.mean_pass_probability) + '"><strong>' + pct(c.pass_rate, 0) + '</strong><span>' + c.passed + '/' + c.total + ' · P=' + (c.mean_pass_probability !== null ? c.mean_pass_probability.toFixed(2) : '—') + '</span></span></td>';
+        const topLine = c.failed === 0 ? 'clean' : c.failed + '/' + c.total + ' fail';
+        const subLine = c.failed === 0
+          ? 'P=' + (c.mean_pass_probability !== null ? c.mean_pass_probability.toFixed(2) : '—')
+          : c.hard_failed + 'h · ' + c.borderline_failed + 'b · ' + pct(c.pass_rate, 0);
+        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Findings: ' + c.failed + '/' + c.total + ' (' + c.hard_failed + ' hard, ' + c.borderline_failed + ' borderline) | Calibrated ' + pct(c.pass_rate) + ' | Mean P ' + pct(c.mean_pass_probability) + '"><strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span></span></td>';
       }).join('');
       return '<tr><td>' + label + (row.rubric_slug ? ' <span class="muted" style="font-size:.75rem">' + esc(row.rubric_slug) + '</span>' : '') + '</td><td class="numeric">' + thrBadge + '</td>' + cells + '</tr>';
     }).join('');
@@ -998,10 +1578,10 @@ const CLIENT_SCRIPT = `
       '<div class="controls">'
       + '<div class="tabs">' + modeTabs + '</div>'
       + '<select id="heat-group-select" aria-label="Filter rubric group">' + groupOptions + '</select>'
-      + '<input type="search" id="heat-search-input" placeholder="Search check ID..." value="' + esc(heatSearch) + '">'
-      + '<span class="muted numeric" style="margin-left:auto">' + visibleRows.length + ' of ' + map.rows.length + ' checks</span>'
+      + '<input type="search" id="heat-search-input" placeholder="Search rule ID..." value="' + esc(heatSearch) + '">'
+      + '<span class="muted numeric" style="margin-left:auto">' + visibleRows.length + ' of ' + map.rows.length + ' rules</span>'
       + '</div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Check</th><th>Threshold</th>' + headerCols + '</tr></thead><tbody>' + bodyRows + '</tbody></table></div>';
+      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th>' + headerCols + '</tr></thead><tbody>' + bodyRows + '</tbody></table></div>';
   }
 
   function renderFixtures() {
@@ -1069,6 +1649,12 @@ const CLIENT_SCRIPT = `
       renderRepoDetail();
       return;
     }
+    const metricBtn = t.closest('[data-trend-metric]');
+    if (metricBtn) {
+      trendMetric = metricBtn.dataset.trendMetric;
+      renderRepoDetail();
+      return;
+    }
     const runPick = t.closest('[data-select-run]');
     if (runPick) {
       selectedRunIdx = Number(runPick.dataset.selectRun);
@@ -1092,6 +1678,12 @@ const CLIENT_SCRIPT = `
       renderRepoDetail();
       const el = document.getElementById('file-search-input');
       if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+    } else if (t.id === 'module-search-input') {
+      moduleSearch = t.value;
+      const pos = t.selectionStart;
+      renderRepoDetail();
+      const el = document.getElementById('module-search-input');
+      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     } else if (t.id === 'heat-search-input') {
       heatSearch = t.value;
       const pos = t.selectionStart;
@@ -1106,6 +1698,9 @@ const CLIENT_SCRIPT = `
     if (!t) return;
     if (t.id === 'failing-only-toggle') {
       failingOnly = t.checked;
+      renderRepoDetail();
+    } else if (t.id === 'module-failing-only-toggle') {
+      moduleFailingOnly = t.checked;
       renderRepoDetail();
     } else if (t.id === 'heat-group-select') {
       heatGroup = t.value;
@@ -1122,34 +1717,49 @@ const CLIENT_SCRIPT = `
 export function renderDashboardHtml(model: DashboardModel): string {
   const latestTag = model.catalog.agent_tooling.latest_tag;
   const fxLatest = model.fixtures.latest;
+  const showModuleCol = model.modes_present.includes('code');
 
   const repoOverviewRows = model.repos.map((repo) => {
     const fileSeries = repo.by_mode.file;
     const structSeries = repo.by_mode.structure;
     const codeSeries = repo.by_mode.code;
 
-    const formatModeCell = (series: RepoModeSeries | undefined): string => {
+    const formatModeFindingsCell = (series: RepoModeSeries | undefined, kind: JudgeMode): string => {
       if (!series) return '<span class="muted">—</span>';
       const p = series.latest;
-      const d = p.delta_calibrated;
-      const dBadge = d !== null
-        ? `<span class="pill ${d > 0.005 ? 'pass' : d < -0.005 ? 'fail' : 'neutral'}" title="${p.version_changed ? 'Crossed rubric/judge change' : 'Delta vs previous run'}">${escapeHtml(deltaPp(d))}${p.version_changed ? ' *' : ''}</span>`
-        : '';
-      return `<div><strong class="numeric${scoreTone(p.calibrated_pass_rate)}">${pct(p.calibrated_pass_rate)}</strong> <span class="muted numeric" style="font-size:.76rem">(raw ${pct(p.raw_pass_rate)} · P=${pct(p.mean_pass_probability, 0)})</span> ${dBadge}</div>`;
+      const delta = renderDeltaFindingsBadge(p.delta_findings, p.version_changed);
+      let sub = '';
+      if (kind === 'file') {
+        sub = `${p.affected_targets}/${p.file_count} files`;
+      } else if (kind === 'code' && repo.module_architecture) {
+        const arch = repo.module_architecture;
+        const bits = [`${arch.modules_with_findings}/${arch.total_modules} modules`];
+        if (arch.skipped_modules > 0) bits.push(`${arch.skipped_modules} skipped`);
+        if (arch.errored_modules > 0) bits.push(`${arch.errored_modules} err`);
+        sub = bits.join(' · ');
+      }
+      return `<div><div class="badge-row">${renderFindingsBadges(p.findings)} ${delta}</div>${sub ? `<div class="muted numeric" style="font-size:.74rem;margin-top:2px">${escapeHtml(sub)}</div>` : ''}</div>`;
     };
 
+    const worstRulesCell = repo.worst_rules.length > 0
+      ? `<div class="fail-chips">${repo.worst_rules.slice(0, 2).map((wr) =>
+        `<span class="fail-chip ${wr.hard > 0 ? 'fail-chip-hard' : 'fail-chip-borderline'}" title="${escapeHtml(`${wr.mode}: ${wr.hard} hard, ${wr.borderline} borderline`)}">${escapeHtml(wr.check_id)} (${wr.failed})</span>`,
+      ).join('')}</div>`
+      : '<span class="pill pass">clean</span>';
+
     const modeCells = [
-      `<td>${formatModeCell(fileSeries)}</td>`,
-      `<td>${formatModeCell(structSeries)}</td>`,
-      ...(model.modes_present.includes('code') ? [`<td>${formatModeCell(codeSeries)}</td>`] : []),
+      `<td>${formatModeFindingsCell(fileSeries, 'file')}</td>`,
+      `<td>${formatModeFindingsCell(structSeries, 'structure')}</td>`,
+      ...(showModuleCol ? [`<td>${formatModeFindingsCell(codeSeries, 'code')}</td>`] : []),
     ].join('');
 
     return `<tr class="repo-row" data-repo="${escapeHtml(repo.name)}">
       <td><strong>${escapeHtml(repo.name)}</strong><div class="muted" style="font-size:.75rem">${repo.total_runs} run(s) · ${escapeHtml(repo.latest_timestamp.slice(0, 10))}</div></td>
       <td><code>${escapeHtml(repo.latest_commit_short)}</code>${repo.latest_dirty ? ' <span class="pill warn">dirty</span>' : ''}${repo.latest_branch ? `<div class="muted" style="font-size:.75rem">${escapeHtml(repo.latest_branch)}</div>` : ''}</td>
+      <td>${renderFindingsBadges(repo.total_findings)}</td>
       ${modeCells}
+      <td>${worstRulesCell}</td>
       <td>${renderInstalledBadge(repo, latestTag)}</td>
-      <td class="numeric">${escapeHtml(fmtUsd(repo.total_cost_usd))}</td>
     </tr>`;
   }).join('');
 
@@ -1157,43 +1767,66 @@ export function renderDashboardHtml(model: DashboardModel): string {
     ? `<div class="warn-banner"><strong>Snapshot warnings (${model.warnings.length}):</strong> ${escapeHtml(model.warnings.join(' | '))}</div>`
     : '';
 
+  const totalFindings = model.totals.total_findings;
+  const modFindings = model.totals.module_findings;
+  const findingsKpiClass = totalFindings.hard > 0
+    ? ' kpi-danger'
+    : totalFindings.borderline > 0
+      ? ' kpi-alert'
+      : '';
+  const modKpiClass = modFindings.hard > 0 || model.totals.modules_errored > 0
+    ? ' kpi-danger'
+    : modFindings.borderline > 0 || model.totals.modules_skipped > 0
+      ? ' kpi-alert'
+      : '';
+
+  const modKpiValue = model.totals.modules_scanned > 0
+    ? `${modFindings.total} finding${modFindings.total === 1 ? '' : 's'}`
+    : 'Not scanned';
+  const modKpiNote = model.totals.modules_scanned > 0
+    ? `${model.totals.modules_with_findings}/${model.totals.modules_scanned} modules · ${modFindings.hard} hard · ${modFindings.borderline} borderline`
+      + (model.totals.modules_skipped > 0 ? ` · ${model.totals.modules_skipped} skipped` : '')
+      + (model.totals.modules_errored > 0 ? ` · ${model.totals.modules_errored} err` : '')
+    : 'Configure modules / moduleRoots for arch checks';
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
-<title>Rubric Quality Dashboard · agent-tooling</title><style>${STYLE}</style></head><body><main>
+<title>Rubric Quality Punch-List · agent-tooling</title><style>${STYLE}</style></head><body><main>
 <header>
-  <div class="title-row"><h1>Rubric Quality Dashboard</h1><span class="pill-header">Offline · Local</span></div>
+  <div class="title-row"><h1>Rubric Quality Punch-List</h1><span class="pill-header">Offline · Local</span></div>
   <div class="meta-bar">
     <span>agent-tooling <strong>${escapeHtml(model.catalog.agent_tooling.judge_version)}</strong></span>
     <span>Latest tag <strong>${escapeHtml(latestTag ?? 'none')}</strong></span>
     <span>Authoritative rubrics <strong>${model.catalog.rubrics.length}</strong></span>
+    <span>Recorded spend <strong>${escapeHtml(fmtUsd(model.totals.total_cost_usd))}</strong></span>
     <span>Built <strong>${escapeHtml(model.generated_at.replace('T', ' ').slice(0, 19))}Z</strong></span>
   </div>
 </header>
 
 ${warningsHtml}
 
-<section class="kpi-strip" aria-label="Dashboard overview">
-  <div class="kpi"><div class="kpi-label">Repositories</div><div class="kpi-value">${model.totals.repo_count}</div><div class="kpi-note">${model.totals.repo_runs} repo snapshot(s) · ${model.totals.fixture_runs} fixture run(s)</div></div>
-  <div class="kpi"><div class="kpi-label">Mean calibrated pass</div><div class="kpi-value${scoreTone(model.totals.latest_calibrated_mean)}">${pct(model.totals.latest_calibrated_mean)}</div><div class="kpi-note">Raw model pass: ${pct(model.totals.latest_raw_mean)}</div></div>
+<section class="kpi-strip" aria-label="Dashboard punch-list overview">
+  <div class="kpi${findingsKpiClass}"><div class="kpi-label">Open findings</div><div class="kpi-value${findingsTone(totalFindings)}">${totalFindings.total}</div><div class="kpi-note">${totalFindings.hard} hard fails · ${totalFindings.borderline} borderline across ${model.totals.repo_count} repo(s)</div></div>
+  <div class="kpi${modKpiClass}"><div class="kpi-label">Module architecture</div><div class="kpi-value${model.totals.modules_scanned > 0 ? findingsTone(modFindings) : ''}">${escapeHtml(modKpiValue)}</div><div class="kpi-note">${escapeHtml(modKpiNote)}</div></div>
+  <div class="kpi"><div class="kpi-label">Findings by scope</div><div class="kpi-value">${model.totals.repo_count} repo(s)</div><div class="kpi-note">${model.totals.file_findings.total} file · ${model.totals.structure_findings.total} structure · ${modFindings.total} module (${model.totals.repo_runs} runs)</div></div>
   <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-note">Latest release tag: ${escapeHtml(latestTag ?? 'n/a')}</div></div>
   <div class="kpi${fxLatest && fxLatest.status === 'failed' ? ' kpi-alert' : ''}"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value${fxLatest ? (fxLatest.status === 'passed' ? ' tone-good' : ' tone-bad') : ''}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-note">${fxLatest ? `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}` : 'No fixture runs yet'}</div></div>
-  <div class="kpi"><div class="kpi-label">Recorded spend</div><div class="kpi-value">${escapeHtml(fmtUsd(model.totals.total_cost_usd))}</div><div class="kpi-note">OpenRouter total across saved runs</div></div>
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Repositories overview</h2><span class="muted">Click a row to inspect trend history, hotspots, and per-check breakdown (* = rubric/judge change)</span></div>
+  <div class="panel-head"><h2>Repositories punch-list (worst-first)</h2><span class="muted">Click any repository to inspect Feature / Module Architecture, worst-offending rules, hotspot files, and trends (* = rubric/judge change)</span></div>
   ${model.repos.length > 0
-    ? `<div class="table-scroll"><table><thead><tr><th>Repository</th><th>Latest commit</th><th>File mode</th><th>Structure mode</th>${model.modes_present.includes('code') ? '<th>Code mode</th>' : ''}<th>Installed judge-code</th><th>Total cost</th></tr></thead><tbody>${repoOverviewRows}</tbody></table></div>`
+    ? `<div class="table-scroll"><table><thead><tr><th>Repository</th><th>Latest commit</th><th>Open findings</th><th>File mode</th><th>Structure mode</th>${showModuleCol ? '<th>Module architecture</th>' : ''}<th>Worst rules</th><th>Installed judge-code</th></tr></thead><tbody>${repoOverviewRows}</tbody></table></div>`
     : '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>'}
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Repository trends &amp; hotspot explorer</h2></div>
+  <div class="panel-head"><h2>Repository punch-list, module architecture &amp; trends</h2></div>
   <div id="repo-detail-root"></div>
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Cross-repo check heatmap (latest runs)</h2><span class="muted">Calibrated pass rates &amp; thresholds per check</span></div>
+  <div class="panel-head"><h2>Cross-repo rule heatmap (latest runs, worst-first)</h2><span class="muted">Failing targets, hard/borderline split &amp; thresholds per rule</span></div>
   <div id="heatmap-root"></div>
 </section>
 
