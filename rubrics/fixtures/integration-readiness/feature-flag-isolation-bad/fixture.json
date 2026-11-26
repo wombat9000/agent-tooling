@@ -1,0 +1,8 @@
+{
+  "id": "feature-flag-isolation-bad",
+  "description": "Duplicates feature flag parsing across files, fails closed on the page route while failing open on the backing data route, and collides on shared localStorage keys",
+  "rubric": "integration-readiness",
+  "expect": {
+    "consistent_feature_flag_isolation": "fail"
+  }
+}

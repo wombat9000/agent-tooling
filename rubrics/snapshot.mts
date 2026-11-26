@@ -469,6 +469,27 @@ export function hashJsonDirectory(dir: string): Record<string, string> {
   return hashes;
 }
 
+export function hashDirectoryTree(dir: string): Record<string, string> {
+  if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return {};
+  const entries: Array<[string, string]> = [];
+  function walk(currentDir: string, prefix = ''): void {
+    const children = readdirSync(currentDir, { withFileTypes: true }).sort((a, b) => compareCodepoint(a.name, b.name));
+    for (const child of children) {
+      if (child.name === '.DS_Store') continue;
+      const fullPath = join(currentDir, child.name);
+      const relPath = prefix ? `${prefix}/${child.name}` : child.name;
+      if (child.isDirectory()) {
+        walk(fullPath, relPath);
+      } else if (child.isFile()) {
+        entries.push([relPath, sha256File(fullPath)]);
+      }
+    }
+  }
+  walk(dir);
+  entries.sort((a, b) => compareCodepoint(a[0], b[0]));
+  return Object.fromEntries(entries);
+}
+
 export function isValidSnapshot(value: unknown): value is DashboardSnapshot {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const rec = value as Record<string, unknown>;

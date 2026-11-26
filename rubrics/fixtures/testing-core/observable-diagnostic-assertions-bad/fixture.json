@@ -1,0 +1,8 @@
+{
+  "id": "observable-diagnostic-assertions-bad",
+  "description": "Tests use raw untyped tree indexing, hardcoded array positions, status-only checks without state preservation, lossy boolean wrappers, and exact internal exception wording",
+  "rubric": "testing-core",
+  "expect": {
+    "observable_diagnostic_assertions": "fail"
+  }
+}

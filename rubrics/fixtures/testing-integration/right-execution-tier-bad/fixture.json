@@ -1,0 +1,8 @@
+{
+  "id": "right-execution-tier-bad",
+  "description": "Zero direct unit tests for substantial pure shipping policy; boots a full HTTP server and database for every pure calculation branch while mixing raw DB constraint tests and direct domain calls into API integration tests",
+  "rubric": "testing-integration",
+  "expect": {
+    "right_execution_tier": "fail"
+  }
+}

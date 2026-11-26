@@ -1,0 +1,8 @@
+{
+  "id": "single-canonical-representation-bad",
+  "description": "Announcement payload duplicates content across markdown, plain text, and pre-rendered HTML fields alongside server-computed UI display labels",
+  "rubric": "api-design",
+  "expect": {
+    "single_canonical_representation": "fail"
+  }
+}

@@ -1,0 +1,57 @@
+export interface InvoiceProjectionDto {
+  readonly id: string;
+  readonly organization: {
+    readonly billing: {
+      readonly taxProfile: {
+        readonly countryCode: string;
+        readonly vatNumber: string | null;
+      };
+      readonly currency: string;
+    };
+  };
+  readonly totals: {
+    readonly netCents: number;
+    readonly status: 'draft' | 'issued' | 'void';
+  };
+}
+
+export interface SyncConfig {
+  readonly network: {
+    readonly retry: {
+      readonly backoff: {
+        readonly initialDelayMs: number;
+        readonly maxDelayMs: number;
+      };
+    };
+  };
+}
+
+export interface ExportRow {
+  readonly invoiceId: string;
+  readonly countryCode: string;
+  readonly vatNumber: string;
+  readonly currency: string;
+  readonly netCents: number;
+  readonly retryDelayMs: number;
+}
+
+export function buildIssuedExportRows(
+  invoices: readonly InvoiceProjectionDto[],
+  config: SyncConfig,
+): ExportRow[] {
+  const retryDelayMs = Math.min(
+    config.network.retry.backoff.initialDelayMs,
+    config.network.retry.backoff.maxDelayMs,
+  );
+  return invoices
+    .filter((invoice) => invoice.totals.status === 'issued' && invoice.totals.netCents > 0)
+    .map((invoice) => ({
+      invoiceId: invoice.id,
+      countryCode: invoice.organization.billing.taxProfile.countryCode,
+      vatNumber: invoice.organization.billing.taxProfile.vatNumber ?? 'UNREGISTERED',
+      currency: invoice.organization.billing.currency,
+      netCents: invoice.totals.netCents,
+      retryDelayMs,
+    }))
+    .sort((a, b) => a.invoiceId.localeCompare(b.invoiceId));
+}

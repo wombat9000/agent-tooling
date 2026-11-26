@@ -1,0 +1,39 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+
+export interface InvoiceRecord {
+  id: string;
+  customerEmail: string;
+  amountCents: number;
+  status: 'draft' | 'issued' | 'paid';
+  issuedAt: string | null;
+}
+
+export class InvoiceManager {
+  async issueAndNotify(invoiceId: string): Promise<InvoiceRecord> {
+    const dbPath = process.env.INVOICE_DB_PATH ?? '/var/data/invoices.json';
+    const records = JSON.parse(readFileSync(dbPath, 'utf8')) as InvoiceRecord[];
+    const invoice = records.find((item) => item.id === invoiceId);
+    if (!invoice || invoice.status !== 'draft') {
+      throw new Error('Invoice cannot be issued');
+    }
+
+    invoice.status = 'issued';
+    invoice.issuedAt = new Date().toISOString();
+    writeFileSync(dbPath, JSON.stringify(records, null, 2));
+
+    const csvExport = [
+      'id,email,amount_cents,status,issued_at',
+      ...records.map((r) => `${r.id},${r.customerEmail},${r.amountCents},${r.status},${r.issuedAt ?? ''}`),
+    ].join('\n');
+    writeFileSync(process.env.CSV_EXPORT_PATH ?? '/tmp/invoices.csv', csvExport);
+
+    const emailHtml = `<h1>Invoice ${invoice.id}</h1><p>Amount due: $${(invoice.amountCents / 100).toFixed(2)}</p>`;
+    await fetch(process.env.MAILER_URL ?? 'https://mail.internal/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: invoice.customerEmail, html: emailHtml }),
+    });
+
+    return invoice;
+  }
+}

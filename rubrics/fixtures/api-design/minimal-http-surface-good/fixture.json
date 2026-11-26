@@ -1,0 +1,8 @@
+{
+  "id": "minimal-http-surface-good",
+  "description": "Campaign API exposes standard REST resource endpoints with minimal proportional DTOs and standard Idempotency-Key / If-Match headers",
+  "rubric": "api-design",
+  "expect": {
+    "minimal_standard_http_surface": "pass"
+  }
+}

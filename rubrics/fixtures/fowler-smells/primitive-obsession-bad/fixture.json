@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-bad",
+  "description": "Branches on raw magic strings, magic numbers, untyped tuples, and clusters of raw boolean flags",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "fail"
+  }
+}

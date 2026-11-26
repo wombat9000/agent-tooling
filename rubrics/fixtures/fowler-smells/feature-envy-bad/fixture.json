@@ -1,0 +1,8 @@
+{
+  "id": "feature-envy-bad",
+  "description": "SubscriptionRecord is a passive anemic data bag while BillingService and InvoiceCalculator repeatedly extract its internals to compute rules and state transitions externally",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_feature_envy_or_data_class_anemia": "fail"
+  }
+}

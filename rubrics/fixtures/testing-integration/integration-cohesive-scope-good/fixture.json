@@ -1,0 +1,8 @@
+{
+  "id": "integration-cohesive-scope-good",
+  "description": "Integration tests are organized by capability with each test verifying one focused contract check or coherent lifecycle transition",
+  "rubric": "testing-integration",
+  "expect": {
+    "integration_cohesive_scope": "pass"
+  }
+}

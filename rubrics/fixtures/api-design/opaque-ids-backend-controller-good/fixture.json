@@ -1,0 +1,8 @@
+{
+  "id": "opaque-ids-backend-controller-good",
+  "description": "Authoritative backend HTTP controller validating its own incoming request payload, using fixed workflow step codes and answer options, and issuing opaque UUIDs",
+  "rubric": "api-design",
+  "expect": {
+    "clean_server_owned_contracts_and_opaque_ids": "pass"
+  }
+}

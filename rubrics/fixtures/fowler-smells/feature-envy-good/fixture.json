@@ -1,0 +1,8 @@
+{
+  "id": "feature-envy-good",
+  "description": "Subscription domain model owns its renewal, grace-period, seat-upgrade, and cancellation behavior while the service coordinates persistence",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_feature_envy_or_data_class_anemia": "pass"
+  }
+}

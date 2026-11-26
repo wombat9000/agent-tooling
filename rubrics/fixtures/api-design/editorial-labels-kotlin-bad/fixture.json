@@ -1,0 +1,8 @@
+{
+  "id": "editorial-labels-kotlin-bad",
+  "description": "Kotlin DTO and validator lock human template folders into a closed code-owned enum that rejects unlisted editorial folder names",
+  "rubric": "api-design",
+  "expect": {
+    "no_rigid_enums_for_editorial_labels": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "server-owned-contracts-good",
+  "description": "Thin BFF proxy verifies auth, URL-encodes opaque template IDs, and forwards payloads cleanly without duplicating backend validation or defaults",
+  "rubric": "api-design",
+  "expect": {
+    "clean_server_owned_contracts_and_opaque_ids": "pass"
+  }
+}

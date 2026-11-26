@@ -1,0 +1,8 @@
+{
+  "id": "resilient-user-visible-locators-good",
+  "description": "Browser E2E tests interact with and assert UI elements via accessible roles, labels, headings, and intentional test IDs",
+  "rubric": "testing-e2e",
+  "expect": {
+    "resilient_user_visible_locators": "pass"
+  }
+}

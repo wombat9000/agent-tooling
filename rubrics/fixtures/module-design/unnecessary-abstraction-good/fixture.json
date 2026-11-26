@@ -1,0 +1,8 @@
+{
+  "id": "unnecessary-abstraction-good",
+  "description": "Direct concrete modules for formatting and sending alert emails without single-implementation interfaces, factories, or pass-through facades",
+  "rubric": "module-design",
+  "expect": {
+    "no_unnecessary_abstraction": "pass"
+  }
+}

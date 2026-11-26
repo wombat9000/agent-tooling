@@ -1,0 +1,8 @@
+{
+  "id": "disciplined-test-doubles-good",
+  "description": "Unit tests use real pure domain value/policy objects directly and a clean in-memory fake only for the external PaymentGateway boundary",
+  "rubric": "testing-unit",
+  "expect": {
+    "disciplined_test_doubles": "pass"
+  }
+}

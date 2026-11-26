@@ -1,0 +1,8 @@
+{
+  "id": "feature-flag-isolation-good",
+  "description": "Defines analytics v2 feature flag once with consistent fail-closed semantics across page and data routes and separate versioned persisted table keys",
+  "rubric": "integration-readiness",
+  "expect": {
+    "consistent_feature_flag_isolation": "pass"
+  }
+}

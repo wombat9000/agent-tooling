@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-good",
+  "description": "Separates usage aggregation, CSV formatting, and report delivery into distinct cohesive modules with one reason to change each",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}

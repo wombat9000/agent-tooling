@@ -1,0 +1,10 @@
+{
+  "id": "integration-readiness-structure-bundled-stub-bad",
+  "description": "Production routes reach bundled in-process demo-world seed stores and fake backend stubs in place of real backend clients",
+  "mode": "structure",
+  "root_name": "app",
+  "rubric": "integration-readiness-structure",
+  "expect": {
+    "no_bundled_stub_or_demo_modules": "fail"
+  }
+}

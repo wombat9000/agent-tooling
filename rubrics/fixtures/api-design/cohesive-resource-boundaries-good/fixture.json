@@ -1,0 +1,8 @@
+{
+  "id": "cohesive-resource-boundaries-good",
+  "description": "Message template API DTOs, service, and routes stay focused on template resource fields without cross-domain picker hooks or unbuilt placeholder sub-features",
+  "rubric": "api-design",
+  "expect": {
+    "cohesive_resource_boundaries": "pass"
+  }
+}

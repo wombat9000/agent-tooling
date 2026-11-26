@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-kotlin-good",
+  "description": "Kotlin file branching on imported domain enums alongside standard HTTP header/status literals, opaque IDs, and ordinary counts",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "pass"
+  }
+}

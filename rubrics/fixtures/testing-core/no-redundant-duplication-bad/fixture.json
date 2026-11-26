@@ -1,0 +1,8 @@
+{
+  "id": "no-redundant-duplication-bad",
+  "description": "Copy-pastes repetitive single-input test methods and exhaustively duplicates the entire validation matrix across unit and HTTP integration layers",
+  "rubric": "testing-core",
+  "expect": {
+    "no_redundant_duplication": "fail"
+  }
+}

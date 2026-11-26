@@ -1,0 +1,8 @@
+{
+  "id": "duplicated-code-bad",
+  "description": "Copy-pastes identical subtotal, tiered coupon validation, loyalty credit, and tax calculation blocks across quote preview and order finalization",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_duplicated_code": "fail"
+  }
+}

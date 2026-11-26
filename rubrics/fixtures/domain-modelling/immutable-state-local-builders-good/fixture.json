@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-local-builders-good",
+  "description": "Preserves caller-owned snapshots across domain transitions while using unescaped local accumulators, an async coordination ref, and a scoped infrastructure cache",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "pass"
+  }
+}

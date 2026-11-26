@@ -1,0 +1,8 @@
+{
+  "id": "named-domain-expressions-bad",
+  "description": "Embeds dense unnamed multi-clause arithmetic, regex, and state conditions directly inside guards and nested ternaries",
+  "rubric": "readability",
+  "expect": {
+    "named_domain_expressions": "fail"
+  }
+}

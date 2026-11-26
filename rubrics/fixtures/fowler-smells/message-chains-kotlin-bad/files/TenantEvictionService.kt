@@ -1,0 +1,30 @@
+package com.acme.cluster
+
+interface LeaseRegistry {
+    fun hasActiveLease(tenantId: String): Boolean
+    fun revokeLease(tenantId: String)
+}
+interface CapacityTracker { fun releaseCores(cores: Int) }
+interface NodePool {
+    fun leaseRegistry(): LeaseRegistry
+    fun capacityTracker(): CapacityTracker
+}
+interface Scheduler { fun nodePool(): NodePool }
+interface IncidentClient { fun openEscalation(tenantId: String, summary: String) }
+interface AlertRouter { fun incidentClient(): IncidentClient }
+interface TelemetryHub { fun alertRouter(): AlertRouter }
+interface ClusterRuntime {
+    fun scheduler(): Scheduler
+    fun telemetry(): TelemetryHub
+}
+
+class TenantEvictionService(private val cluster: ClusterRuntime) {
+    fun evictTenant(tenantId: String, reservedCores: Int, reason: String) {
+        if (!cluster.scheduler().nodePool().leaseRegistry().hasActiveLease(tenantId)) {
+            return
+        }
+        cluster.scheduler().nodePool().leaseRegistry().revokeLease(tenantId)
+        cluster.scheduler().nodePool().capacityTracker().releaseCores(reservedCores)
+        cluster.telemetry().alertRouter().incidentClient().openEscalation(tenantId, reason)
+    }
+}

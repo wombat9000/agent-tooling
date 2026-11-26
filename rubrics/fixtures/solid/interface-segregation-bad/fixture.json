@@ -1,0 +1,8 @@
+{
+  "id": "interface-segregation-bad",
+  "description": "Bundles printing, scanning, faxing, OCR, PDF signing, and archiving into one catch-all DocumentWorker interface, forcing ThermalLabelPrinter to stub five unused methods",
+  "rubric": "solid",
+  "expect": {
+    "interface_segregation": "fail"
+  }
+}

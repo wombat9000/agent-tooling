@@ -89,6 +89,8 @@ export interface CodeRequest {
     requirement?: string;
     conventions?: string;
     production_files?: Record<string, string>;
+    test_files?: Record<string, string>;
+    production_files_context?: Record<string, string>;
     project_structure?: StructureManifest;
   };
   questions: Record<string, ChoiceQuestion>;
@@ -125,6 +127,7 @@ export interface JudgeRunOptions {
   mode?: JudgeMode;
   target?: string;
   files?: Record<string, string>;
+  productionContext?: Record<string, string>;
   modules?: ModuleInput[];
   structure?: StructureManifest;
   ignore?: string[];
@@ -301,6 +304,7 @@ export function prepareJudgeRun(
   passThreshold: number | null,
 ): { out?: string; request: CodeRequest; body: string; result: JudgeResult } {
   const isStructure = options.rubric.target === 'project_structure';
+  const isTestCode = options.rubric.target === 'test_code';
   const fileCount = isStructure
     ? (options.structure?.total_files ?? 0)
     : Object.keys(options.files ?? {}).length;
@@ -313,12 +317,19 @@ export function prepareJudgeRun(
     mkdirSync(out, { mode: 0o700 });
   }
 
+  const hasProductionContext = options.productionContext !== undefined
+    && Object.keys(options.productionContext).length > 0;
   const state: CodeRequest['state'] = {
     ...(options.requirements !== undefined ? { requirement: options.requirements } : {}),
     ...(options.conventions !== undefined ? { conventions: options.conventions } : {}),
     ...(isStructure
       ? { project_structure: options.structure }
-      : { production_files: numbered(options.files!) }),
+      : isTestCode
+        ? {
+          test_files: numbered(options.files!),
+          ...(hasProductionContext ? { production_files_context: numbered(options.productionContext!) } : {}),
+        }
+        : { production_files: numbered(options.files!) }),
   };
   const request: CodeRequest = {
     model: options.model ?? `${backend}-default`,
@@ -422,12 +433,20 @@ export async function runPerFileJudge(
       mkdirSync(absDir, { recursive: true, mode: 0o700 });
     }
 
+    const isTestCode = options.rubric.target === 'test_code';
+    const hasProductionContext = options.productionContext !== undefined
+      && Object.keys(options.productionContext).length > 0;
     const request: CodeRequest = {
       model: options.model ?? `${backend}-default`,
       state: {
         ...(options.requirements !== undefined ? { requirement: options.requirements } : {}),
         ...(options.conventions !== undefined ? { conventions: options.conventions } : {}),
-        production_files: numbered({ [file]: files[file] }),
+        ...(isTestCode
+          ? {
+            test_files: numbered({ [file]: files[file] }),
+            ...(hasProductionContext ? { production_files_context: numbered(options.productionContext!) } : {}),
+          }
+          : { production_files: numbered({ [file]: files[file] }) }),
       },
       questions: options.rubric.questions,
     };

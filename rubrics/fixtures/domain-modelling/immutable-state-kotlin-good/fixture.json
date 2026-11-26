@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-kotlin-good",
+  "description": "Kotlin domain transitions returning immutable snapshots while using unescaped local builders and a scoped client cache",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "pass"
+  }
+}

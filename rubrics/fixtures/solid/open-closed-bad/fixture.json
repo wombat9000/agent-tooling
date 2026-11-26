@@ -1,0 +1,8 @@
+{
+  "id": "open-closed-bad",
+  "description": "Scatters hardcoded phase conditionals across transition, readiness, SLA, and banner functions so adding a workflow phase requires editing every caller chain",
+  "rubric": "solid",
+  "expect": {
+    "open_closed": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-types-ports-good",
+  "description": "Clean two-file feature contract mini-module separating domain types and small collaborator port interfaces (repository, clock, notifier)",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}

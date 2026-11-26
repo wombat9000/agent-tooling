@@ -1,0 +1,10 @@
+{
+  "id": "integration-readiness-structure-shadow-dirs-bad",
+  "description": "Feature contains a cloned legacy/ parallel mirror directory duplicating screens, columns, filters, and hooks alongside a parity test suite",
+  "mode": "structure",
+  "root_name": "app",
+  "rubric": "integration-readiness-structure",
+  "expect": {
+    "no_parallel_shadow_directories": "fail"
+  }
+}

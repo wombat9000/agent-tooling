@@ -1,0 +1,8 @@
+{
+  "id": "comment-deodorant-dead-code-good",
+  "description": "Self-explanatory token bucket rate limiter with one concise rationale comment on a non-obvious clock-skew guard and zero dead code",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_comment_deodorant_or_dead_code": "pass"
+  }
+}

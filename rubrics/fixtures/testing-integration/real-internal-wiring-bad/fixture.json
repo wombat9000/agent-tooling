@@ -1,0 +1,8 @@
+{
+  "id": "real-internal-wiring-bad",
+  "description": "Kotlin full-stack SpringBootTest integration tests mock and spy on internal OrderService and OrderRepository instead of exercising real internal wiring",
+  "rubric": "testing-integration",
+  "expect": {
+    "real_internal_wiring": "fail"
+  }
+}

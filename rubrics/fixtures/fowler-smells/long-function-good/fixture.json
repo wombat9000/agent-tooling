@@ -1,0 +1,8 @@
+{
+  "id": "long-function-good",
+  "description": "Concise, well-decomposed checkout workflow delegating distinct steps to focused helpers",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "pass"
+  }
+}

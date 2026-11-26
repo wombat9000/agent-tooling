@@ -1,0 +1,8 @@
+{
+  "id": "single-canonical-representation-good",
+  "description": "Announcement API returns each content field and status code once in canonical form, leaving HTML rendering and UI labels to clients",
+  "rubric": "api-design",
+  "expect": {
+    "single_canonical_representation": "pass"
+  }
+}

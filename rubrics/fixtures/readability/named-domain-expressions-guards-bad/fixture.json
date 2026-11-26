@@ -1,0 +1,8 @@
+{
+  "id": "named-domain-expressions-guards-bad",
+  "description": "Mixes routine request guards with obscured inline compound eligibility, risk, and threshold rules without local naming",
+  "rubric": "readability",
+  "expect": {
+    "named_domain_expressions": "fail"
+  }
+}

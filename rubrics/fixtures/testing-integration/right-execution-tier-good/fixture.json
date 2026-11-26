@@ -1,0 +1,8 @@
+{
+  "id": "right-execution-tier-good",
+  "description": "Pure shipping rate and zone policy is tested directly in fast unit tests, persistence constraints in repository tests, and HTTP wiring in thin API integration slices",
+  "rubric": "testing-integration",
+  "expect": {
+    "right_execution_tier": "pass"
+  }
+}

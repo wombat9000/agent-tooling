@@ -1,0 +1,8 @@
+{
+  "id": "open-closed-good",
+  "description": "Models an anonymized multi-phase approval workflow with a declarative phase definition registry so adding a phase requires one self-contained entry without editing engine conditionals",
+  "rubric": "solid",
+  "expect": {
+    "open_closed": "pass"
+  }
+}

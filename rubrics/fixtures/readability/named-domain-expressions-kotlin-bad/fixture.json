@@ -1,0 +1,8 @@
+{
+  "id": "named-domain-expressions-kotlin-bad",
+  "description": "Kotlin policy embedding unnamed multi-clause eligibility, arithmetic, and pattern rules inline inside branches",
+  "rubric": "readability",
+  "expect": {
+    "named_domain_expressions": "fail"
+  }
+}

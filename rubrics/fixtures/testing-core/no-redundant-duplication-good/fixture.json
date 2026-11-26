@@ -1,0 +1,8 @@
+{
+  "id": "no-redundant-duplication-good",
+  "description": "Unit tests own the full parameterized coupon validation matrix while integration tests verify one representative happy and rejection slice",
+  "rubric": "testing-core",
+  "expect": {
+    "no_redundant_duplication": "pass"
+  }
+}

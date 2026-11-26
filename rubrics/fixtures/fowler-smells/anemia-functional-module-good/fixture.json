@@ -1,0 +1,8 @@
+{
+  "id": "anemia-functional-module-good",
+  "description": "Idiomatic TypeScript functional domain module with readonly record/union types colocated with pure query and state-transition functions, plus a delegating application service",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_feature_envy_or_data_class_anemia": "pass"
+  }
+}

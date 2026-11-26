@@ -1,0 +1,8 @@
+{
+  "id": "message-chains-good",
+  "description": "Asks direct collaborators via intention-revealing domain methods and uses a standard collection pipeline",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_message_chains": "pass"
+  }
+}

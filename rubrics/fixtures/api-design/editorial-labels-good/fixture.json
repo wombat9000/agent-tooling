@@ -1,0 +1,8 @@
+{
+  "id": "editorial-labels-good",
+  "description": "Closed unions with human-readable names drive real routing, queue SLA, and matching behavior while editorial folder labels remain open free-text with optional suggestions",
+  "rubric": "api-design",
+  "expect": {
+    "no_rigid_enums_for_editorial_labels": "pass"
+  }
+}

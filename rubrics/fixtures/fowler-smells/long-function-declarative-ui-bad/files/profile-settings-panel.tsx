@@ -1,0 +1,102 @@
+import { useState } from 'react';
+
+export interface ProfileDraft {
+  displayName: string;
+  timezone: string;
+  phone: string;
+  emailAlerts: boolean;
+  weeklyDigest: boolean;
+}
+
+export function ProfileSettingsPanel({ initial, apiUrl }: { initial: ProfileDraft; apiUrl: string }) {
+  const [draft, setDraft] = useState<ProfileDraft>(initial);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [status, setStatus] = useState('');
+
+  const handleSubmit = async (event: { preventDefault: () => void }) => {
+    event.preventDefault();
+    const validationErrors: string[] = [];
+    const cleanName = draft.displayName.trim().replace(/\s+/g, ' ');
+    if (cleanName.length < 2 || cleanName.length > 80) {
+      validationErrors.push('Display name must be between 2 and 80 characters');
+    }
+    if (/[<>"']/.test(cleanName)) {
+      validationErrors.push('Display name contains disallowed characters');
+    }
+    const cleanPhone = draft.phone.replace(/[^\d+]/g, '');
+    if (cleanPhone.length > 0 && (cleanPhone.length < 10 || cleanPhone.length > 15)) {
+      validationErrors.push('Phone number must have 10 to 15 digits');
+    }
+    if (!draft.timezone.includes('/')) {
+      validationErrors.push('Timezone must be an IANA identifier');
+    }
+    if (validationErrors.length > 0) {
+      setErrors(validationErrors);
+      setStatus('Fix validation errors before saving');
+      return;
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (cleanName !== initial.displayName) patch.displayName = cleanName;
+    if (draft.timezone !== initial.timezone) patch.timezone = draft.timezone;
+    if (cleanPhone !== initial.phone) patch.phone = cleanPhone;
+    if (draft.emailAlerts !== initial.emailAlerts) patch.emailAlerts = draft.emailAlerts;
+    if (draft.weeklyDigest !== initial.weeklyDigest) patch.weeklyDigest = draft.weeklyDigest;
+    if (Object.keys(patch).length === 0) {
+      setStatus('No changes to save');
+      return;
+    }
+
+    let response: Response | null = null;
+    let lastFailure = 'Unknown error';
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const res = await fetch(`${apiUrl}/profile`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Attempt': String(attempt) },
+          body: JSON.stringify(patch),
+        });
+        if (res.ok) {
+          response = res;
+          break;
+        }
+        lastFailure = `HTTP ${res.status}`;
+        if (res.status < 500 && res.status !== 429) break;
+      } catch (err) {
+        lastFailure = err instanceof Error ? err.message : String(err);
+      }
+      await new Promise((r) => setTimeout(r, attempt * 250));
+    }
+    if (!response) {
+      setErrors([`Save failed: ${lastFailure}`]);
+      return;
+    }
+
+    const updated = (await response.json()) as ProfileDraft;
+    try {
+      const rawCache = localStorage.getItem('profile_cache');
+      const parsedCache = rawCache ? (JSON.parse(rawCache) as Record<string, unknown>) : {};
+      localStorage.setItem('profile_cache', JSON.stringify({ ...parsedCache, ...updated, syncedAt: Date.now() }));
+    } catch {
+      // ignore storage failure
+    }
+    const changedKeys = Object.keys(patch).sort().join(', ');
+    const auditEntry = { event: 'profile_updated', fields: changedKeys, at: new Date().toISOString() };
+    await fetch(`${apiUrl}/audit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(auditEntry),
+    });
+    setDraft(updated);
+    setErrors([]);
+    setStatus(`Saved changes: ${changedKeys}`);
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <button type="submit">Save</button>
+      {errors.map((e) => <p key={e}>{e}</p>)}
+      {status && <p>{status}</p>}
+    </form>
+  );
+}

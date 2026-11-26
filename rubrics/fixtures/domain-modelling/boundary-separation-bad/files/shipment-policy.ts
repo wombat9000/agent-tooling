@@ -1,0 +1,28 @@
+import { readFileSync } from 'node:fs';
+
+export class HttpStatusError extends Error {
+  readonly statusCode: number;
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
+export function calculateShipmentFromQuery(rawQueryString: string): { status: number; jsonBody: string } {
+  const params = new URLSearchParams(rawQueryString);
+  const weightGrams = Number(params.get('weight'));
+  const speed = params.get('speed') ?? 'standard';
+  if (!Number.isFinite(weightGrams) || weightGrams <= 0) {
+    throw new HttpStatusError(400, 'Invalid weight query parameter');
+  }
+  const rateConfig = JSON.parse(readFileSync('/etc/shipping/rates.json', 'utf8')) as { maxGrams: number; expressBase: number; standardBase: number };
+  if (weightGrams > rateConfig.maxGrams) {
+    throw new HttpStatusError(422, 'Package exceeds weight limit');
+  }
+  const base = speed === 'express' ? rateConfig.expressBase : rateConfig.standardBase;
+  const priceCents = base + Math.ceil(weightGrams / 1_000) * 120;
+  return {
+    status: 200,
+    jsonBody: JSON.stringify({ priceCents, displayPrice: `$${(priceCents / 100).toFixed(2)}` }),
+  };
+}

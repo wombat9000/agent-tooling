@@ -648,14 +648,17 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   mkdirSync(tempFixturesDir, { recursive: true });
   cpSync(join(AUTHORITATIVE_RUBRICS_DIR, 'readability.json'), join(tempRubricsDir, 'readability.json'));
 
-  const fixturePath = join(tempFixturesDir, 'sample-good.json');
+  const sampleDir = join(tempFixturesDir, 'readability', 'sample-good');
+  mkdirSync(join(sampleDir, 'files'), { recursive: true });
+  const fixturePath = join(sampleDir, 'fixture.json');
+  const sourcePath = join(sampleDir, 'files', 'clean.ts');
   writeFileSync(fixturePath, JSON.stringify({
     id: 'sample-good',
     description: 'Clean helper',
     rubric: 'readability',
-    files: { 'clean.ts': 'export const isPositive = (n: number) => n > 0;\n' },
     expect: { direct_readability: 'pass' },
   }));
+  writeFileSync(sourcePath, 'export const isPositive = (n: number) => n > 0;\n');
 
   const dataDir = join(root, 'fx-data');
   const configPath = join(root, 'config.json');
@@ -717,14 +720,8 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   });
   assert.equal(skippedFlag.fixture_outcome.status, 'disabled');
 
-  // Mutating fixture file invalidates combined_hash and triggers re-run
-  writeFileSync(fixturePath, JSON.stringify({
-    id: 'sample-good',
-    description: 'Clean helper updated',
-    rubric: 'readability',
-    files: { 'clean.ts': 'export const isPositive = (n: number) => n > 0;\n' },
-    expect: { direct_readability: 'pass' },
-  }));
+  // Mutating a real fixture source file under files/ invalidates combined_hash and triggers re-run
+  writeFileSync(sourcePath, 'export const isPositive = (n: number): boolean => n > 0;\n');
   const mock3 = makeMockOpenRouterTransport();
   const third = await runScanner({
     config,

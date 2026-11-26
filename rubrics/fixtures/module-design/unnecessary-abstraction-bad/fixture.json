@@ -1,0 +1,8 @@
+{
+  "id": "unnecessary-abstraction-bad",
+  "description": "Introduces a speculative single-implementation formatter interface, a one-branch factory, and a pass-through facade for a one-line string format",
+  "rubric": "module-design",
+  "expect": {
+    "no_unnecessary_abstraction": "fail"
+  }
+}

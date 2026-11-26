@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-good",
+  "description": "Dedicated domain unions, Money and DateRange value objects, and named constants while keeping opaque IDs and ISO timestamps as plain strings",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "pass"
+  }
+}

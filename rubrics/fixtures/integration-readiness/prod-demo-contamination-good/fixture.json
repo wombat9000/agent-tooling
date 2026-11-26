@@ -1,0 +1,8 @@
+{
+  "id": "prod-demo-contamination-good",
+  "description": "Production orders client resolves the upstream URL from environment configuration, fails cleanly if unset, and never bundles in-process stubs or demo overlays",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_prod_fixture_or_demo_contamination": "pass"
+  }
+}

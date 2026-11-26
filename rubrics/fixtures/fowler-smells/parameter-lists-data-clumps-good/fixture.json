@@ -1,0 +1,8 @@
+{
+  "id": "parameter-lists-data-clumps-good",
+  "description": "Accepts a single cohesive destructured options/props record (1 formal parameter) and calls an imported wide legacy function from a concise declared caller",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_parameter_lists_or_data_clumps": "pass"
+  }
+}

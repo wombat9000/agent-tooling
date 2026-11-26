@@ -1,0 +1,8 @@
+{
+  "id": "repeated-switches-ui-presentation-good",
+  "description": "Single-board React view rendering fixed stage columns and presentation badges locally while delegating card actions to callbacks",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_repeated_switches": "pass"
+  }
+}

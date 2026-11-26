@@ -1,0 +1,8 @@
+{
+  "id": "liskov-substitution-bad",
+  "description": "ReadOnlyArchiveStore implements KeyValueStore by throwing UnsupportedOperationError on writes, forcing callers to branch with instanceof checks",
+  "rubric": "solid",
+  "expect": {
+    "liskov_substitution": "fail"
+  }
+}

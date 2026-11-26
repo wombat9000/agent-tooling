@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-ui-component-good",
+  "description": "Cohesive React autosaving note form combining JSX markup, styling classes, local edit state, onBlur autosave, and disabled fieldset for one view",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "project-structure-junk-drawer-bad",
+  "description": "Flat junk-drawer features directory mixing unrelated concerns, catch-all utils/helpers/common files, and inconsistent subfolder extraction for comparable peer clusters",
+  "mode": "structure",
+  "root_name": "src",
+  "rubric": "project-structure",
+  "expect": {
+    "no_junk_drawer_directories": "fail",
+    "cohesive_subfeature_grouping": "fail",
+    "consistent_organization_depth": "fail",
+    "descriptive_file_roles": "fail"
+  }
+}

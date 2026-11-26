@@ -1,0 +1,8 @@
+{
+  "id": "speculative-complexity-bad",
+  "description": "Overengineered untyped string-key rule-engine DSL and pass-through wrapper just to filter three fixed ticket statuses",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_accidental_or_speculative_complexity": "fail"
+  }
+}

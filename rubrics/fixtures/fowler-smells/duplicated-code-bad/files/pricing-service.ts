@@ -1,0 +1,56 @@
+import type { OrderStore } from './order-store';
+import type { PricingBreakdown, PricingInput } from './types';
+
+export function previewQuote(input: PricingInput): PricingBreakdown {
+  if (input.lines.length === 0) {
+    throw new Error('At least one line item is required');
+  }
+  let subtotalCents = 0;
+  for (const line of input.lines) {
+    if (line.quantity <= 0 || line.unitPriceCents < 0) {
+      throw new Error(`Invalid line item: ${line.sku}`);
+    }
+    subtotalCents += line.unitPriceCents * line.quantity;
+  }
+  let discountCents = 0;
+  if (input.couponCode === 'SAVE15' && subtotalCents >= 5_000) {
+    discountCents = Math.round(subtotalCents * 0.15);
+  } else if (input.couponCode === 'FLAT1000' && subtotalCents >= 8_000) {
+    discountCents = 1_000;
+  }
+  if (input.loyaltyPoints >= 500) {
+    const credit = Math.min(2_000, Math.floor(input.loyaltyPoints / 100) * 100);
+    discountCents = Math.min(subtotalCents, discountCents + credit);
+  }
+  const discounted = Math.max(0, subtotalCents - discountCents);
+  const taxCents = input.taxExempt ? 0 : Math.round(discounted * 0.085);
+  return { subtotalCents, discountCents, taxCents, totalCents: discounted + taxCents };
+}
+
+export async function finalizeOrder(store: OrderStore, orderId: string, input: PricingInput): Promise<PricingBreakdown> {
+  if (input.lines.length === 0) {
+    throw new Error('At least one line item is required');
+  }
+  let subtotalCents = 0;
+  for (const line of input.lines) {
+    if (line.quantity <= 0 || line.unitPriceCents < 0) {
+      throw new Error(`Invalid line item: ${line.sku}`);
+    }
+    subtotalCents += line.unitPriceCents * line.quantity;
+  }
+  let discountCents = 0;
+  if (input.couponCode === 'SAVE15' && subtotalCents >= 5_000) {
+    discountCents = Math.round(subtotalCents * 0.15);
+  } else if (input.couponCode === 'FLAT1000' && subtotalCents >= 8_000) {
+    discountCents = 1_000;
+  }
+  if (input.loyaltyPoints >= 500) {
+    const credit = Math.min(2_000, Math.floor(input.loyaltyPoints / 100) * 100);
+    discountCents = Math.min(subtotalCents, discountCents + credit);
+  }
+  const discounted = Math.max(0, subtotalCents - discountCents);
+  const taxCents = input.taxExempt ? 0 : Math.round(discounted * 0.085);
+  const breakdown = { subtotalCents, discountCents, taxCents, totalCents: discounted + taxCents };
+  await store.saveOrder(orderId, breakdown);
+  return breakdown;
+}

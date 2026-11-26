@@ -1,0 +1,8 @@
+{
+  "id": "workaround-proxies-good",
+  "description": "BFF proxy verifies the session once per request and forwards cleanly to the upstream HTTP API without stub round-tripping or parity scaffolding",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_workaround_proxies_or_parity_tax": "pass"
+  }
+}

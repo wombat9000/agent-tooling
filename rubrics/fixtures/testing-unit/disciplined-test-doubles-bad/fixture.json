@@ -1,0 +1,8 @@
+{
+  "id": "disciplined-test-doubles-bad",
+  "description": "Unit tests mock pure domain objects, duplicate identical predicates in stubbing and verification, enforce brittle strict call order, use catch-all wildcards, and mock-test a trivial pass-through wrapper",
+  "rubric": "testing-unit",
+  "expect": {
+    "disciplined_test_doubles": "fail"
+  }
+}

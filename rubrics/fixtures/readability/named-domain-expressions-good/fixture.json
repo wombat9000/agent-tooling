@@ -1,0 +1,8 @@
+{
+  "id": "named-domain-expressions-good",
+  "description": "Extracts compound eligibility and grace-window rules into clear domain-named predicates and constants",
+  "rubric": "readability",
+  "expect": {
+    "named_domain_expressions": "pass"
+  }
+}

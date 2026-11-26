@@ -1,0 +1,8 @@
+{
+  "id": "modular-organization-bad",
+  "description": "Dumps domain models, HTTP request parsing, SQL persistence, HTML email rendering, CSV export, and monolithic workflow orchestration into one tangled file",
+  "rubric": "module-design",
+  "expect": {
+    "modular_organization": "fail"
+  }
+}

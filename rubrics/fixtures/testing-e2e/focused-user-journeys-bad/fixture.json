@@ -1,0 +1,8 @@
+{
+  "id": "focused-user-journeys-bad",
+  "description": "Browser E2E tests chain unrelated workflows into a sprawling kitchen-sink mega-test and push an exhaustive pure-logic tax matrix through slow browser form fills",
+  "rubric": "testing-e2e",
+  "expect": {
+    "focused_user_journeys": "fail"
+  }
+}

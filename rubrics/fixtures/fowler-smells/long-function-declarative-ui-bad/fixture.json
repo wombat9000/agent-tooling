@@ -1,0 +1,8 @@
+{
+  "id": "long-function-declarative-ui-bad",
+  "description": "UI component whose single submit callback packs inline normalization, validation, diffing, retry fetch, cache patching, and audit logging",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "fail"
+  }
+}

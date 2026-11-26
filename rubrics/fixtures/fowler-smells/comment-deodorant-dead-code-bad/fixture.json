@@ -1,0 +1,8 @@
+{
+  "id": "comment-deodorant-dead-code-bad",
+  "description": "Contains noisy line-by-line narrating comments, deodorant excuses for messy logic, large commented-out legacy blocks, and unused private helpers",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_comment_deodorant_or_dead_code": "fail"
+  }
+}
