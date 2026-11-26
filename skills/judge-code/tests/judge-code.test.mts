@@ -139,7 +139,7 @@ test('list-rubrics prints bundled slugs, versioned IDs, check IDs, per-check sco
   assert.equal(proc.status, 0, proc.stderr);
   assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels \[file\], cohesive_resource_boundaries \[module\]/);
   assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state \[file\], domain_invariants \[module\], boundary_separation \[module\]/);
-  assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\].*no_primitive_obsession \[file, >=0\.65\]/);
+  assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\].*no_primitive_obsession \[file, >=0\.60\]/);
   assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[module\]/);
   assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
   assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
@@ -766,7 +766,7 @@ test('file mode filters to file-scoped checks, records skipped_module_checks, an
     'no_speculative_or_middle_man',
     'follows_repo_conventions',
   ]);
-  assert.deepEqual(result.check_thresholds, { no_primitive_obsession: 0.65 });
+  assert.deepEqual(result.check_thresholds, { no_primitive_obsession: 0.6 });
   assert.equal(result.file_results.length, 4);
   assert.deepEqual(
     result.file_results.map((entry: { file: string }) => entry.file),
@@ -917,13 +917,13 @@ test('file mode scores concurrently with OpenRouter, aggregates metrics, formats
   assert.doesNotMatch(summaryProc.stdout, /%/);
   assert.match(summaryProc.stdout, /Findings by rule \(2 of 5 rules\):/);
   assert.match(summaryProc.stdout, /FAIL\s+no_long_functions\s+2\/4 files\s+\(1 raw FAIL, 1 threshold borderline; min P\(pass\)=0\.15; threshold 0\.80\)/);
-  assert.match(summaryProc.stdout, /FAIL\s+no_primitive_obsession\s+1\/4 files\s+\(1 raw FAIL; min P\(pass\)=0\.45; threshold 0\.65\)/);
+  assert.match(summaryProc.stdout, /FAIL\s+no_primitive_obsession\s+1\/4 files\s+\(1 raw FAIL; min P\(pass\)=0\.45; threshold 0\.60\)/);
   assert.match(summaryProc.stdout, /Clean rules \(3\):.*no_message_chains/);
   const longFnIdx = summaryProc.stdout.indexOf('FAIL  no_long_functions');
   const primIdx = summaryProc.stdout.indexOf('FAIL  no_primitive_obsession');
   assert.ok(longFnIdx !== -1 && primIdx !== -1 && longFnIdx < primIdx, 'rules with more findings must appear first');
   assert.match(summaryProc.stdout, /Hotspot files \(2 of 4 files\):/);
-  assert.match(summaryProc.stdout, /Booking\.kt \(2 findings\): no_long_functions \[raw FAIL: P\(pass\)=0\.15 < 0\.80\], no_primitive_obsession \[raw FAIL: P\(pass\)=0\.45 < 0\.65\]/);
+  assert.match(summaryProc.stdout, /Booking\.kt \(2 findings\): no_long_functions \[raw FAIL: P\(pass\)=0\.15 < 0\.80\], no_primitive_obsession \[raw FAIL: P\(pass\)=0\.45 < 0\.60\]/);
   assert.match(summaryProc.stdout, /Room\.kt \(1 finding\): no_long_functions \[threshold borderline, raw PASS: P\(pass\)=0\.65 < 0\.80\]/);
   assert.match(summaryProc.stdout, /Skipped module checks \(4\): no_duplicated_code/);
   const bookingIdx = summaryProc.stdout.indexOf('Booking.kt (2 findings)');
@@ -1303,7 +1303,7 @@ test('per-criterion pass_threshold is validated, defaulted to 0.8, exposed on Re
   const { run, root, project } = setup(t);
   const { PASS_THRESHOLD, parsePassThreshold, resolveRubrics } = await import('../scripts/rubrics.mts');
 
-  // Bundled rubrics default to PASS_THRESHOLD (0.8) except calibrated overrides (no_primitive_obsession 0.65, named_domain_expressions 0.6).
+  // Bundled rubrics default to PASS_THRESHOLD (0.8) except calibrated overrides (no_primitive_obsession 0.6, named_domain_expressions 0.6).
   const bundled = resolveRubrics({
     rubrics: ['fowler-smells', 'readability'],
     exclude: ['no_duplicated_code'],
@@ -1312,7 +1312,7 @@ test('per-criterion pass_threshold is validated, defaulted to 0.8, exposed on Re
   });
   assert.equal(PASS_THRESHOLD, 0.8);
   assert.equal(bundled.thresholds.no_long_functions, 0.8);
-  assert.equal(bundled.thresholds.no_primitive_obsession, 0.65);
+  assert.equal(bundled.thresholds.no_primitive_obsession, 0.6);
   assert.equal(bundled.thresholds.direct_readability, 0.8);
   assert.equal(bundled.thresholds.named_domain_expressions, 0.6);
   assert.equal(bundled.thresholds.follows_repo_conventions, 0.8);
