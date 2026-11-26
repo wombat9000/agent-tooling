@@ -1,0 +1,42 @@
+{
+  "id": "single-responsibility-types-ports-good",
+  "description": "Clean two-file feature contract mini-module separating domain types and small collaborator port interfaces (repository, clock, notifier)",
+  "rubric": "solid",
+  "files": {
+    "types.ts": [
+      "export type ShipmentStatus = 'pending' | 'dispatched' | 'delivered';",
+      "",
+      "export interface ParcelSpec {",
+      "  readonly sku: string;",
+      "  readonly weightGrams: number;",
+      "}",
+      "",
+      "export interface ShipmentOrder {",
+      "  readonly id: string;",
+      "  readonly destinationCode: string;",
+      "  readonly parcels: readonly ParcelSpec[];",
+      "  readonly status: ShipmentStatus;",
+      "  readonly dispatchedAtIso: string | null;",
+      "}"
+    ],
+    "ports.ts": [
+      "import type { ShipmentOrder } from './types';",
+      "",
+      "export interface ShipmentRepository {",
+      "  findById(shipmentId: string): Promise<ShipmentOrder | null>;",
+      "  save(shipment: ShipmentOrder): Promise<void>;",
+      "}",
+      "",
+      "export interface Clock {",
+      "  nowIso(): string;",
+      "}",
+      "",
+      "export interface ShipmentNotifier {",
+      "  notifyDispatched(shipmentId: string, destinationCode: string): Promise<void>;",
+      "}"
+    ]
+  },
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}
