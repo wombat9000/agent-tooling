@@ -4,20 +4,20 @@
   "questions": {
     "single_responsibility": {
       "type": "choice",
-      "scope": "module",
-      "instructions": "Does each module, type, and function in the supplied production code have a single cohesive responsibility and reason to change?",
+      "scope": "file",
+      "instructions": "Does each class, service, and primary unit in the supplied production code own one cohesive responsibility rather than mixing genuinely unrelated architectural or domain concerns?",
       "criteria": {
-        "pass": "Each module, type, and function owns one cohesive responsibility and axis of change, without bundling unrelated domain concerns or mixing unrelated roles inside the same unit. A cohesive single-document storage schema with its nested sub-types and record helpers, or a thin HTTP route handler performing standard request handling (auth, input framing, service delegation, and response mapping), counts as one cohesive responsibility.",
-        "fail": "A module, type, or function bundles multiple unrelated reasons to change so that modifying one concern requires editing unrelated behavior within the same unit."
+        "pass": "Each class, service, or primary unit owns one cohesive role without mixing unrelated domain policies or architectural layers. Private helpers, constants, or supporting types serving that same role pass. Cohesive single-role units also pass: a UI component combining markup, styling, local interaction state, and private sub-components for one view; a focused outbound adapter handling request execution, parsing, telemetry, and error mapping for one external provider; a thin HTTP route handler delegating to services; or a storage schema with its record helpers.",
+        "fail": "A class, service, or module mixes genuinely unrelated domain concerns or architectural layers inside the same unit—for example combining persistence/migrations with core business policy, embedding business rules or raw data-fetching inside a UI view, or packing multiple independent workflows or domains into one god-class or monolith."
       }
     },
     "open_closed": {
       "type": "choice",
-      "scope": "module",
+      "scope": "file",
       "instructions": "Does the supplied production code attach variant-specific behavior cleanly so extensions are localized without fragile scattered conditionals, while avoiding speculative hooks?",
       "criteria": {
-        "pass": "Behavior tied to domain variants or types lives with the owning type or an exhaustive dispatch rather than being duplicated across fragile conditional chains in callers. Straightforward code with no real extension point passes without speculative abstraction.",
-        "fail": "Variant-specific behavior is scattered across repeated or fragile conditional chains or hardcoded caller checks that must all be updated together whenever a variant is added or changed."
+        "pass": "Behavior tied to domain variants or types lives with the owning type or a single localized dispatch rather than being duplicated across fragile conditional chains in callers. A single localized adapter handling a small fixed set of external providers or operations, a module exposing distinct named command operations, or straightforward code with no real extension point passes without speculative plugin or registry abstractions.",
+        "fail": "Variant-specific or state-machine behavior is scattered or duplicated across repeated or fragile conditional chains or hardcoded caller checks that must all be updated together whenever a variant or phase is added or changed."
       }
     },
     "liskov_substitution": {

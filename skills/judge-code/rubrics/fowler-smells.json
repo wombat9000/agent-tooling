@@ -34,8 +34,8 @@
       "scope": "module",
       "instructions": "Is the supplied production code free of Feature Envy and anemic Data Class smells?",
       "criteria": {
-        "pass": "Domain behavior, invariant checks, policy rules, and state transitions live with the domain types that own the relevant data rather than being computed externally. Boundary request/response DTOs and thin persistence row mappers may remain simple data carriers.",
-        "fail": "Service, controller, or helper methods repeatedly pull fields out of passive domain data classes to compute rules, policies, or state transitions that belong on the owning domain type."
+        "pass": "Domain behavior, invariant checks, policy rules, and state transitions live with the owning domain types or domain modules rather than being computed externally. Both OOP domain classes with methods and idiomatic functional domain modules—where a `readonly` record or discriminated union type is colocated with pure domain query and state-transition functions—pass. Immutable read projections, boundary request/response DTOs, and persistence or UI adapters that delegate policy to owning domain operations may remain simple data carriers.",
+        "fail": "External services, controllers, coordinators, transaction handlers, or unrelated helpers repeatedly reach into passive domain records or data classes to manually reconstruct displaced business rules, invariant checks, or state transitions that belong on the owning domain type or domain module."
       }
     },
     "no_message_chains": {
@@ -59,11 +59,11 @@
     },
     "no_repeated_switches": {
       "type": "choice",
-      "scope": "module",
+      "scope": "file",
       "instructions": "Is the supplied production code free of the Repeated Switches smell?",
       "criteria": {
-        "pass": "Conditional dispatch on a domain type, tier, or status is consolidated onto the owning enum/sealed hierarchy or a single authoritative location rather than repeated across multiple functions or classes.",
-        "fail": "Multiple `when`/`if` chains across different methods or files branch on the same enum, status, or tier discriminator to implement scattered variant-specific rules."
+        "pass": "Conditional dispatch on a domain type, tier, or status is consolidated onto the owning enum/sealed hierarchy, lookup table, or a single authoritative location rather than repeated across multiple functions or classes. Local UI presentation rendering (such as rendering stage columns, badges, or labels for a single screen/view) and distinct lifecycle query predicates consolidated inside the owning domain module pass.",
+        "fail": "Multiple `switch`/`when`/`if` chains across different operations, phases, methods, or files repeatedly branch on the same enum, status, or tier discriminant to implement scattered variant-specific rules."
       }
     },
     "no_speculative_or_middle_man": {
