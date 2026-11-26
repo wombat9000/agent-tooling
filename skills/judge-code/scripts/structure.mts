@@ -3,20 +3,20 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { ALLOWED_DOT_DIRS, readOptionalDoc, resolveOutputOutsideSource } from './inputs.mts';
+import {
+  ALLOWED_DOT_DIRS,
+  SKIP_DIRS,
+  compileIgnoreMatcher,
+  isTestOrSupportPath,
+  readOptionalDoc,
+  resolveOutputOutsideSource,
+} from './inputs.mts';
 
 const MAX_MANIFEST_BYTES = 128 * 1024;
 const MAX_LOCAL_FILE_BYTES = 512 * 1024;
 const MAX_EXPORTS = 15;
 const MAX_LOCAL_IMPORTS = 20;
 const MAX_EXTERNAL_IMPORTS = 12;
-
-const SKIP_DIRS = new Set([
-  'node_modules', 'vendor', 'build', 'dist', 'out', 'target', 'coverage', 'generated',
-]);
-const TEST_DIR_NAMES = new Set([
-  '__tests__', '__mocks__', '__fixtures__', 'test', 'tests', 'androidtest', 'testfixtures', 'fixtures',
-]);
 
 export interface DirectoryCount {
   source_files: number;
@@ -45,6 +45,7 @@ export interface StructureManifest {
 export interface ReadStructureOptions {
   source: string;
   out: string;
+  ignore?: string[];
   requirements?: string;
   conventions?: string;
   allowCredentials?: boolean;
@@ -60,14 +61,6 @@ export interface LoadedStructureInputs {
 function isCodeFile(name: string): boolean {
   return name.endsWith('.kt')
     || (/\.(?:[cm]?[jt]sx?)$/.test(name) && !/\.d\.[cm]?ts$/.test(name));
-}
-
-function isTestFile(relPath: string): boolean {
-  const parts = relPath.split('/');
-  if (parts.slice(0, -1).some((part) => TEST_DIR_NAMES.has(part.toLowerCase()))) return true;
-  const name = parts[parts.length - 1];
-  return /(?:Test|Tests|Spec|\.(?:test|spec))\.kt$/.test(name)
-    || /\.(?:spec|test)\.[cm]?[jt]sx?$/i.test(name);
 }
 
 function uniqueCapped(values: Iterable<string>, limit: number): string[] {
@@ -176,6 +169,7 @@ function readLocalSource(path: string): string | null {
 
 export function readStructureInputs(options: ReadStructureOptions): LoadedStructureInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
+  const ignoreMatcher = compileIgnoreMatcher(options.ignore);
   const sourceInput = resolve(options.source);
   const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
   if (!sourceStat?.isDirectory()) {
@@ -225,12 +219,13 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+        if (SKIP_DIRS.has(entry.name.toLowerCase()) || ignoreMatcher.isIgnoredDir(relPath)) continue;
         counts.subdirs += 1;
         walk(fullPath, relPath);
       } else if (entry.isFile()) {
+        if (ignoreMatcher.isIgnoredFile(relPath)) continue;
         if (isCodeFile(entry.name)) {
-          const kind = isTestFile(relPath) ? 'test' : 'source';
+          const kind = isTestOrSupportPath(relPath) ? 'test' : 'source';
           if (kind === 'test') counts.test_files += 1;
           else counts.source_files += 1;
 

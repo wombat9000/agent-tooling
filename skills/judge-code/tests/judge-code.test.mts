@@ -29,11 +29,23 @@ globalThis.fetch = async (endpoint, init) => {
   if (!isFileMode) assert.equal(init.body, readFileSync(join(out, 'request.json'), 'utf8'));
 
   if (mode === 'http-error') return new Response('rate limit', { status: 429 });
+  if (mode === 'http-400') {
+    return new Response(
+      JSON.stringify({ error: { message: 'Unknown model: typesafe/jev-1.14.0' } }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
   if (mode === 'key-echo') return new Response('echo fixture-api-key', { status: 500 });
 
   const json = JSON.parse(init.body);
   const fileNames = Object.keys(json.state.production_files ?? {});
   const singleFile = isFileMode && fileNames.length === 1 ? fileNames[0] : null;
+  if (mode === 'partial-400' && singleFile === 'Room.kt') {
+    return new Response(
+      JSON.stringify({ error: { message: 'Invalid request for file' } }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
   const answers = Object.fromEntries(Object.keys(json.questions).map((id) => {
     let passProb = 0.92;
     let choice = 'pass';
@@ -365,7 +377,7 @@ test('live scoring makes a single Decisions call and records errors with credent
     '--rubric', 'readability',
     '--out', errOut,
   ]);
-  assert.equal(errProc.status, 1);
+  assert.equal(errProc.status, 2);
   const errResult = JSON.parse(errProc.stdout);
   assert.equal(errResult.status, 'error');
   assert.match(errResult.error, /credential material/);
@@ -872,9 +884,13 @@ test('file mode scores concurrently with OpenRouter, aggregates metrics, formats
   assert.equal(result.quality.checks.no_long_functions.choice, 'fail');
   assert.equal(result.quality.checks.no_long_functions.files_passed, 2);
   assert.equal(result.quality.checks.no_long_functions.files_total, 4);
+  assert.equal(result.quality.checks.no_long_functions.files_raw_failed, 1);
+  assert.equal(result.quality.checks.no_long_functions.files_threshold_failed, 1);
   assert.equal(result.quality.checks.no_long_functions.min_pass_probability, 0.15);
   assert.equal(result.quality.checks.no_primitive_obsession.choice, 'fail');
   assert.equal(result.quality.checks.no_primitive_obsession.files_passed, 3);
+  assert.equal(result.quality.checks.no_primitive_obsession.files_raw_failed, 1);
+  assert.equal('files_threshold_failed' in result.quality.checks.no_primitive_obsession, false);
   assert.equal(result.quality.checks.no_primitive_obsession.min_pass_probability, 0.45);
   assert.equal(result.quality.checks.no_message_chains.choice, 'pass');
   assert.equal(result.quality.checks.no_message_chains.files_passed, 4);
@@ -897,11 +913,18 @@ test('file mode scores concurrently with OpenRouter, aggregates metrics, formats
   ]);
   assert.equal(summaryProc.status, 1, summaryProc.stderr);
   assert.match(summaryProc.stdout, /judge-code \(file\)/);
-  assert.match(summaryProc.stdout, /4 scored \(2 passed, 2 failed\)/);
-  assert.match(summaryProc.stdout, /FAIL\s+no_long_functions\s+2\/4\s+min P\(pass\)=0\.15/);
+  assert.match(summaryProc.stdout, /Files: 4 scored \(2\/4 passed all checks, 2 with failures\)/);
+  assert.match(
+    summaryProc.stdout,
+    /Metrics: passed decisions 17\/20 \(85\.0%\) \| files passing all checks 2\/4 \(50\.0%\) \| checks passing on every file 3\/5 \(60\.0%\)/,
+  );
+  assert.match(summaryProc.stdout, /Failures: 3 failed decisions \(2 raw FAIL, 1 threshold fail\)/);
+  assert.match(summaryProc.stdout, /FAIL\s+no_long_functions\s+2\/4\s+min P\(pass\)=0\.15 \(1 raw FAIL, 1 threshold fail; threshold 0\.80\)/);
   assert.match(summaryProc.stdout, /PASS\s+no_message_chains\s+4\/4\s+min P\(pass\)=0\.92/);
   assert.match(summaryProc.stdout, /Skipped module checks \(4\): no_duplicated_code/);
   assert.match(summaryProc.stdout, /Failing files \(2\):/);
+  assert.match(summaryProc.stdout, /Booking\.kt \(2 failed\): no_long_functions \[raw FAIL: P\(pass\)=0\.15 < 0\.80\], no_primitive_obsession \[raw FAIL: P\(pass\)=0\.45 < 0\.65\]/);
+  assert.match(summaryProc.stdout, /Room\.kt \(1 failed\): no_long_functions \[threshold fail, raw PASS: P\(pass\)=0\.65 < 0\.80\]/);
   const bookingIdx = summaryProc.stdout.indexOf('Booking.kt (2 failed)');
   const roomIdx = summaryProc.stdout.indexOf('Room.kt (1 failed)');
   assert.ok(bookingIdx !== -1 && roomIdx !== -1 && bookingIdx < roomIdx, 'worst failing file must appear first');
@@ -1158,7 +1181,7 @@ console.log(JSON.stringify({
     '--out', claudeOut,
   ], stubEnv);
   assert.equal(claudeProc.status, 0, claudeProc.stderr);
-  assert.match(claudeProc.stdout, /4 scored \(4 passed, 0 failed\)/);
+  assert.match(claudeProc.stdout, /Files: 4 scored \(4\/4 passed all checks, 0 with failures\)/);
   assert.match(claudeProc.stdout, /min P\(pass\)=n\/a/);
 });
 
@@ -1209,8 +1232,8 @@ test('formatSummary does not round failing sub-threshold probabilities up to the
     ],
   }, '/tmp/out');
   assert.match(summary, /min P\(pass\)=0\.796/);
-  assert.match(summary, /direct_readability \(0\.796\)/);
-  assert.doesNotMatch(summary, /\(0\.80\)/);
+  assert.match(summary, /direct_readability \[threshold fail, raw PASS: P\(pass\)=0\.796 < 0\.80\]/);
+  assert.doesNotMatch(summary, /P\(pass\)=0\.80/);
 });
 
 test('OpenRouter default model is typesafe/jev-1.14 in file mode and liquid/d1.2-ultra in code/structure modes', (t) => {
@@ -1738,8 +1761,8 @@ test('formatSummary displays per-criterion thresholds in code, file, and dry-run
     },
   }, '/tmp/out');
   assert.match(codeSummary, /PASS\s+lenient_pass\s+P\(pass\)=0\.80 \(threshold 0\.70\)/);
-  assert.match(codeSummary, /FAIL\s+lenient_edge_fail\s+P\(pass\)=0\.696 \(threshold 0\.70\)/);
-  assert.match(codeSummary, /FAIL\s+default_fail\s+P\(pass\)=0\.72 \(threshold 0\.80\)/);
+  assert.match(codeSummary, /FAIL\s+lenient_edge_fail\s+threshold fail \(raw PASS: P\(pass\)=0\.696 < 0\.70\)/);
+  assert.match(codeSummary, /FAIL\s+default_fail\s+threshold fail \(raw PASS: P\(pass\)=0\.72 < 0\.80\)/);
 
   // File mode with mixed thresholds shows per-check thresholds in the table and failing-file detail.
   const fileSummary = formatSummary({
@@ -1803,9 +1826,12 @@ test('formatSummary displays per-criterion thresholds in code, file, and dry-run
     ],
   }, '/tmp/out');
   assert.match(fileSummary, /PASS\s+lenient_check\s+1\/1\s+min P\(pass\)=0\.72 \(threshold 0\.70\)/);
-  assert.match(fileSummary, /FAIL\s+default_check\s+0\/1\s+min P\(pass\)=0\.72 \(threshold 0\.80\)/);
-  assert.match(fileSummary, /FAIL\s+strict_check\s+0\/1\s+min P\(pass\)=0\.896 \(threshold 0\.90\)/);
-  assert.match(fileSummary, /edge\.ts \(2 failed\): default_check \(0\.72\), strict_check \(0\.896 < 0\.90\)/);
+  assert.match(fileSummary, /FAIL\s+default_check\s+0\/1\s+min P\(pass\)=0\.72 \(1 threshold fail; threshold 0\.80\)/);
+  assert.match(fileSummary, /FAIL\s+strict_check\s+0\/1\s+min P\(pass\)=0\.896 \(1 threshold fail; threshold 0\.90\)/);
+  assert.match(
+    fileSummary,
+    /edge\.ts \(2 failed\): default_check \[threshold fail, raw PASS: P\(pass\)=0\.72 < 0\.80\], strict_check \[threshold fail, raw PASS: P\(pass\)=0\.896 < 0\.90\]/,
+  );
 
   // Dry-run summary highlights overridden check thresholds and leaves default checks plain.
   const drySummary = formatSummary({
@@ -1843,4 +1869,496 @@ test('formatSummary displays per-criterion thresholds in code, file, and dry-run
   }, '/tmp/out');
   assert.match(defaultSummary, /PASS\s+direct_readability\s+P\(pass\)=0\.91$/m);
   assert.doesNotMatch(defaultSummary, /threshold/);
+});
+
+test('universal cross-language test/support classification is unified across file and structure modes without repo-specific hardcoding', async (t) => {
+  const { run, root, project } = setup(t);
+  const { isTestOrSupportPath } = await import('../scripts/inputs.mts');
+
+  // Universal cross-language test/support directories and filenames
+  for (const testPath of [
+    'test/helper.ts',
+    'tests/Fixture.kt',
+    'testing/fakes.ts',
+    'pkg/testing/ClockFake.kt',
+    '__tests__/widget.tsx',
+    '__mocks__/api.ts',
+    '__fixtures__/payload.ts',
+    'testFixtures/BookingBuilder.kt',
+    'fixtures/seed.ts',
+    'androidTest/MainScreenTest.kt',
+    'booking.test.ts',
+    'booking.spec.tsx',
+    'client.mock.ts',
+    'handler_test.go',
+    'handler_test.ts',
+    'service_spec.rb',
+    'BookingTest.kt',
+    'BookingTests.kt',
+    'BookingSpec.kt',
+    'BookingTest.ts',
+    'conftest.py',
+    'pkg/conftest.py',
+    'test_booking.py',
+  ]) {
+    assert.equal(isTestOrSupportPath(testPath), true, `Expected ${testPath} to be classified as test/support`);
+  }
+
+  // Production filenames and repo-specific helper names must NOT be hardcoded as test/support
+  for (const prodPath of [
+    'Booking.kt',
+    'latest.ts',
+    'contest.ts',
+    'manifest.ts',
+    'SpecParser.ts',
+    'TestRunner.kt',
+    '.server/decisions.ts',
+    '.client/widget.tsx',
+    'booking-test-support.ts',
+    'app/lib/repo-test-support.kt',
+  ]) {
+    assert.equal(isTestOrSupportPath(prodPath), false, `Expected ${prodPath} to be classified as production`);
+  }
+
+  // End-to-end parity between --mode file and --mode structure
+  const multi = join(project, 'unified-roles');
+  const sampleFiles: Record<string, string> = {
+    'latest.ts': 'export const latest = 1;\n',
+    'booking-test-support.ts': 'export const helper = true;\n',
+    '.server/loader.ts': 'export const load = () => 1;\n',
+    '.client/view.tsx': 'export const View = () => null;\n',
+    'testing/fakes.ts': 'export const fake = 1;\n',
+    'testFixtures/Builder.kt': 'package demo\nclass Builder\n',
+    '__mocks__/db.ts': 'export const db = {};\n',
+    'handler_test.ts': 'export const t = 1;\n',
+    'BookingTest.ts': 'export const bt = 1;\n',
+    'client.mock.ts': 'export const mockClient = {};\n',
+  };
+  for (const [rel, content] of Object.entries(sampleFiles)) {
+    const full = join(multi, rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, content);
+  }
+
+  const fileOut = join(root, 'unified-file');
+  const fileProc = run('preview', [
+    '--source', 'unified-roles',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--out', fileOut,
+    '--dry-run',
+  ]);
+  assert.equal(fileProc.status, 0, fileProc.stderr);
+  const fileRes = JSON.parse(fileProc.stdout);
+  assert.deepEqual(
+    fileRes.file_results.map((entry: { file: string }) => entry.file),
+    ['.client/view.tsx', '.server/loader.ts', 'booking-test-support.ts', 'latest.ts'].sort((a, b) => a.localeCompare(b)),
+  );
+
+  const structOut = join(root, 'unified-structure');
+  const structProc = run('preview', [
+    '--source', 'unified-roles',
+    '--mode', 'structure',
+    '--out', structOut,
+    '--dry-run',
+  ]);
+  assert.equal(structProc.status, 0, structProc.stderr);
+  const structReq = JSON.parse(readFileSync(join(structOut, 'request.json'), 'utf8'));
+  const manifestFiles = structReq.state.project_structure.files as Record<string, { kind: string }>;
+  assert.equal(manifestFiles['latest.ts'].kind, 'source');
+  assert.equal(manifestFiles['booking-test-support.ts'].kind, 'source');
+  assert.equal(manifestFiles['.server/loader.ts'].kind, 'source');
+  assert.equal(manifestFiles['.client/view.tsx'].kind, 'source');
+  assert.equal(manifestFiles['testing/fakes.ts'].kind, 'test');
+  assert.equal(manifestFiles['testFixtures/Builder.kt'].kind, 'test');
+  assert.equal(manifestFiles['__mocks__/db.ts'].kind, 'test');
+  assert.equal(manifestFiles['handler_test.ts'].kind, 'test');
+  assert.equal(manifestFiles['BookingTest.ts'].kind, 'test');
+  assert.equal(manifestFiles['client.mock.ts'].kind, 'test');
+});
+
+test('repeatable --ignore globs filter files and directories across code, file, and structure modes while preserving .server/.client and --out guards', async (t) => {
+  const { run, root, project } = setup(t);
+  const { compileIgnoreMatcher } = await import('../scripts/inputs.mts');
+
+  // Unit tests for compileIgnoreMatcher
+  const matcher = compileIgnoreMatcher([
+    '*-test-support.*',
+    'legacy/**',
+    '**/gen/**',
+    '**/*.pb.{ts,kt}',
+    'scratch/',
+  ]);
+  assert.equal(matcher.isIgnoredFile('booking-test-support.ts'), true);
+  assert.equal(matcher.isIgnoredFile('app/lib/booking-test-support.kt'), true);
+  assert.equal(matcher.isIgnoredFile('app/lib/booking.ts'), false);
+  assert.equal(matcher.isIgnoredDir('legacy'), true);
+  assert.equal(matcher.isIgnoredFile('legacy/old.ts'), true);
+  assert.equal(matcher.isIgnoredFile('legacy/sub/older.ts'), true);
+  assert.equal(matcher.isIgnoredDir('app/legacy'), false);
+  assert.equal(matcher.isIgnoredDir('gen'), true);
+  assert.equal(matcher.isIgnoredDir('a/b/gen'), true);
+  assert.equal(matcher.isIgnoredFile('a/b/gen/foo.ts'), true);
+  assert.equal(matcher.isIgnoredFile('api/v1/schema.pb.ts'), true);
+  assert.equal(matcher.isIgnoredFile('schema.pb.kt'), true);
+  assert.equal(matcher.isIgnoredFile('api/v1/schema.ts'), false);
+  assert.equal(matcher.isIgnoredDir('scratch'), true);
+  assert.equal(matcher.isIgnoredDir('nested/scratch'), true);
+  assert.equal(matcher.isIgnoredFile('nested/scratch/tmp.ts'), true);
+  assert.equal(matcher.isIgnoredFile('scratch'), false); // trailing slash is dir-only
+  assert.throws(() => compileIgnoreMatcher(['   ']), /Invalid --ignore pattern/);
+  assert.throws(() => compileIgnoreMatcher(['./']), /Invalid --ignore pattern/);
+
+  // Create fixture tree with repo-specific helpers, generated dir, .server/.client, and oversized ignored file
+  const repo = join(project, 'ignore-demo');
+  const tree: Record<string, string> = {
+    'core.ts': 'export const core = 1;\n',
+    'booking-test-support.ts': 'export const testOnlyHelper = 1;\n',
+    'api/schema.pb.ts': 'export const proto = 1;\n',
+    'legacy/huge-ignored.ts': 'x'.repeat(140 * 1024), // >128 KiB, must not fail when ignored!
+    '.server/decisions.ts': 'export const decide = () => true;\n',
+    '.server/seed-test-support.ts': 'export const seed = () => {};\n',
+    '.client/widget.tsx': 'export const Widget = () => null;\n',
+    'notes/data.json': '{"ok":true}\n',
+  };
+  for (const [rel, content] of Object.entries(tree)) {
+    const full = join(repo, rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, content);
+  }
+
+  // --help documents --ignore and exit codes
+  const helpProc = run('preview', ['--help']);
+  assert.equal(helpProc.status, 0, helpProc.stderr);
+  assert.match(helpProc.stdout, /--ignore GLOB/);
+  assert.match(helpProc.stdout, /Exit codes:/);
+
+  // --mode file with repeatable --ignore + --exclude works cleanly and skips oversized ignored directory
+  const fileOut = join(root, 'ignore-file');
+  const fileProc = run('preview', [
+    '--source', 'ignore-demo',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--exclude', 'named_domain_expressions',
+    '--ignore', '*-test-support.*',
+    '--ignore', 'legacy/**',
+    '--ignore', '**/*.pb.ts',
+    '--out', fileOut,
+    '--dry-run',
+  ]);
+  assert.equal(fileProc.status, 0, fileProc.stderr);
+  const fileRes = JSON.parse(fileProc.stdout);
+  assert.deepEqual(fileRes.excluded_checks, ['named_domain_expressions']);
+  assert.deepEqual(fileRes.ignored_patterns, ['*-test-support.*', 'legacy/**', '**/*.pb.ts']);
+  assert.deepEqual(
+    fileRes.file_results.map((entry: { file: string }) => entry.file),
+    ['.client/widget.tsx', '.server/decisions.ts', 'core.ts'].sort((a, b) => a.localeCompare(b)),
+  );
+
+  // --mode code with --ignore and --format summary prints ignored patterns on dry-run
+  const codeOut = join(root, 'ignore-code');
+  const codeProc = run('preview', [
+    '--source', 'ignore-demo',
+    '--mode', 'code',
+    '--rubric', 'readability',
+    '--ignore', '*-test-support.*',
+    '--ignore', 'legacy/**',
+    '--ignore', '**/*.pb.ts',
+    '--format', 'summary',
+    '--out', codeOut,
+    '--dry-run',
+  ]);
+  assert.equal(codeProc.status, 0, codeProc.stderr);
+  assert.match(codeProc.stdout, /Ignored patterns \(3\): \*-test-support\.\*, legacy\/\*\*, \*\*\/\*\.pb\.ts/);
+  const codeReq = JSON.parse(readFileSync(join(codeOut, 'request.json'), 'utf8'));
+  assert.deepEqual(
+    Object.keys(codeReq.state.production_files),
+    ['.client/widget.tsx', '.server/decisions.ts', 'core.ts'].sort((a, b) => a.localeCompare(b)),
+  );
+
+  // --mode structure with --ignore omits ignored files and pruned directories from manifest and directory_summary
+  const structOut = join(root, 'ignore-struct');
+  const structProc = run('preview', [
+    '--source', 'ignore-demo',
+    '--mode', 'structure',
+    '--ignore', '*-test-support.*',
+    '--ignore', 'legacy/**',
+    '--ignore', 'notes/**',
+    '--out', structOut,
+    '--dry-run',
+  ]);
+  assert.equal(structProc.status, 0, structProc.stderr);
+  const structReq = JSON.parse(readFileSync(join(structOut, 'request.json'), 'utf8'));
+  const manifest = structReq.state.project_structure;
+  assert.equal('legacy' in manifest.directory_summary, false);
+  assert.equal('notes' in manifest.directory_summary, false);
+  assert.ok('.server' in manifest.directory_summary);
+  assert.ok('.client' in manifest.directory_summary);
+  assert.equal('booking-test-support.ts' in manifest.files, false);
+  assert.equal('.server/seed-test-support.ts' in manifest.files, false);
+  assert.ok('.server/decisions.ts' in manifest.files);
+  assert.ok('.client/widget.tsx' in manifest.files);
+  assert.ok('core.ts' in manifest.files);
+  assert.equal('other_files' in manifest, false);
+
+  // --out inside --source is still rejected even if --ignore matches the --out path
+  const overlapProc = run('reject', [
+    '--source', 'ignore-demo',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--ignore', 'out-inside/**',
+    '--out', join(repo, 'out-inside'),
+    '--dry-run',
+  ]);
+  assert.equal(overlapProc.status, 1);
+  assert.match(overlapProc.stderr, /outside the selected source directory/);
+
+  // Empty --ignore pattern is rejected with status 1
+  const emptyIgnore = run('reject', [
+    '--source', 'ignore-demo',
+    '--rubric', 'readability',
+    '--ignore', '   ',
+    '--out', join(root, 'empty-ignore'),
+    '--dry-run',
+  ]);
+  assert.equal(emptyIgnore.status, 1);
+  assert.match(emptyIgnore.stderr, /Invalid --ignore pattern/);
+});
+
+test('scoring and transport errors exit with distinct non-zero status 2 across modes and formats', async (t) => {
+  const { run, root } = setup(t);
+  const { EXIT_OK, EXIT_SCORING_ERROR, EXIT_VIOLATION, exitCodeForResult } = await import('../scripts/judge-code.mts');
+
+  assert.equal(EXIT_OK, 0);
+  assert.equal(EXIT_VIOLATION, 1);
+  assert.equal(EXIT_SCORING_ERROR, 2);
+
+  // Unit tests for exitCodeForResult
+  const baseResult = {
+    status: 'scored' as const,
+    backend: 'openrouter' as const,
+    mode: 'code' as const,
+    file_count: 1,
+    requested_model: 'liquid/d1.2-ultra',
+    returned_model: 'liquid/d1.2-ultra',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability'] },
+    pass_threshold: 0.8,
+    quality: {
+      pass_rate: 0,
+      checks: {
+        direct_readability: { choice: 'fail' as const, model_choice: 'pass' as const, pass_probability: 0.72, confidence: 0.44 },
+      },
+    },
+  };
+  assert.equal(exitCodeForResult(baseResult, false), 0);
+  assert.equal(exitCodeForResult(baseResult, true), 1);
+  assert.equal(exitCodeForResult({ ...baseResult, status: 'error', quality: null, error: 'HTTP 400' }, false), 2);
+  assert.equal(exitCodeForResult({ ...baseResult, status: 'error', quality: null, error: 'HTTP 400' }, true), 2);
+  assert.equal(
+    exitCodeForResult({
+      ...baseResult,
+      mode: 'file',
+      file_results: [
+        { file: 'a.ts', status: 'error', returned_model: null, elapsed_ms: 10, pass_rate: null, checks: null, result_dir: 'files/01-a.ts', error: 'HTTP 400' },
+      ],
+    }, false),
+    2,
+  );
+
+  // OpenRouter HTTP 400 (Unknown model) in --mode file --format summary exits 2 and surfaces the model error
+  const file400Out = join(root, 'file-http-400');
+  const file400Proc = run('http-400', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--model', 'typesafe/jev-1.14.0',
+    '--format', 'summary',
+    '--out', file400Out,
+  ]);
+  assert.equal(file400Proc.status, 2, file400Proc.stderr);
+  assert.match(file400Proc.stdout, /ERROR:.*HTTP 400: Unknown model: typesafe\/jev-1\.14\.0/);
+  assert.match(file400Proc.stdout, /Files: 0 scored, 4 errored \(4 total\)/);
+  const file400Saved = JSON.parse(readFileSync(join(file400Out, 'result.json'), 'utf8'));
+  assert.equal(file400Saved.status, 'error');
+
+  // Partial file error (3 scored, 1 errored) exits 2 even without --fail-on-violation
+  const partialOut = join(root, 'file-partial-400');
+  const partialProc = run('partial-400', [
+    '--source', 'booking',
+    '--mode', 'file',
+    '--rubric', 'readability',
+    '--format', 'summary',
+    '--out', partialOut,
+  ]);
+  assert.equal(partialProc.status, 2, partialProc.stderr);
+  assert.match(partialProc.stdout, /Files: 3 scored, 1 errored \(4 total\)/);
+  assert.match(partialProc.stdout, /ERR\s+Room\.kt: OpenRouter returned HTTP 400: Invalid request for file/);
+
+  // OpenRouter HTTP 400 in --mode code --format json exits 2
+  const code400Out = join(root, 'code-http-400');
+  const code400Proc = run('http-400', [
+    '--source', 'booking',
+    '--mode', 'code',
+    '--rubric', 'readability',
+    '--out', code400Out,
+  ]);
+  assert.equal(code400Proc.status, 2, code400Proc.stderr);
+  const code400Res = JSON.parse(code400Proc.stdout);
+  assert.equal(code400Res.status, 'error');
+  assert.match(code400Res.error, /HTTP 400: Unknown model: typesafe\/jev-1\.14\.0/);
+
+  // CLI backend failure exits 2
+  const fakeBin = join(root, 'failing-cli-bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const failingCodex = join(fakeBin, 'codex');
+  writeFileSync(failingCodex, '#!/usr/bin/env node\nconsole.error("auth expired");\nprocess.exit(1);\n');
+  chmodSync(failingCodex, 0o755);
+  const cliErrProc = run('preview', [
+    '--source', 'booking',
+    '--rubric', 'readability',
+    '--backend', 'codex',
+    '--out', join(root, 'cli-err-out'),
+  ], { PATH: `${fakeBin}:${process.env.PATH ?? ''}` });
+  assert.equal(cliErrProc.status, 2, cliErrProc.stderr);
+  assert.equal(JSON.parse(cliErrProc.stdout).status, 'error');
+});
+
+test('formatSummary clearly distinguishes raw model FAIL from threshold-flipped FAIL and uses unambiguous aggregate labels', async () => {
+  const { formatSummary } = await import('../scripts/format.mts');
+
+  // Code mode with one PASS, one raw FAIL, and one threshold-flipped FAIL (raw PASS with P(pass)=0.72 < 0.80)
+  const codeSummary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'code',
+    file_count: 3,
+    requested_model: 'liquid/d1.2-ultra',
+    returned_model: 'liquid/d1.2-ultra',
+    rubric: 'readability-v2+module-design-v2',
+    rubric_groups: {
+      readability: ['direct_readability'],
+      'module-design': ['modular_organization', 'no_unnecessary_abstraction'],
+    },
+    pass_threshold: 0.8,
+    quality: {
+      pass_rate: 1 / 3,
+      checks: {
+        direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.94, confidence: 0.88 },
+        modular_organization: { choice: 'fail', model_choice: 'fail', pass_probability: 0.18, confidence: 0.64 },
+        no_unnecessary_abstraction: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44 },
+      },
+    },
+  }, '/tmp/out');
+  assert.match(codeSummary, /Files: 3 \| Checks passed: 1\/3 \(33\.3%\) — 1 raw FAIL, 1 threshold fail/);
+  assert.match(codeSummary, /PASS\s+direct_readability\s+P\(pass\)=0\.94/);
+  assert.match(codeSummary, /FAIL\s+modular_organization\s+raw FAIL \(P\(pass\)=0\.18 < 0\.80\)/);
+  assert.match(codeSummary, /FAIL\s+no_unnecessary_abstraction\s+threshold fail \(raw PASS: P\(pass\)=0\.72 < 0\.80\)/);
+
+  // CLI backend distinguishes raw FAIL from borderline
+  const cliSummary = formatSummary({
+    status: 'scored',
+    backend: 'codex',
+    mode: 'code',
+    file_count: 2,
+    requested_model: 'gpt-6-luna',
+    returned_model: 'gpt-6-luna',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability', 'named_domain_expressions'] },
+    pass_threshold: null,
+    quality: {
+      pass_rate: 0,
+      checks: {
+        direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: null, confidence: null, note: 'Opaque names.' },
+        named_domain_expressions: { choice: 'fail', model_choice: 'borderline', pass_probability: null, confidence: null, note: 'Mixed clarity.' },
+      },
+    },
+  }, '/tmp/out');
+  assert.match(cliSummary, /Checks passed: 0\/2 \(0\.0%\) — 1 raw FAIL, 1 borderline/);
+  assert.match(cliSummary, /FAIL\s+direct_readability\s+raw FAIL — Opaque names\./);
+  assert.match(cliSummary, /FAIL\s+named_domain_expressions\s+borderline — Mixed clarity\./);
+
+  // File mode separates passed decisions, files passing all checks, and checks passing on every file
+  const fileSummary = formatSummary({
+    status: 'scored',
+    backend: 'openrouter',
+    mode: 'file',
+    file_count: 3,
+    elapsed_ms: 300,
+    requested_model: 'typesafe/jev-1.14',
+    returned_model: 'typesafe/jev-1.14',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability', 'named_domain_expressions'] },
+    pass_threshold: 0.8,
+    quality: {
+      pass_rate: 4 / 6,
+      all_files_pass_rate: 1 / 2,
+      checks: {
+        direct_readability: {
+          choice: 'fail',
+          files_passed: 1,
+          files_total: 3,
+          files_raw_failed: 1,
+          files_threshold_failed: 1,
+          pass_probability: 0.61,
+          min_pass_probability: 0.2,
+          confidence: 0.5,
+        },
+        named_domain_expressions: {
+          choice: 'pass',
+          files_passed: 3,
+          files_total: 3,
+          pass_probability: 0.93,
+          min_pass_probability: 0.9,
+          confidence: 0.86,
+        },
+      },
+    },
+    file_results: [
+      {
+        file: 'clean.ts',
+        status: 'scored',
+        returned_model: 'typesafe/jev-1.14',
+        elapsed_ms: 100,
+        pass_rate: 1,
+        result_dir: 'files/01-clean.ts',
+        checks: {
+          direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.91, confidence: 0.82 },
+          named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 },
+        },
+      },
+      {
+        file: 'raw-fail.ts',
+        status: 'scored',
+        returned_model: 'typesafe/jev-1.14',
+        elapsed_ms: 100,
+        pass_rate: 0.5,
+        result_dir: 'files/02-raw-fail.ts',
+        checks: {
+          direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: 0.2, confidence: 0.6 },
+          named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.9, confidence: 0.8 },
+        },
+      },
+      {
+        file: 'threshold-fail.ts',
+        status: 'scored',
+        returned_model: 'typesafe/jev-1.14',
+        elapsed_ms: 100,
+        pass_rate: 0.5,
+        result_dir: 'files/03-threshold-fail.ts',
+        checks: {
+          direct_readability: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.44 },
+          named_domain_expressions: { choice: 'pass', model_choice: 'pass', pass_probability: 0.94, confidence: 0.88 },
+        },
+      },
+    ],
+  }, '/tmp/out');
+  assert.match(fileSummary, /Files: 3 scored \(1\/3 passed all checks, 2 with failures\)/);
+  assert.match(
+    fileSummary,
+    /Metrics: passed decisions 4\/6 \(66\.7%\) \| files passing all checks 1\/3 \(33\.3%\) \| checks passing on every file 1\/2 \(50\.0%\)/,
+  );
+  assert.match(fileSummary, /Failures: 2 failed decisions \(1 raw FAIL, 1 threshold fail\)/);
+  assert.match(fileSummary, /raw-fail\.ts \(1 failed\): direct_readability \[raw FAIL: P\(pass\)=0\.20 < 0\.80\]/);
+  assert.match(fileSummary, /threshold-fail\.ts \(1 failed\): direct_readability \[threshold fail, raw PASS: P\(pass\)=0\.72 < 0\.80\]/);
 });

@@ -27,7 +27,7 @@ import {
   type JudgeResult,
   type Judgment,
 } from '../skills/judge-code/scripts/decisions.mts';
-import { readInputs, readPerFileInputs } from '../skills/judge-code/scripts/inputs.mts';
+import { compileIgnoreMatcher, readInputs, readPerFileInputs } from '../skills/judge-code/scripts/inputs.mts';
 import {
   nonempty,
   object,
@@ -83,6 +83,7 @@ export interface RepoScanConfig {
   all: boolean;
   rubrics: string[];
   exclude: string[];
+  ignore: string[];
   conventions: string | null;
   requirements: string | null;
   model: string | null;
@@ -268,6 +269,8 @@ export function loadScannerConfig(configPath: string): ScannerConfig {
         ? rec.all
         : (() => { throw new Error(`${label}.all must be a boolean`); })();
     const exclude = rec.exclude === undefined ? [] : [...new Set(parseStringArrayField(rec.exclude, `${label}.exclude`))].sort(compareCodepoint);
+    const ignore = rec.ignore === undefined ? [] : [...new Set(parseStringArrayField(rec.ignore, `${label}.ignore`))].sort(compareCodepoint);
+    compileIgnoreMatcher(ignore);
     const conventions = parseOptionalDocPath(rec.conventions, repoPath, `${label}.conventions`);
     const requirements = parseOptionalDocPath(rec.requirements, repoPath, `${label}.requirements`);
     const model = parseOptionalModel(rec.model, `${label}.model`);
@@ -288,6 +291,7 @@ export function loadScannerConfig(configPath: string): ScannerConfig {
       all,
       rubrics,
       exclude,
+      ignore,
       conventions,
       requirements,
       model,
@@ -403,6 +407,7 @@ export interface RepoCacheKey {
   mode: JudgeMode;
   sources: string[];
   exclude: string[];
+  ignore?: string[];
   rubric_hashes: Record<string, string>;
   model: string;
   conventions_hash: string | null;
@@ -419,6 +424,7 @@ export function findMatchingRepoSnapshot(
 ): RepoSnapshot | null {
   const normSources = normalizeStringList(key.sources);
   const normExclude = normalizeStringList(key.exclude);
+  const normIgnore = normalizeStringList(key.ignore ?? []);
   for (let i = existing.length - 1; i >= 0; i -= 1) {
     const snap = existing[i];
     if (snap.repo.name !== key.repo) continue;
@@ -429,10 +435,14 @@ export function findMatchingRepoSnapshot(
     if ((snap.scan.requirements_hash ?? null) !== key.requirements_hash) continue;
     const snapSources = normalizeStringList(snap.scan.sources);
     const snapExclude = normalizeStringList(snap.scan.exclude);
+    const snapIgnore = normalizeStringList(snap.scan.ignore ?? []);
     if (snapSources.length !== normSources.length || snapSources.some((s, idx) => s !== normSources[idx])) {
       continue;
     }
     if (snapExclude.length !== normExclude.length || snapExclude.some((s, idx) => s !== normExclude[idx])) {
+      continue;
+    }
+    if (snapIgnore.length !== normIgnore.length || snapIgnore.some((p, idx) => p !== normIgnore[idx])) {
       continue;
     }
     if (!equalStringRecords(snap.rubric_hashes, key.rubric_hashes)) continue;
@@ -593,6 +603,20 @@ function defaultModelForMode(mode: JudgeMode, override: string | null): string {
   return override ?? (mode === 'file' ? DEFAULT_FILE_MODE_DECISION_MODEL : DEFAULT_DECISION_MODEL);
 }
 
+function resolveIgnorePatternsForSource(srcRel: string, ignore: readonly string[]): string[] {
+  if (ignore.length === 0 || srcRel === '.') return [...ignore];
+  const prefix = `${srcRel}/`;
+  const resolved: string[] = [];
+  for (const pattern of ignore) {
+    resolved.push(pattern);
+    const normalized = pattern.replaceAll('\\', '/').replace(/^(?:\.\/)+/, '').replace(/^\/+/, '');
+    if (normalized.startsWith(prefix) && normalized.length > prefix.length) {
+      resolved.push(normalized.slice(prefix.length));
+    }
+  }
+  return [...new Set(resolved)];
+}
+
 function collectMultiSourceFiles(
   repo: RepoScanConfig,
   scratchOut: string,
@@ -604,11 +628,13 @@ function collectMultiSourceFiles(
   for (let i = 0; i < repo.sources.length; i += 1) {
     const srcRel = repo.sources[i];
     const absSrc = resolve(repo.path, srcRel);
+    const ignore = resolveIgnorePatternsForSource(srcRel, repo.ignore);
     let loaded;
     try {
       loaded = readPerFileInputs({
         source: absSrc,
         out: join(scratchOut, `collect-${i}`),
+        ignore,
         conventions: repo.conventions ?? undefined,
         requirements: repo.requirements ?? undefined,
         allowCredentials: repo.allowCredentials,
@@ -805,6 +831,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
         mode,
         sources: repo.sources,
         exclude: repo.exclude,
+        ignore: repo.ignore,
         rubric_hashes: rubricHashes,
         model,
         conventions_hash: conventionsHash,
@@ -896,6 +923,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               rubric_id: resolved.rubric,
               rubric_groups: resolved.groups,
               exclude: repo.exclude,
+              ...(repo.ignore.length > 0 ? { ignore: repo.ignore } : {}),
               model,
               returned_model: result.returned_model,
               backend: 'openrouter',
@@ -953,11 +981,13 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
             const srcRel = repo.sources[srcIdx];
             const absSrc = resolve(repo.path, srcRel);
             const targetOut = join(scratchRoot, `target-${srcIdx}`);
+            const ignore = resolveIgnorePatternsForSource(srcRel, repo.ignore);
 
             if (mode === 'structure') {
               const loaded = readStructureInputs({
                 source: absSrc,
                 out: targetOut,
+                ignore,
                 conventions: repo.conventions ?? undefined,
                 requirements: repo.requirements ?? undefined,
                 allowCredentials: repo.allowCredentials,
@@ -969,6 +999,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
                 {
                   mode: 'structure',
                   structure: loaded.manifest,
+                  ignore: repo.ignore,
                   conventions: loaded.conventions,
                   requirements: loaded.requirements,
                   rubric: resolved,
@@ -988,6 +1019,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               const loaded = readInputs({
                 source: absSrc,
                 out: targetOut,
+                ignore,
                 conventions: repo.conventions ?? undefined,
                 requirements: repo.requirements ?? undefined,
                 allowCredentials: repo.allowCredentials,
@@ -999,6 +1031,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
                 {
                   mode: 'code',
                   files: loaded.files,
+                  ignore: repo.ignore,
                   conventions: loaded.conventions,
                   requirements: loaded.requirements,
                   rubric: resolved,
@@ -1053,6 +1086,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               rubric_id: resolved.rubric,
               rubric_groups: resolved.groups,
               exclude: repo.exclude,
+              ...(repo.ignore.length > 0 ? { ignore: repo.ignore } : {}),
               model,
               returned_model: [...returnedModels].join(', ') || null,
               backend: 'openrouter',
