@@ -9,6 +9,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { grade, type ExpectedReview } from './grade_review.mts';
 import { parseRubric, parseSharedRubric, parseTestRubric, taskSourceRoot, taskTestRoot } from './judge_review.mts';
+import { JUDGE_CODE_EXTRA_INSTRUCTION, JUDGE_CODE_INSTRUCTION_MARKER } from './run_condition.mts';
 
 const LIB = fileURLToPath(new URL('.', import.meta.url));
 const TASKS = join(LIB, '../tasks');
@@ -189,7 +190,32 @@ test('refactor-gilded-rose task declares standard TypeScript production and unit
   assert.deepEqual(Object.keys(testRubric.groups ?? {}), ['testing-core', 'testing-unit']);
 });
 
-test('AmpAgent Python unit tests pass offline', () => {
+test('AmpAgent Python unit tests pass offline and match Codex judge-code quality gate instruction', () => {
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, new RegExp(`^## ${JUDGE_CODE_INSTRUCTION_MARKER}\\b`));
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, /--fail-on-warning/);
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, /module <src-path> --fail-on-warning/);
+  assert.doesNotMatch(JUDGE_CODE_EXTRA_INSTRUCTION, /Optional self-check/);
+
+  const parity = spawnSync(
+    'python3',
+    [
+      '-c',
+      'import ast, pathlib, sys; tree = ast.parse(pathlib.Path(sys.argv[1]).read_text("utf-8")); '
+      + 'vals = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id in {"JUDGE_CODE_INSTRUCTION_MARKER", "JUDGE_CODE_EXTRA_INSTRUCTION"}}; '
+      + 'import json; print(json.dumps(vals))',
+      join(LIB, 'amp_agent.py'),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.ifError(parity.error);
+  assert.equal(parity.status, 0, parity.stderr);
+  const parsed = JSON.parse(parity.stdout) as {
+    JUDGE_CODE_INSTRUCTION_MARKER: string;
+    JUDGE_CODE_EXTRA_INSTRUCTION: string;
+  };
+  assert.equal(parsed.JUDGE_CODE_INSTRUCTION_MARKER, JUDGE_CODE_INSTRUCTION_MARKER);
+  assert.equal(parsed.JUDGE_CODE_EXTRA_INSTRUCTION, JUDGE_CODE_EXTRA_INSTRUCTION);
+
   const result = spawnSync('python3', [join(LIB, 'amp_agent_test.py')], { encoding: 'utf8' });
   assert.ifError(result.error);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);

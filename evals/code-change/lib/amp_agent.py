@@ -14,17 +14,18 @@ from harbor.agents.options import InstalledAgentOptions
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-JUDGE_CODE_INSTRUCTION_MARKER = "Optional self-check tool: judge-code"
+JUDGE_CODE_INSTRUCTION_MARKER = "Required quality gate: judge-code"
 JUDGE_CODE_EXTRA_INSTRUCTION = (
-    "## Optional self-check tool: judge-code\n\n"
+    "## Required quality gate: judge-code\n\n"
     "The `judge-code` skill is installed in your skills directory and "
     "`OPENROUTER_API_KEY` is configured in your environment.\n"
-    "After implementing and verifying tests, run `judge-code` to lint your "
-    'production code—both per-file (`node "$SKILL_DIR/scripts/judge-code.mts" '
-    "<src-path>`) and module-level "
-    '(`node "$SKILL_DIR/scripts/judge-code.mts" module <src-path>`)—inspect any '
-    "reported errors or warnings in source, refactor to resolve real issues, "
-    "and re-run tests and `judge-code` until clean while keeping tests green."
+    "Before finishing, your production code **must** pass both per-file linting "
+    '(`node "$SKILL_DIR/scripts/judge-code.mts" <src-path> --fail-on-warning`) '
+    "and module-level linting "
+    '(`node "$SKILL_DIR/scripts/judge-code.mts" module <src-path> --fail-on-warning`) '
+    "with exit code 0 (0 errors and 0 warnings) while keeping typecheck and tests green.\n"
+    "Do not skip or rationalize away failing checks; refactor your production code "
+    "and re-run typecheck, tests, and both `judge-code` commands until both exit 0."
 )
 
 

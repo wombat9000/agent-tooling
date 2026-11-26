@@ -836,8 +836,11 @@ test('--with-judge-code forwards OPENROUTER_API_KEY and skills/judge-code only w
   const jobName = skillCall.args[skillCall.args.indexOf('--job-name') + 1];
   assert.match(jobName, /^run-skill-with-judge-code-/);
   const extraInstruction = skillCall.args[skillCall.args.indexOf('--extra-instruction') + 1];
-  assert.match(extraInstruction, /judge-code/);
-  assert.match(extraInstruction, /module/);
+  assert.match(extraInstruction, /## Required quality gate: judge-code/);
+  assert.match(extraInstruction, /--fail-on-warning/);
+  assert.match(extraInstruction, /module <src-path> --fail-on-warning/);
+  assert.match(extraInstruction, /exit code 0/);
+  assert.doesNotMatch(extraInstruction, /Optional self-check/);
 
   // Opt-in --baseline --with-judge-code mounts ONLY skills/judge-code (omits skills/code-change).
   const baselineWithJudge = f.run(['run', '--task', 'refactor-gilded-rose', '--baseline', '--with-judge-code']);

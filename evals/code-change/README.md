@@ -90,8 +90,9 @@ keys are used only for host-side judging and are never passed to Harbor containe
 `--with-judge-code` flag to `pnpm eval run` or `pnpm eval canary` (with `OPENROUTER_API_KEY` set on
 the host) to mount `skills/judge-code` into the container, forward `OPENROUTER_API_KEY` into the
 agent runtime environment (via Harbor's `--ae OPENROUTER_API_KEY=${OPENROUTER_API_KEY}` template so
-the raw secret is never written to CLI args or `config.json`), and append an instruction note
-inviting the agent to lint its production code (per-file and `module`) and iterate until clean.
+the raw secret is never written to CLI args or `config.json`), and append a required quality-gate instruction requiring the agent's production code to pass both
+per-file and `module` `judge-code --fail-on-warning` checks with exit code 0 while keeping
+typecheck and tests green.
 `--with-judge-code` combines cleanly with both the default `code-change` skill condition and
 `--baseline` (to evaluate `judge-code` standalone), and condition metadata is recorded in judge
 summaries, HTML reports, and scorecards.
@@ -293,7 +294,7 @@ use `--ak version=<npm-version>` to pin its version. Supplied skills are copied 
 user skill directory without changing the task prompt. By default, `AmpAgent` never forwards
 host `OPENROUTER_API_KEY`; pass `--ak with_judge_code=true` (and `--skill skills/judge-code`,
 optionally paired with `--ae 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'`) to opt into in-container
-`judge-code` linting and append the self-check instruction note. The adapter enables automatic tool
+`judge-code` linting and append the required quality-gate instruction. The adapter enables automatic tool
 approval inside the disposable container, saves native stream logs under `agent/`, and parses token
 usage and cost from `amp.stdout.jsonl` into Harbor's `AgentContext` post-run (falling back
 gracefully to `None` when fields are absent). Keep Amp results

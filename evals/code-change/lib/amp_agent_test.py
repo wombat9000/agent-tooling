@@ -157,8 +157,11 @@ class AmpAgentTests(unittest.TestCase):
             env.calls[0]["env"],
             {"AMP_API_KEY": "amp-secret", "OPENROUTER_API_KEY": "or-secret"},
         )
-        self.assertIn("Optional self-check tool: judge-code", env.calls[0]["command"])
-        self.assertIn("module", env.calls[0]["command"])
+        self.assertIn("Required quality gate: judge-code", env.calls[0]["command"])
+        self.assertIn("--fail-on-warning", env.calls[0]["command"])
+        self.assertIn("module <src-path> --fail-on-warning", env.calls[0]["command"])
+        self.assertIn("exit code 0", env.calls[0]["command"])
+        self.assertNotIn("Optional self-check", env.calls[0]["command"])
 
     def test_with_judge_code_does_not_duplicate_existing_instruction_note(self) -> None:
         agent = self._make_agent(with_judge_code=True)
