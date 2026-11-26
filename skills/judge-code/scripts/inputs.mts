@@ -20,18 +20,12 @@ const SENSITIVE_CONTENT = [
   /(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)['"]?\s*[:=]\s*['"][^\s'"]{8,}['"]/i,
 ];
 
-export interface ConfigIgnoreSpec {
-  baseDir: string;
-  patterns: string[];
-}
-
 export interface ReadInputsOptions {
   source?: string;
   sources?: string[];
   displayBaseDir?: string;
   out?: string;
   ignore?: string[];
-  configIgnore?: ConfigIgnoreSpec;
   requirements?: string;
   conventions?: string;
   allowCredentials?: boolean;
@@ -390,7 +384,6 @@ function collectProductionFiles(
   options: {
     displayBaseDir?: string;
     ignoreMatcher: IgnoreMatcher;
-    configMatcher?: { baseDir: string; matcher: IgnoreMatcher };
     allowEmpty?: boolean;
   },
   readFile: (path: string, label: string) => string,
@@ -406,27 +399,6 @@ function collectProductionFiles(
       }
     })()
     : undefined;
-  const canonicalConfigBase = options.configMatcher
-    ? (() => {
-      try {
-        return realpathSync(options.configMatcher.baseDir);
-      } catch {
-        return resolve(options.configMatcher.baseDir);
-      }
-    })()
-    : undefined;
-
-  const isIgnoredByConfigDir = (absDir: string): boolean => {
-    if (!options.configMatcher || !canonicalConfigBase) return false;
-    const rel = toPosixRelative(canonicalConfigBase, absDir);
-    return rel !== null && options.configMatcher.matcher.isIgnoredDir(rel);
-  };
-
-  const isIgnoredByConfigFile = (absFile: string): boolean => {
-    if (!options.configMatcher || !canonicalConfigBase) return false;
-    const rel = toPosixRelative(canonicalConfigBase, absFile);
-    return rel !== null && options.configMatcher.matcher.isIgnoredFile(rel);
-  };
 
   const displayKeyFor = (absFile: string, fallbackRel: string): string => {
     if (canonicalDisplayBase) {
@@ -441,13 +413,11 @@ function collectProductionFiles(
     if (seenCanonical.has(canonical)) return;
     const displayKey = displayKeyFor(canonical, relInSource);
     const matchTargets = [relInSource, displayKey];
-    if (matchTargets.some((t) => options.ignoreMatcher.isIgnoredFile(t)) || isIgnoredByConfigFile(canonical)) {
+    if (matchTargets.some((t) => options.ignoreMatcher.isIgnoredFile(t))) {
       return;
     }
-    // Check both source-relative and repo/display-relative paths for test/support or skipped dirs.
-    const checkRel = isSingleFile && canonicalConfigBase
-      ? (toPosixRelative(canonicalConfigBase, canonical) ?? displayKey)
-      : relInSource;
+    // Check source-relative (or display-relative for single files) paths for test/support or skipped dirs.
+    const checkRel = isSingleFile ? displayKey : relInSource;
     if (isSingleFile && isSkippedDirPath(checkRel)) return;
     if (!isProductionSource(checkRel)) return;
     seenCanonical.add(canonical);
@@ -471,7 +441,6 @@ function collectProductionFiles(
           || isTestOrSupportDirName(entry.name)
           || options.ignoreMatcher.isIgnoredDir(relName)
           || (displayDir !== null && options.ignoreMatcher.isIgnoredDir(displayDir))
-          || isIgnoredByConfigDir(fullPath)
         ) {
           continue;
         }
@@ -499,9 +468,6 @@ function collectProductionFiles(
 export function readInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
-  const configMatcher = options.configIgnore && options.configIgnore.patterns.length > 0
-    ? { baseDir: options.configIgnore.baseDir, matcher: compileIgnoreMatcher(options.configIgnore.patterns) }
-    : undefined;
   let remaining = MAX_INPUT_BYTES;
   const ctx: DocReadContext = {
     allowCredentials: options.allowCredentials,
@@ -526,7 +492,6 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
     {
       displayBaseDir: options.displayBaseDir,
       ignoreMatcher,
-      configMatcher,
       allowEmpty: options.allowEmpty,
     },
     (path, label) => readUtf8File(path, label, ctx),
@@ -546,9 +511,6 @@ export function readInputs(options: ReadInputsOptions): LoadedInputs {
 export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
-  const configMatcher = options.configIgnore && options.configIgnore.patterns.length > 0
-    ? { baseDir: options.configIgnore.baseDir, matcher: compileIgnoreMatcher(options.configIgnore.patterns) }
-    : undefined;
   const { entries, out } = resolveSourcesAndOut(options);
 
   let docsBytes = 0;
@@ -576,7 +538,6 @@ export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
     {
       displayBaseDir: options.displayBaseDir,
       ignoreMatcher,
-      configMatcher,
       allowEmpty: options.allowEmpty,
     },
     (path, label) => {

@@ -6,12 +6,9 @@ import { parseArgs } from 'node:util';
 import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
 import {
   findRepoRoot,
-  loadJudgeConfig,
   resolveConventionsPath,
   resolveGitChangedFiles,
-  type ConfigModuleEntry,
-  type LoadedJudgeConfig,
-} from './config.mts';
+} from './repo.mts';
 import {
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_DECISION_MODEL,
@@ -54,13 +51,12 @@ Options:
   --quiet, -q           Show errors only; hide borderline warnings
   --json                Emit structured JSON result to stdout instead of formatted linter output
   --out NEW_DIRECTORY   Optional private directory for request.json, response.txt, and result.json artifacts
-  --config FILE         Explicit .judge-code.json path (auto-discovered at repo root by default)
   --rubric NAME_OR_PATH Narrow to bundled rubric name/ID or load local .json rubric (repeatable)
   --rule CHECK_ID       Narrow to specific check ID(s) (repeatable)
-  --exclude CHECK_ID    Exclude a specific check ID (repeatable; merges with .judge-code.json)
-  --ignore GLOB         Exclude matching paths or basenames (repeatable; merges with .judge-code.json)
+  --exclude CHECK_ID    Exclude a specific check ID (repeatable)
+  --ignore GLOB         Exclude matching paths or basenames (repeatable)
   --conventions FILE    Explicit Markdown/text conventions doc (overrides auto-loaded AGENTS.md)
-  --no-conventions      Disable auto-loaded AGENTS.md and config conventions
+  --no-conventions      Disable auto-loaded AGENTS.md conventions
   --requirements FILE   Optional Markdown or text requirements document
   --changed [REF]       Lint git-modified/untracked files vs. REF (default: main, fallback: HEAD)
   --max-warnings N      Exit with status ${EXIT_FINDINGS} if warning count exceeds N (non-negative integer)
@@ -77,7 +73,7 @@ Severity & exit codes:
 
   ${EXIT_OK}  Clean (0 errors, and warnings within --max-warnings / no --fail-on-warning)
   ${EXIT_FINDINGS}  Findings (1+ errors, or warning limit exceeded)
-  ${EXIT_ERROR}  Error (scoring/transport/backend error, invalid CLI arguments, config error, or oversize input)
+  ${EXIT_ERROR}  Error (scoring/transport/backend error, invalid CLI arguments, or oversize input)
 `;
 
 function parseBackend(value: string | undefined): JudgeBackend {
@@ -245,22 +241,6 @@ function displayTargetPath(absPath: string, cwd: string): string {
   return canonicalPath;
 }
 
-function findMatchingModuleConfig(absPath: string, config: LoadedJudgeConfig): ConfigModuleEntry | undefined {
-  let canonical: string;
-  try {
-    canonical = realpathSync(absPath);
-  } catch {
-    canonical = resolve(absPath);
-  }
-  return config.modules.find((entry) => {
-    try {
-      return realpathSync(entry.path) === canonical;
-    } catch {
-      return resolve(entry.path) === canonical;
-    }
-  });
-}
-
 async function main(): Promise<void> {
   const cwd = process.cwd();
   const { subcommand, restArgs, changed, changedBase } = extractSubcommandAndChanged(process.argv.slice(2), cwd);
@@ -275,7 +255,6 @@ async function main(): Promise<void> {
       quiet: { type: 'boolean', short: 'q', default: false },
       json: { type: 'boolean', default: false },
       out: { type: 'string' },
-      config: { type: 'string' },
       rubric: { type: 'string', multiple: true },
       rule: { type: 'string', multiple: true },
       exclude: { type: 'string', multiple: true },
@@ -313,13 +292,10 @@ async function main(): Promise<void> {
   const concurrency = parseConcurrency(values.concurrency);
   const maxWarnings = parseMaxWarnings(values['max-warnings']);
   const failOnWarning = Boolean(values['fail-on-warning']);
-  const cliIgnore = values.ignore ?? [];
+  const cliIgnore = [...new Set(values.ignore ?? [])];
 
   if (values.out !== undefined && !values.out.trim()) {
     throw new Error('--out must be a non-empty directory path');
-  }
-  if (values.config !== undefined && !values.config.trim()) {
-    throw new Error('--config must be a non-empty file path');
   }
 
   const resolvedMode: JudgeMode = subcommand === 'structure'
@@ -330,7 +306,7 @@ async function main(): Promise<void> {
 
   const model = resolveModel(backend, resolvedMode, values.model, Boolean(values.deep));
 
-  // Determine repo root for auto-discovering .judge-code.json and AGENTS.md.
+  // Determine repo root for auto-discovering AGENTS.md.
   let changedFiles: string[] | undefined;
   let repoRoot: string;
   if (changed) {
@@ -346,25 +322,17 @@ async function main(): Promise<void> {
     repoRoot = findRepoRoot(probeTarget, cwd);
   }
 
-  const config = loadJudgeConfig({ configPath: values.config, repoRoot });
   const conventionsInfo = resolveConventionsPath({
     cliConventions: values.conventions,
     noConventions: values['no-conventions'],
-    config,
     repoRoot,
   });
-
-  const mergedIgnoreList = [...new Set([...config.ignore, ...cliIgnore])];
-  const configIgnore = config.ignore.length > 0
-    ? { baseDir: config.baseDir, patterns: config.ignore }
-    : undefined;
 
   const rubric = resolveRubrics({
     mode: resolvedMode,
     rubrics: values.rubric ?? [],
     rules: values.rule,
     exclude: values.exclude,
-    configExclude: config.exclude,
     hasRequirements: values.requirements !== undefined,
     hasConventions: conventionsInfo.path !== undefined,
   });
@@ -384,7 +352,6 @@ async function main(): Promise<void> {
       source: targetPath,
       out: values.out,
       ignore: cliIgnore,
-      configIgnore,
       requirements: values.requirements,
       conventions: conventionsInfo.path,
       allowCredentials: values['allow-credentials'],
@@ -393,7 +360,7 @@ async function main(): Promise<void> {
       mode: 'structure',
       target: displayTargetPath(resolve(cwd, targetPath), cwd),
       structure: inputs.manifest,
-      ignore: mergedIgnoreList,
+      ignore: cliIgnore,
       requirements: inputs.requirements,
       conventions: inputs.conventions,
       rubric,
@@ -402,33 +369,22 @@ async function main(): Promise<void> {
       dryRun: values['dry-run'],
     };
   } else if (resolvedMode === 'code') {
-    // Module subcommand: explicit path(s) or configured modules in .judge-code.json.
-    if (positionals.length === 0 && config.modules.length === 0) {
-      throw new Error(`Specify one or more paths for \`judge-code module <path...>\` (or declare "modules" in .judge-code.json)\n\n${USAGE}`);
+    // Module subcommand requires explicit path(s).
+    if (positionals.length === 0) {
+      throw new Error(`Specify one or more paths for \`judge-code module <path...>\`\n\n${USAGE}`);
     }
 
-    const useMultiModules = (() => {
-      if (positionals.length === 0) return config.modules.length > 1;
-      if (positionals.length === 1) return false;
-      return positionals.every((p) => Boolean(lstatSync(resolve(cwd, p), { throwIfNoEntry: false })?.isDirectory()));
-    })();
+    const useMultiModules = positionals.length > 1
+      && positionals.every((p) => Boolean(lstatSync(resolve(cwd, p), { throwIfNoEntry: false })?.isDirectory()));
 
     if (useMultiModules) {
-      const targetSpecs: Array<{ name: string; path: string; extraIgnore: string[] }> = positionals.length === 0
-        ? config.modules.map((m) => ({
-          name: m.name ?? displayTargetPath(m.path, cwd),
-          path: m.path,
-          extraIgnore: m.ignore,
-        }))
-        : positionals.map((p) => {
-          const abs = resolve(cwd, p);
-          const matched = findMatchingModuleConfig(abs, config);
-          return {
-            name: matched?.name ?? displayTargetPath(abs, cwd),
-            path: abs,
-            extraIgnore: matched?.ignore ?? [],
-          };
-        });
+      const targetSpecs = positionals.map((p) => {
+        const abs = resolve(cwd, p);
+        return {
+          name: displayTargetPath(abs, cwd),
+          path: abs,
+        };
+      });
 
       const resolvedOut = values.out !== undefined ? resolve(values.out) : undefined;
       const loadedModules: ModuleInput[] = targetSpecs.map((spec) => {
@@ -440,8 +396,7 @@ async function main(): Promise<void> {
         }
         const loaded = readInputs({
           source: spec.path,
-          ignore: [...cliIgnore, ...spec.extraIgnore],
-          configIgnore,
+          ignore: cliIgnore,
           requirements: values.requirements,
           conventions: conventionsInfo.path,
           allowCredentials: values['allow-credentials'],
@@ -457,7 +412,7 @@ async function main(): Promise<void> {
       runOptions = {
         mode: 'code',
         modules: loadedModules,
-        ignore: mergedIgnoreList,
+        ignore: cliIgnore,
         rubric,
         out: resolvedOut,
         model,
@@ -465,26 +420,16 @@ async function main(): Promise<void> {
         dryRun: values['dry-run'],
       };
     } else {
-      const singleTargetPaths = positionals.length === 0
-        ? [config.modules[0].path]
-        : positionals.map((p) => resolve(cwd, p));
-      const matchedMod = positionals.length === 0
-        ? config.modules[0]
-        : positionals.length === 1
-          ? findMatchingModuleConfig(singleTargetPaths[0], config)
-          : undefined;
-      const extraModIgnore = matchedMod?.ignore ?? [];
-      const targetLabel = matchedMod?.name
-        ?? (singleTargetPaths.length === 1
-          ? displayTargetPath(singleTargetPaths[0], cwd)
-          : singleTargetPaths.map((p) => displayTargetPath(p, cwd)).join(', '));
+      const singleTargetPaths = positionals.map((p) => resolve(cwd, p));
+      const targetLabel = singleTargetPaths.length === 1
+        ? displayTargetPath(singleTargetPaths[0], cwd)
+        : singleTargetPaths.map((p) => displayTargetPath(p, cwd)).join(', ');
       const useDisplayBase = singleTargetPaths.length > 1;
       const inputs = readInputs({
         sources: singleTargetPaths,
         displayBaseDir: useDisplayBase ? cwd : undefined,
         out: values.out,
-        ignore: [...cliIgnore, ...extraModIgnore],
-        configIgnore,
+        ignore: cliIgnore,
         requirements: values.requirements,
         conventions: conventionsInfo.path,
         allowCredentials: values['allow-credentials'],
@@ -493,7 +438,7 @@ async function main(): Promise<void> {
         mode: 'code',
         target: targetLabel,
         files: inputs.files,
-        ignore: [...new Set([...mergedIgnoreList, ...extraModIgnore])],
+        ignore: cliIgnore,
         requirements: inputs.requirements,
         conventions: inputs.conventions,
         rubric,
@@ -513,7 +458,6 @@ async function main(): Promise<void> {
       displayBaseDir: cwd,
       out: values.out,
       ignore: cliIgnore,
-      configIgnore,
       requirements: values.requirements,
       conventions: conventionsInfo.path,
       allowCredentials: values['allow-credentials'],
@@ -522,7 +466,7 @@ async function main(): Promise<void> {
     runOptions = {
       mode: 'file',
       files: inputs.files,
-      ignore: mergedIgnoreList,
+      ignore: cliIgnore,
       requirements: inputs.requirements,
       conventions: inputs.conventions,
       rubric,

@@ -41,7 +41,6 @@ export interface ResolveRubricsOptions {
   rubrics?: string[];
   rules?: string[];
   exclude?: string[];
-  configExclude?: string[];
   hasRequirements: boolean;
   hasConventions: boolean;
 }
@@ -193,14 +192,6 @@ export function bundledRubrics(): BundledRubricSummary[] {
   });
 }
 
-function allBundledCheckIds(): Set<string> {
-  const ids = new Set<string>([CONVENTIONS_CHECK_ID]);
-  for (const summary of bundledRubrics()) {
-    for (const id of summary.checks) ids.add(id);
-  }
-  return ids;
-}
-
 export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const explicitTarget = options.mode ? modeToTarget(options.mode) : undefined;
   const requestedRubrics = options.rubrics ?? [];
@@ -334,31 +325,10 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     }
   }
 
-  // Apply config exclusions (validate against all known check IDs, ignore checks from other targets).
-  const appliedExcluded: string[] = [];
-  const appliedExcludedSet = new Set<string>();
-  const configExclude = [...new Set(options.configExclude ?? [])];
-  if (configExclude.length > 0) {
-    const knownIds = allBundledCheckIds();
-    for (const id of Object.keys(questions)) knownIds.add(id);
-    for (const id of configExclude) {
-      if (!knownIds.has(id)) {
-        throw new Error(`Unknown check ID in config exclude: ${id}`);
-      }
-      if (id in questions) {
-        delete questions[id];
-        delete scopes[id];
-        delete thresholds[id];
-        appliedExcluded.push(id);
-        appliedExcludedSet.add(id);
-      }
-    }
-  }
-
   // Apply CLI --exclude (strictly validated against the active rubric checks).
+  const appliedExcluded: string[] = [];
   const cliExcluded = [...new Set(options.exclude ?? [])];
   for (const id of cliExcluded) {
-    if (appliedExcludedSet.has(id)) continue;
     if (!(id in questions)) {
       throw new Error(`Unknown check ID in --exclude: ${id}`);
     }
@@ -366,7 +336,6 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     delete scopes[id];
     delete thresholds[id];
     appliedExcluded.push(id);
-    appliedExcludedSet.add(id);
   }
 
   const skippedModuleChecks: string[] = [];

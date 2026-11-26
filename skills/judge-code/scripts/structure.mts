@@ -2,7 +2,7 @@ import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   ALLOWED_DOT_DIRS,
   SKIP_DIRS,
@@ -10,7 +10,6 @@ import {
   isTestOrSupportPath,
   readOptionalDoc,
   resolveOutputOutsideSource,
-  type ConfigIgnoreSpec,
 } from './inputs.mts';
 
 const MAX_MANIFEST_BYTES = 128 * 1024;
@@ -53,7 +52,6 @@ export interface ReadStructureOptions {
   source: string;
   out?: string;
   ignore?: string[];
-  configIgnore?: ConfigIgnoreSpec;
   requirements?: string;
   conventions?: string;
   allowCredentials?: boolean;
@@ -175,27 +173,9 @@ function readLocalSource(path: string): string | null {
   }
 }
 
-function toPosixRelative(fromDir: string, absPath: string): string | null {
-  const rel = relative(fromDir, absPath);
-  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  return rel.split(sep).join('/');
-}
-
 export function readStructureInputs(options: ReadStructureOptions): LoadedStructureInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
-  const configMatcher = options.configIgnore && options.configIgnore.patterns.length > 0
-    ? {
-      baseDir: (() => {
-        try {
-          return realpathSync(options.configIgnore.baseDir);
-        } catch {
-          return resolve(options.configIgnore.baseDir);
-        }
-      })(),
-      matcher: compileIgnoreMatcher(options.configIgnore.patterns),
-    }
-    : undefined;
   const sourceInput = resolve(options.source);
   const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
   if (!sourceStat?.isDirectory()) {
@@ -247,23 +227,18 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
       if (entry.name.startsWith('.') && !isAllowedDot) continue;
       const fullPath = join(dir, entry.name);
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-      const configRel = configMatcher ? toPosixRelative(configMatcher.baseDir, fullPath) : null;
 
       if (entry.isDirectory()) {
         if (
           SKIP_DIRS.has(entry.name.toLowerCase())
           || ignoreMatcher.isIgnoredDir(relPath)
-          || (configRel !== null && configMatcher!.matcher.isIgnoredDir(configRel))
         ) {
           continue;
         }
         counts.subdirs += 1;
         walk(fullPath, relPath);
       } else if (entry.isFile()) {
-        if (
-          ignoreMatcher.isIgnoredFile(relPath)
-          || (configRel !== null && configMatcher!.matcher.isIgnoredFile(configRel))
-        ) {
+        if (ignoreMatcher.isIgnoredFile(relPath)) {
           continue;
         }
         if (isCodeFile(entry.name)) {
