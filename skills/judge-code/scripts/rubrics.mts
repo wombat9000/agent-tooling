@@ -3,7 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RUBRICS_DIR = fileURLToPath(new URL('../rubrics', import.meta.url));
-const CONVENTIONS_CHECK_ID = 'follows_repo_conventions';
+export const CONVENTIONS_CHECK_ID = 'follows_repo_conventions';
 export const PASS_THRESHOLD = 0.8;
 
 export type RubricTarget = 'production_code' | 'project_structure';
@@ -38,9 +38,10 @@ export interface ResolvedRubric {
 
 export interface ResolveRubricsOptions {
   mode?: JudgeMode;
-  rubrics: string[];
-  all?: boolean;
+  rubrics?: string[];
+  rules?: string[];
   exclude?: string[];
+  configExclude?: string[];
   hasRequirements: boolean;
   hasConventions: boolean;
 }
@@ -163,7 +164,7 @@ function loadBundledRubric(slug: string): ParsedRubricFile {
   }
   const path = join(RUBRICS_DIR, `${slug}.json`);
   if (!statSync(path, { throwIfNoEntry: false })?.isFile()) {
-    throw new Error(`Unknown rubric: ${slug}. Run --list-rubrics to see bundled rubrics.`);
+    throw new Error(`Unknown rubric: ${slug}. Run \`judge-code list\` to see bundled rubrics.`);
   }
   return parseRubricJson(path, slug, 'production_code');
 }
@@ -192,8 +193,17 @@ export function bundledRubrics(): BundledRubricSummary[] {
   });
 }
 
+function allBundledCheckIds(): Set<string> {
+  const ids = new Set<string>([CONVENTIONS_CHECK_ID]);
+  for (const summary of bundledRubrics()) {
+    for (const id of summary.checks) ids.add(id);
+  }
+  return ids;
+}
+
 export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const explicitTarget = options.mode ? modeToTarget(options.mode) : undefined;
+  const requestedRubrics = options.rubrics ?? [];
   const parsedSources: ParsedRubricFile[] = [];
   const seenBundled = new Set<string>();
   const seenLocal = new Set<string>();
@@ -207,13 +217,12 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     }
   };
 
-  if (options.all) {
+  // Default to all bundled rubrics for the active target when no --rubric is specified.
+  if (requestedRubrics.length === 0) {
     selectAllForTarget(explicitTarget ?? 'production_code');
-  } else if (options.mode === 'structure' && options.rubrics.length === 0 && !options.hasConventions) {
-    selectAllForTarget('project_structure');
   }
 
-  for (const spec of options.rubrics) {
+  for (const spec of requestedRubrics) {
     if (isLocalRubricPath(spec)) {
       const fullPath = resolve(spec);
       if (!statSync(fullPath, { throwIfNoEntry: false })?.isFile()) {
@@ -235,18 +244,16 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     }
   }
 
-  if (parsedSources.length === 0 && !options.hasConventions) {
-    throw new Error('Select at least one rubric with --rubric, --all, --mode structure, or --conventions');
-  }
-
   let resolvedTarget: RubricTarget = explicitTarget ?? parsedSources[0]?.target ?? 'production_code';
   for (const parsed of parsedSources) {
     if (parsed.target !== resolvedTarget) {
-      throw new Error(
-        explicitTarget
-          ? `Rubric ${parsed.id} targets ${parsed.target}, which does not match --mode ${options.mode}`
-          : `Cannot mix production_code and project_structure rubrics in one run (${parsed.id})`,
-      );
+      if (explicitTarget) {
+        const hint = parsed.target === 'project_structure'
+          ? ' Use `judge-code structure <path>` for project_structure rubrics.'
+          : ' Use `judge-code <path>` or `judge-code module <path>` for production_code rubrics.';
+        throw new Error(`Rubric ${parsed.id} targets ${parsed.target}, which is incompatible with ${options.mode} mode.${hint}`);
+      }
+      throw new Error(`Cannot mix production_code and project_structure rubrics in one run (${parsed.id})`);
     }
     resolvedTarget = parsed.target;
   }
@@ -289,7 +296,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   if (options.hasConventions) {
     const existingOwner = questionOwner.get(CONVENTIONS_CHECK_ID);
     if (existingOwner !== undefined) {
-      throw new Error(`Question ID ${CONVENTIONS_CHECK_ID} is reserved when --conventions is provided (defined in ${existingOwner})`);
+      throw new Error(`Question ID ${CONVENTIONS_CHECK_ID} is reserved when conventions are loaded (defined in ${existingOwner})`);
     }
     const subject = resolvedTarget === 'project_structure' ? 'project structure' : 'production code';
     questions[CONVENTIONS_CHECK_ID] = {
@@ -306,14 +313,60 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     groups.conventions = [CONVENTIONS_CHECK_ID];
   }
 
-  const excluded = [...new Set(options.exclude ?? [])];
-  for (const id of excluded) {
+  // Filter to explicit --rule <id> checks if requested.
+  const requestedRules = [...new Set(options.rules ?? [])];
+  if (requestedRules.length > 0) {
+    for (const id of requestedRules) {
+      if (!(id in questions)) {
+        throw new Error(`Unknown check ID in --rule: ${id}. Run \`judge-code list\` to see available checks.`);
+      }
+      if (options.mode === 'file' && scopes[id] !== 'file') {
+        throw new Error(`Rule "${id}" is module-scoped and cannot run in file mode; use \`judge-code module <path>\`.`);
+      }
+    }
+    const ruleSet = new Set(requestedRules);
+    for (const id of Object.keys(questions)) {
+      if (!ruleSet.has(id)) {
+        delete questions[id];
+        delete scopes[id];
+        delete thresholds[id];
+      }
+    }
+  }
+
+  // Apply config exclusions (validate against all known check IDs, ignore checks from other targets).
+  const appliedExcluded: string[] = [];
+  const appliedExcludedSet = new Set<string>();
+  const configExclude = [...new Set(options.configExclude ?? [])];
+  if (configExclude.length > 0) {
+    const knownIds = allBundledCheckIds();
+    for (const id of Object.keys(questions)) knownIds.add(id);
+    for (const id of configExclude) {
+      if (!knownIds.has(id)) {
+        throw new Error(`Unknown check ID in config exclude: ${id}`);
+      }
+      if (id in questions) {
+        delete questions[id];
+        delete scopes[id];
+        delete thresholds[id];
+        appliedExcluded.push(id);
+        appliedExcludedSet.add(id);
+      }
+    }
+  }
+
+  // Apply CLI --exclude (strictly validated against the active rubric checks).
+  const cliExcluded = [...new Set(options.exclude ?? [])];
+  for (const id of cliExcluded) {
+    if (appliedExcludedSet.has(id)) continue;
     if (!(id in questions)) {
       throw new Error(`Unknown check ID in --exclude: ${id}`);
     }
     delete questions[id];
     delete scopes[id];
     delete thresholds[id];
+    appliedExcluded.push(id);
+    appliedExcludedSet.add(id);
   }
 
   const skippedModuleChecks: string[] = [];
@@ -344,11 +397,11 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   if (Object.keys(questions).length === 0) {
     if (options.mode === 'file' && skippedModuleChecks.length > 0) {
       throw new Error(
-        `No file-scoped checks remain for --mode file (skipped module-scoped checks: ${skippedModuleChecks.join(', ')}). `
-        + 'Select a rubric with [file] checks or use --mode code.',
+        `No file-scoped checks remain (skipped module-scoped checks: ${skippedModuleChecks.join(', ')}). `
+        + 'Select a rubric with [file] checks or use `judge-code module <path>`.',
       );
     }
-    throw new Error('No rubric checks remain after applying --exclude');
+    throw new Error('No rubric checks remain after applying exclusions');
   }
 
   return {
@@ -358,7 +411,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     scopes,
     thresholds,
     groups,
-    excluded,
+    excluded: appliedExcluded,
     skippedModuleChecks,
   };
 }

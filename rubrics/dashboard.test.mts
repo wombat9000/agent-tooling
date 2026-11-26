@@ -973,7 +973,7 @@ test('loadScannerConfig and discoverRepoModules handle explicit modules, moduleR
   );
 });
 
-test('runScanner runs --mode code per module with conventions and ignore forwarding, caches hits, and honors --skip-modules / --modules', async (t) => {
+test('runScanner runs module architectural scans with conventions and ignore forwarding, caches hits, and honors --skip-modules / --modules', async (t) => {
   const root = makeTempDir(t, 'scan-modules-e2e-test-');
   const sentinelSecret = 'PROPRIETARY_MODULE_BODY_SENTINEL_445566';
   const { repoPath } = createSyntheticGitRepo(
@@ -1562,14 +1562,16 @@ test('dashboard model and HTML support Feature / Module Architecture, linter pun
     [{ id: 'dependency_inversion', severity: 'borderline' }],
   );
 
-  // Render HTML and verify punch-list layout, offline self-containment, XSS escaping, and valid client script syntax
+  // Render HTML and verify punch-list layout, aligned errors/warnings terminology, offline self-containment, XSS escaping, and valid client script syntax
   const html = renderDashboardHtml(model);
   assert.ok(!/https?:\/\//i.test(html), 'Dashboard HTML must remain 100% offline with zero external URLs');
   assert.match(html, /Rubric Quality Punch-List/);
   assert.match(html, /Open findings/);
+  assert.match(html, /2 errors · 2 warnings/);
   assert.match(html, /Module architecture/);
   assert.match(html, /Repositories punch-list \(worst-first\)/);
   assert.match(html, /Feature \/ Module Architecture/);
+  assert.match(html, /Errors \/ Warnings/);
   assert.ok(!html.includes('</script><img'), 'Raw </script> in module name must be escaped');
   assert.ok(!html.includes('<script>alert(10)</script>'), 'Raw <script> in module error must be escaped');
 

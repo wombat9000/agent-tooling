@@ -41,7 +41,7 @@ Run curated good/bad code fixtures under rubrics/fixtures/ against authoritative
   --fixture ID         Run only matching fixture ID(s) (repeatable)
   --rubric SLUG        Run only fixtures testing this rubric slug (repeatable)
   --backend BACKEND    Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
-  --model ID           OpenRouter model override (default: ${DEFAULT_FILE_MODE_DECISION_MODEL} for file, ${DEFAULT_DECISION_MODEL} for code/structure)
+  --model ID           OpenRouter model override (default: ${DEFAULT_FILE_MODE_DECISION_MODEL} for file, ${DEFAULT_DECISION_MODEL} for module/structure)
   --concurrency N      Max concurrent judge runs (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
   --dry-run            Validate all fixtures, rubric resolution, and request payloads offline (no API calls)
   --json               Print structured JSON report instead of a human-readable table
@@ -345,7 +345,6 @@ export interface RunHarnessOptions {
 function buildStructureManifestForFixture(
   fixture: LoadedFixture,
   sourceContainerDir: string,
-  outDir: string,
 ): StructureManifest {
   const rootDir = join(sourceContainerDir, fixture.rootName ?? fixture.id);
   mkdirSync(rootDir, { recursive: true });
@@ -354,7 +353,7 @@ function buildStructureManifestForFixture(
     mkdirSync(dirname(absPath), { recursive: true });
     writeFileSync(absPath, content, 'utf8');
   }
-  return readStructureInputs({ source: rootDir, out: outDir }).manifest;
+  return readStructureInputs({ source: rootDir }).manifest;
 }
 
 export async function runRubricHarness(options: RunHarnessOptions = {}): Promise<RubricHarnessReport> {
@@ -440,13 +439,11 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   try {
     outcomes = await runWithConcurrency(units, concurrency, async (unit): Promise<UnitOutcome> => {
       const unitStart = performance.now();
-      const outDir = join(scratchRoot, 'out', `${unit.fixture.id}--r${unit.repeatIndex + 1}`);
       try {
         const structure = unit.fixture.mode === 'structure'
           ? buildStructureManifestForFixture(
             unit.fixture,
             join(scratchRoot, 'sources', `${unit.fixture.id}--r${unit.repeatIndex + 1}`),
-            outDir,
           )
           : undefined;
         const runOptions = {
@@ -456,7 +453,6 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
           conventions: unit.fixture.conventions,
           rubric: unit.resolved,
           model: backend === 'openrouter' ? unit.model : undefined,
-          out: outDir,
           dryRun,
         };
         const result = backend === 'openrouter'

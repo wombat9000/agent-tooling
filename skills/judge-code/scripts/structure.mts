@@ -2,7 +2,7 @@ import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   ALLOWED_DOT_DIRS,
   SKIP_DIRS,
@@ -10,6 +10,7 @@ import {
   isTestOrSupportPath,
   readOptionalDoc,
   resolveOutputOutsideSource,
+  type ConfigIgnoreSpec,
 } from './inputs.mts';
 
 const MAX_MANIFEST_BYTES = 128 * 1024;
@@ -50,8 +51,9 @@ export interface StructureManifest {
 
 export interface ReadStructureOptions {
   source: string;
-  out: string;
+  out?: string;
   ignore?: string[];
+  configIgnore?: ConfigIgnoreSpec;
   requirements?: string;
   conventions?: string;
   allowCredentials?: boolean;
@@ -61,7 +63,7 @@ export interface LoadedStructureInputs {
   manifest: StructureManifest;
   requirements?: string;
   conventions?: string;
-  out: string;
+  out?: string;
 }
 
 function isCodeFile(name: string): boolean {
@@ -173,20 +175,40 @@ function readLocalSource(path: string): string | null {
   }
 }
 
+function toPosixRelative(fromDir: string, absPath: string): string | null {
+  const rel = relative(fromDir, absPath);
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  return rel.split(sep).join('/');
+}
+
 export function readStructureInputs(options: ReadStructureOptions): LoadedStructureInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
+  const configMatcher = options.configIgnore && options.configIgnore.patterns.length > 0
+    ? {
+      baseDir: (() => {
+        try {
+          return realpathSync(options.configIgnore.baseDir);
+        } catch {
+          return resolve(options.configIgnore.baseDir);
+        }
+      })(),
+      matcher: compileIgnoreMatcher(options.configIgnore.patterns),
+    }
+    : undefined;
   const sourceInput = resolve(options.source);
   const sourceStat = lstatSync(sourceInput, { throwIfNoEntry: false });
   if (!sourceStat?.isDirectory()) {
-    throw new Error('Select a regular directory with --source for structure mode');
+    throw new Error('Select a regular directory for structure mode');
   }
   const source = realpathSync(sourceInput);
   if (source === dirname(source) || source === realpathSync(homedir())) {
-    throw new Error('Select a specific project or feature directory with --source');
+    throw new Error('Select a specific project or feature directory');
   }
 
-  const out = resolveOutputOutsideSource(source, true, options.out);
+  const out = options.out !== undefined
+    ? resolveOutputOutsideSource(source, true, options.out)
+    : undefined;
 
   let docBudget = MAX_MANIFEST_BYTES;
   const consumeBudget = (bytes: number) => {
@@ -225,13 +247,25 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
       if (entry.name.startsWith('.') && !isAllowedDot) continue;
       const fullPath = join(dir, entry.name);
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const configRel = configMatcher ? toPosixRelative(configMatcher.baseDir, fullPath) : null;
 
       if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name.toLowerCase()) || ignoreMatcher.isIgnoredDir(relPath)) continue;
+        if (
+          SKIP_DIRS.has(entry.name.toLowerCase())
+          || ignoreMatcher.isIgnoredDir(relPath)
+          || (configRel !== null && configMatcher!.matcher.isIgnoredDir(configRel))
+        ) {
+          continue;
+        }
         counts.subdirs += 1;
         walk(fullPath, relPath);
       } else if (entry.isFile()) {
-        if (ignoreMatcher.isIgnoredFile(relPath)) continue;
+        if (
+          ignoreMatcher.isIgnoredFile(relPath)
+          || (configRel !== null && configMatcher!.matcher.isIgnoredFile(configRel))
+        ) {
+          continue;
+        }
         if (isCodeFile(entry.name)) {
           const kind = isTestOrSupportPath(relPath) ? 'test' : 'source';
           if (kind === 'test') {
@@ -265,7 +299,7 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
   const otherFileCount = otherFiles.length;
   const totalFiles = sourceFileCount + testFileCount + otherFileCount;
   if (sourceFileCount + testFileCount === 0) {
-    throw new Error('No supported Kotlin, TypeScript, or JavaScript files found in --source');
+    throw new Error('No supported Kotlin, TypeScript, or JavaScript files found');
   }
 
   const manifest: StructureManifest = {
@@ -286,12 +320,12 @@ export function readStructureInputs(options: ReadStructureOptions): LoadedStruct
       throw new Error(
         `Structural manifest and documents exceed 128 KiB (${totalBytes} / ${MAX_MANIFEST_BYTES} bytes: `
         + `${serializedBytes} manifest + ${docBytes} documents; ${fileBreakdown}). `
-        + 'Narrow --source to a smaller subtree or exclude paths with --ignore.',
+        + 'Narrow the target directory to a smaller subtree or exclude paths with --ignore.',
       );
     }
     throw new Error(
       `Structural manifest exceeds 128 KiB (${serializedBytes} / ${MAX_MANIFEST_BYTES} bytes; ${fileBreakdown}). `
-      + 'Narrow --source to a smaller subtree or exclude paths with --ignore.',
+      + 'Narrow the target directory to a smaller subtree or exclude paths with --ignore.',
     );
   }
   if (key && serialized.includes(key)) {

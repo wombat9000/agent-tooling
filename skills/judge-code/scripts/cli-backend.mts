@@ -6,9 +6,11 @@ import {
   DEFAULT_CLI_CONCURRENCY,
   passRate,
   prepareJudgeRun,
+  runMultiModuleJudge,
   runPerFileJudge,
   saveJson,
   type CodeRequest,
+  type FindingSeverity,
   type JudgeResult,
   type JudgeRunOptions,
   type Judgment,
@@ -28,7 +30,7 @@ const SYSTEM_PROMPT = [
   'Assess every check ID in `questions` independently against its `instructions`, `criteria.pass`, and `criteria.fail`.',
   'For each check, first write one concise sentence in `note` (at most 240 characters) stating the concrete evidence you observed, then choose:',
   '- "pass": clearly and solidly satisfies the criterion.',
-  '- "borderline": partial, mixed, or weak adherence (treated as not passing).',
+  '- "borderline": partial, mixed, or weak adherence (treated as a warning).',
   '- "fail": clearly violates the criterion.',
   'Return exactly one entry per check ID matching the required JSON schema.',
 ].join('\n');
@@ -75,8 +77,14 @@ export function adaptCliChecks(raw: unknown, questionIds: string[]): Record<stri
     }
     if (typeof item.note !== 'string') throw new Error(`Missing note for ${id}`);
     const note = item.note.trim();
+    const severity: FindingSeverity | undefined = choice === 'fail'
+      ? 'error'
+      : choice === 'borderline'
+        ? 'warning'
+        : undefined;
     return [id, {
       choice: choice === 'pass' ? 'pass' : 'fail',
+      ...(severity ? { severity } : {}),
       model_choice: choice,
       pass_probability: null,
       confidence: null,
@@ -163,7 +171,7 @@ function spawnCommandAsync(
 async function invokeCodex(
   prompt: string,
   schema: unknown,
-  responsePath: string,
+  responsePath: string | undefined,
 ): Promise<{ rawChecks: unknown; returnedModel: string }> {
   const scratch = mkdtempSync(join(tmpdir(), 'judge-code-codex-'));
   try {
@@ -187,7 +195,9 @@ async function invokeCodex(
     const rawOutput = existsSync(lastMessagePath)
       ? readFileSync(lastMessagePath, 'utf8')
       : (proc.stdout || proc.stderr || '');
-    writeFileSync(responsePath, rawOutput, { mode: 0o600 });
+    if (responsePath !== undefined) {
+      writeFileSync(responsePath, rawOutput, { mode: 0o600 });
+    }
     if (proc.status !== 0) {
       const detail = (proc.stderr || proc.stdout || '').trim().split('\n').slice(-3).join(' ');
       throw new Error(`codex CLI exited with status ${proc.status}${detail ? `: ${detail}` : ''}`);
@@ -207,7 +217,7 @@ async function invokeCodex(
 async function invokeClaude(
   prompt: string,
   schema: unknown,
-  responsePath: string,
+  responsePath: string | undefined,
 ): Promise<{ rawChecks: unknown; returnedModel: string }> {
   const args = [
     '-p',
@@ -221,7 +231,9 @@ async function invokeClaude(
   ];
   const proc = await spawnCommandAsync('claude', args, prompt, { ...process.env, MAX_THINKING_TOKENS: '0' });
   const rawOutput = proc.stdout || proc.stderr || '';
-  writeFileSync(responsePath, rawOutput, { mode: 0o600 });
+  if (responsePath !== undefined) {
+    writeFileSync(responsePath, rawOutput, { mode: 0o600 });
+  }
   if (proc.status !== 0) {
     const detail = (proc.stderr || proc.stdout || '').trim().split('\n').slice(-3).join(' ');
     throw new Error(`claude CLI exited with status ${proc.status}${detail ? `: ${detail}` : ''}`);
@@ -252,11 +264,21 @@ async function invokeClaude(
   return { rawChecks: structured, returnedModel };
 }
 
-/** Score a module, per-file scan, or project structure using the local codex or claude CLI. */
+/** Score a file scan, module bundle(s), or project structure using the local codex or claude CLI. */
 export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend): Promise<JudgeResult> {
   const model = backend === 'codex' ? CODEX_MODEL : CLAUDE_MODEL;
   const questionIds = Object.keys(options.rubric.questions);
   const schema = buildSchema(questionIds);
+
+  const invoke = async (request: CodeRequest, artifactDir?: string) => {
+    const prompt = buildPrompt(request);
+    const responsePath = artifactDir !== undefined ? join(artifactDir, 'response.txt') : undefined;
+    const invoked = backend === 'codex'
+      ? await invokeCodex(prompt, schema, responsePath)
+      : await invokeClaude(prompt, schema, responsePath);
+    const checks = adaptCliChecks(invoked.rawChecks, questionIds);
+    return { model: invoked.returnedModel, checks };
+  };
 
   if (options.mode === 'file') {
     return runPerFileJudge(
@@ -264,36 +286,35 @@ export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend)
       backend,
       null,
       DEFAULT_CLI_CONCURRENCY,
-      async (request, _body, fileDir) => {
-        const prompt = buildPrompt(request);
-        const responsePath = join(fileDir, 'response.txt');
-        const invoked = backend === 'codex'
-          ? await invokeCodex(prompt, schema, responsePath)
-          : await invokeClaude(prompt, schema, responsePath);
-        const checks = adaptCliChecks(invoked.rawChecks, questionIds);
-        return { model: invoked.returnedModel, checks };
-      },
+      (request, _body, fileDir) => invoke(request, fileDir),
     );
   }
 
+  if (options.modules && options.modules.length > 0) {
+    return runMultiModuleJudge(
+      { ...options, model },
+      backend,
+      null,
+      DEFAULT_CLI_CONCURRENCY,
+      (request, _body, moduleDir) => invoke(request, moduleDir),
+    );
+  }
+
+  const startMs = performance.now();
   const { out, request, result } = prepareJudgeRun({ ...options, model }, backend, null);
 
   if (!options.dryRun) {
     try {
-      const prompt = buildPrompt(request);
-      const responsePath = join(out, 'response.txt');
-      const invoked = backend === 'codex'
-        ? await invokeCodex(prompt, schema, responsePath)
-        : await invokeClaude(prompt, schema, responsePath);
-      const checks = adaptCliChecks(invoked.rawChecks, questionIds);
-      result.returned_model = invoked.returnedModel;
-      result.quality = { pass_rate: passRate(checks), checks };
+      const judged = await invoke(request, out);
+      result.returned_model = judged.model;
+      result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
     } catch (error) {
       result.status = 'error';
       result.error = error instanceof Error ? error.message : 'CLI judging failed';
     }
   }
 
-  saveJson(join(out, 'result.json'), result);
+  result.elapsed_ms = Math.round(performance.now() - startMs);
+  if (out !== undefined) saveJson(join(out, 'result.json'), result);
   return result;
 }
