@@ -797,3 +797,100 @@ test('scorecard CLI supports HTML dashboard, dry-run, help, and rejects bad subc
     assert.equal(res.status, 1, JSON.stringify(badArgs));
   }
 });
+
+test('--with-judge-code forwards OPENROUTER_API_KEY and skills/judge-code only when opted in, and fails fast without a key', (t) => {
+  const f = fixture(t);
+
+  // Default run keeps OPENROUTER_API_KEY strictly host-side and omits judge-code skill/args.
+  const defaultRun = f.run(['run', '--task', 'refactor-gilded-rose']);
+  assert.equal(defaultRun.status, 0, defaultRun.stderr);
+  const [defaultCall] = f.calls();
+  assert.equal(defaultCall.openrouterPresent, false);
+  assert.ok(!defaultCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.ok(!defaultCall.args.includes('--ae'));
+  assert.ok(!defaultCall.args.includes('--extra-instruction'));
+  assert.ok(defaultCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(defaultCall.args.includes(join(ROOT, 'evals/code-change/tasks/refactor-gilded-rose')));
+
+  // Missing OPENROUTER_API_KEY fails fast before launching Harbor.
+  for (const args of [
+    ['run', '--task', 'refactor-gilded-rose', '--with-judge-code'],
+    ['run', '--task', 'refactor-gilded-rose', '--baseline', '--with-judge-code'],
+    ['canary', '--with-judge-code'],
+  ]) {
+    const missingKey = f.run(args, { OPENROUTER_API_KEY: '' });
+    assert.equal(missingKey.status, 1, JSON.stringify(args));
+    assert.match(missingKey.stderr, /OPENROUTER_API_KEY/);
+  }
+  assert.equal(f.calls().length, 1, 'missing OPENROUTER_API_KEY must fail before launching Harbor');
+
+  // Opt-in skill + judge-code mounts both skills, templates OPENROUTER_API_KEY via --ae, and appends instruction note.
+  const skillWithJudge = f.run(['run', '--task', 'refactor-gilded-rose', '--with-judge-code']);
+  assert.equal(skillWithJudge.status, 0, skillWithJudge.stderr);
+  const skillCall = f.calls()[1];
+  assert.equal(skillCall.openrouterPresent, true);
+  assert.ok(skillCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(skillCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.ok(skillCall.args.includes('OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'));
+  assert.ok(!skillCall.args.some((arg) => arg.includes('fake-judge-key')), 'raw key must never appear in Harbor argv');
+  const jobName = skillCall.args[skillCall.args.indexOf('--job-name') + 1];
+  assert.match(jobName, /^run-skill-with-judge-code-/);
+  const extraInstruction = skillCall.args[skillCall.args.indexOf('--extra-instruction') + 1];
+  assert.match(extraInstruction, /judge-code/);
+  assert.match(extraInstruction, /module/);
+
+  // Opt-in --baseline --with-judge-code mounts ONLY skills/judge-code (omits skills/code-change).
+  const baselineWithJudge = f.run(['run', '--task', 'refactor-gilded-rose', '--baseline', '--with-judge-code']);
+  assert.equal(baselineWithJudge.status, 0, baselineWithJudge.stderr);
+  const baselineCall = f.calls()[2];
+  assert.equal(baselineCall.openrouterPresent, true);
+  assert.ok(!baselineCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(baselineCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.ok(baselineCall.args.includes('OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'));
+  assert.match(baselineCall.args[baselineCall.args.indexOf('--job-name') + 1], /^run-baseline-with-judge-code-/);
+
+  // Canary supports --with-judge-code too, and --dry-run never leaks OPENROUTER_API_KEY.
+  const canaryWithJudge = f.run(['canary', '--with-judge-code']);
+  assert.equal(canaryWithJudge.status, 0, canaryWithJudge.stderr);
+  const canaryCall = f.calls()[3];
+  assert.equal(canaryCall.openrouterPresent, true);
+  assert.ok(canaryCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(canaryCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.match(canaryCall.args[canaryCall.args.indexOf('--job-name') + 1], /^canary-skill-with-judge-code-/);
+
+  const dryRun = f.run(['run', '--task', 'refactor-gilded-rose', '--with-judge-code', '--dry-run'], { OPENROUTER_API_KEY: 'super-secret-value' });
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  assert.ok(!dryRun.stdout.includes('super-secret-value'));
+  const parsedDry = JSON.parse(dryRun.stdout);
+  assert.ok(parsedDry.args.includes('OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'));
+
+  const help = f.run(['--help']);
+  assert.match(help.stdout, /--with-judge-code/);
+});
+
+test('judge summary and HTML report record with_judge_code condition metadata for both skill and baseline runs', (t) => {
+  const f = fixture(t);
+  for (const [jobName, skills, expectedCondition, expectedBadge] of [
+    ['run-skill-with-judge-code-11111111-2222-3333-4444-555555555555', ['/skills/code-change', '/skills/judge-code'], 'skill', 'Skill + judge-code'],
+    ['run-baseline-with-judge-code-11111111-2222-3333-4444-555555555555', ['/skills/judge-code'], 'baseline', 'Baseline + judge-code'],
+  ] as const) {
+    const job = join(f.root, jobName);
+    mkdirSync(job);
+    writeFileSync(join(job, 'config.json'), JSON.stringify({
+      agents: [{ name: 'codex', model_name: 'openai/gpt-6.1-terra', skills }],
+    }));
+    writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-01-01T00:00:00', n_total_trials: 1 }));
+    const trialSrc = join(job, 'refactor-gilded-rose__one/artifacts/workspace/src');
+    mkdirSync(trialSrc, { recursive: true });
+    writeFileSync(join(trialSrc, 'gilded-rose.ts'), 'export class Item {}\n');
+
+    const out = join(f.root, `judge-${expectedCondition}`);
+    const judged = f.run(['judge', '--run', job, '--out', out, '--dry-run'], { OPENROUTER_API_KEY: '' });
+    assert.equal(judged.status, 0, judged.stderr);
+    const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+    assert.equal(summary.condition, expectedCondition);
+    assert.equal(summary.with_judge_code, true);
+    const html = readFileSync(join(out, 'report.html'), 'utf8');
+    assert.ok(html.includes(expectedBadge), `Expected HTML report badge "${expectedBadge}"`);
+  }
+});

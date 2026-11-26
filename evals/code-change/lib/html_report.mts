@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { highlightKotlinLines } from './highlight_kotlin.mts';
 import { highlightTypeScriptLines } from './highlight_typescript.mts';
+import { formatConditionBadge, inspectHarborRunCondition, type BaseRunCondition } from './run_condition.mts';
 import { escapeHtml } from './source_tokens.mts';
 
 interface Check {
@@ -97,43 +98,29 @@ interface RunMetadata {
   agent: string | null;
 }
 
-function readRunMetadata(source: string): RunMetadata {
-  const name = basename(source);
-  let condition: RunMetadata['condition'] = null;
-  let agent: string | null = null;
-  const configPath = join(source, 'config.json');
-  if (existsSync(configPath)) {
-    try {
-      const config = readJson(configPath);
-      const firstAgent = Array.isArray(config.agents) ? config.agents[0] : null;
-      if (firstAgent && typeof firstAgent === 'object') {
-        const agentName = typeof firstAgent.name === 'string' ? firstAgent.name : null;
-        const modelName = typeof firstAgent.model_name === 'string' ? firstAgent.model_name : null;
-        const effort = typeof firstAgent.kwargs?.reasoning_effort === 'string' ? firstAgent.kwargs.reasoning_effort : null;
-        const skills = Array.isArray(firstAgent.skills) ? firstAgent.skills : [];
-        if (agentName) {
-          const details = [modelName, effort].filter(Boolean).join(', ');
-          agent = details ? `${agentName} (${details})` : agentName;
-        }
-        if (agentName === 'oracle') condition = { label: 'Oracle', kind: 'oracle' };
-        else if (skills.length > 0) condition = { label: 'Skill', kind: 'skill' };
-        else if (agentName) condition = { label: 'Baseline', kind: 'baseline' };
-      }
-    } catch {
-      // Optional metadata; fall back to folder name heuristics.
-    }
-  }
-  if (!condition) {
-    if (name.startsWith('run-skill-') || name.startsWith('canary-')) condition = { label: 'Skill', kind: 'skill' };
-    else if (name.startsWith('run-baseline-')) condition = { label: 'Baseline', kind: 'baseline' };
-    else if (name.startsWith('oracle-')) condition = { label: 'Oracle', kind: 'oracle' };
-  }
-  return { condition, agent };
+function readRunMetadata(
+  source: string,
+  summary?: { condition?: unknown; with_judge_code?: unknown } | null,
+): RunMetadata {
+  const inspected = inspectHarborRunCondition(source);
+  const summaryCondition: BaseRunCondition | null =
+    summary?.condition === 'skill'
+    || summary?.condition === 'baseline'
+    || summary?.condition === 'oracle'
+    || summary?.condition === 'nop'
+      ? summary.condition
+      : null;
+  const baseCondition = inspected.baseCondition ?? summaryCondition;
+  const withJudgeCode = inspected.withJudgeCode || summary?.with_judge_code === true;
+  return {
+    condition: formatConditionBadge(baseCondition, withJudgeCode),
+    agent: inspected.agentSummary,
+  };
 }
 
 function shortRunId(source: string): string {
   const name = basename(source);
-  const match = /^(run-skill|run-baseline|oracle|canary|nop)-([0-9a-f]{8})-/i.exec(name);
+  const match = /^(run-skill-with-judge-code|run-baseline-with-judge-code|canary-skill-with-judge-code|canary-baseline-with-judge-code|run-skill|run-baseline|oracle|canary|nop)-([0-9a-f]{8})-/i.exec(name);
   return match ? `${match[1]}-${match[2]}` : name;
 }
 
@@ -167,7 +154,7 @@ function loadTrials(directory: string): { source: string; model: string; scope: 
     source,
     model: summary?.model ?? trials[0].result?.requested_model ?? trials[0].request?.model ?? 'Unknown',
     scope: summary?.scope ?? trials[0].result?.scope ?? trials[0].request?.state.scope ?? null,
-    meta: readRunMetadata(source),
+    meta: readRunMetadata(source, summary),
     trials,
   };
 }

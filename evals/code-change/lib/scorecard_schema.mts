@@ -46,6 +46,7 @@ export interface ScorecardEntry {
   agent_model: string;
   judge_model: string;
   scope: ScorecardScope;
+  with_judge_code?: boolean;
   rubric: string;
   rubric_groups?: Record<string, string[]>;
   trials: {
@@ -141,6 +142,7 @@ function normalizeEntry(entry: ScorecardEntry): ScorecardEntry {
     agent_model: entry.agent_model,
     judge_model: entry.judge_model,
     scope: entry.scope,
+    ...(entry.with_judge_code === true ? { with_judge_code: true } : {}),
     rubric: entry.rubric,
     ...(entry.rubric_groups && Object.keys(entry.rubric_groups).length > 0
       ? {
@@ -272,6 +274,14 @@ function validateEntry(raw: unknown, condition: ScorecardCondition, label: strin
   }
   const scope: ScorecardScope = obj.scope;
 
+  let with_judge_code: boolean | undefined;
+  if (obj.with_judge_code !== undefined) {
+    if (typeof obj.with_judge_code !== 'boolean') {
+      throw new Error(`${label}.with_judge_code must be a boolean`);
+    }
+    if (obj.with_judge_code) with_judge_code = true;
+  }
+
   const rubric = asNonEmptyString(obj.rubric, `${label}.rubric`);
   rejectUnsafePathsOrUuids(rubric, `${label}.rubric`);
 
@@ -402,6 +412,7 @@ function validateEntry(raw: unknown, condition: ScorecardCondition, label: strin
     agent_model,
     judge_model,
     scope,
+    ...(with_judge_code ? { with_judge_code } : {}),
     rubric,
     ...(rubric_groups ? { rubric_groups } : {}),
     trials: { total, scored, errored },

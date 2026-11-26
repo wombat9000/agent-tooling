@@ -18,6 +18,8 @@ pnpm eval smoke             # Docker: oracle must score 1, nop must score 0
 pnpm eval canary            # One Codex trial with the skill
 pnpm eval run               # All tasks with the skill: 5 attempts each, 2 concurrent
 pnpm eval run --baseline    # Same settings without the skill
+pnpm eval run --task refactor-gilded-rose --with-judge-code           # Opt-in: mount skills/judge-code + forward OPENROUTER_API_KEY
+pnpm eval run --task refactor-gilded-rose --baseline --with-judge-code # Opt-in: test judge-code alone without code-change
 ```
 
 Codex defaults to `openai/gpt-6.1-terra`, Fast service (`priority`), high reasoning effort,
@@ -83,8 +85,16 @@ prints a `pnpm eval judge --resume <judge-dir>` command to continue in-place. Re
 the saved `summary.json`, keeps all already-`scored` trials untouched, re-runs only `error`
 and `pending` trials with the original run, model, target, and scope settings, and regenerates
 `summary.json` and `report.html`. `eval-results/` and Harbor's
-older `jobs/` directory are ignored by Git; existing results are retained. OpenRouter keys
-are used only for host-side judging and are not passed to Harbor by this wrapper.
+older `jobs/` directory are ignored by Git; existing results are retained. By default, OpenRouter
+keys are used only for host-side judging and are never passed to Harbor containers. Pass the opt-in
+`--with-judge-code` flag to `pnpm eval run` or `pnpm eval canary` (with `OPENROUTER_API_KEY` set on
+the host) to mount `skills/judge-code` into the container, forward `OPENROUTER_API_KEY` into the
+agent runtime environment (via Harbor's `--ae OPENROUTER_API_KEY=${OPENROUTER_API_KEY}` template so
+the raw secret is never written to CLI args or `config.json`), and append an instruction note
+inviting the agent to lint its production code (per-file and `module`) and iterate until clean.
+`--with-judge-code` combines cleanly with both the default `code-change` skill condition and
+`--baseline` (to evaluate `judge-code` standalone), and condition metadata is recorded in judge
+summaries, HTML reports, and scorecards.
 
 Use `--model ID` or `EVAL_MODEL` to change the Codex model. Use `--effort LEVEL` and
 `--service-tier TIER` to override the reasoning effort and service tier. These defaults apply
@@ -122,6 +132,7 @@ passed, it keeps `N` and still prints a short warning.
 | `implement-meeting-room-booking` | Implementation | Builds a Kotlin Spring Boot API from a Gradle-only starter, using JDBC and in-memory H2 for booking, rescheduling, cancellation, and listing. Hidden tests check HTTP behavior, persisted rows, and concurrent conflicts. |
 | `extend-invoice-disputes` | Implementation | Extends an existing working Kotlin Spring Boot + JDBC + H2 invoice billing service with an invoice dispute workflow, validation matrix, 30-day cutoff, outbound notifications, and concurrent open/resolve conflict protection. |
 | `implement-react-router-todo` | Implementation | Builds a TypeScript React Router todo app with pnpm, route-based filters, and browser-local persistence. Hidden Playwright tests exercise the production build. |
+| `refactor-gilded-rose` | Refactoring | Refactors legacy TypeScript Gilded Rose inventory code, adds `Conjured` item support while preserving public `Item` / `GildedRose` API compatibility, and adds unit tests under `tests/`. |
 
 Review tasks ask the agent to write `/output/REVIEW.md` and grade report structure and finding
 labels deterministically. Implementation tasks export `/workspace/src` and check the build,
@@ -145,6 +156,9 @@ lib/judge_code.mts         scores exported production source code (whole or per-
 lib/judge_code.test.mts    offline tests of code judging, per-file aggregation, and failure handling
 lib/highlight_kotlin.mts   zero-dependency build-time Kotlin syntax highlighting
 lib/highlight_typescript.mts  zero-dependency build-time TypeScript and TSX syntax highlighting
+lib/run_condition.mts      shared run-condition metadata detection and opt-in judge-code prompt helper
+lib/amp_agent.py           experimental Amp-in-Harbor adapter (with opt-in with_judge_code support)
+lib/amp_agent_test.py      offline Python unit tests for AmpAgent key isolation and judge-code opt-in
 lib/html_report.mts        standalone HTML report from saved rubric questions, judge scores, and artifacts
 lib/scorecard_schema.mts   per-task scorecard JSON schema, canonical serialization, and strict validation
 lib/scorecard_hashes.mts   working-tree and git-ref content hashing (skill/task/rubric) and staleness rules
@@ -188,13 +202,15 @@ tasks/<task>/
 | `contract_tests_pass` | The task's hidden JUnit tests pass offline |
 | `reward` | Every metric above is 1 |
 
-**TypeScript implementation task:**
+**TypeScript implementation & refactoring tasks:**
 
 | Metric | 1 means |
 |---|---|
-| `build_pass` | `pnpm build` type-checks and builds the app |
-| `agent_tests_pass` | At least one agent Playwright test runs and the suite passes |
-| `contract_tests_pass` | The hidden Playwright tests pass against the production build |
+| `has_production_code` | At least one nonempty `.ts` file exists under `src/` (`refactor-gilded-rose`) |
+| `has_tests` | At least one nonempty `.ts` file exists under `tests/` (`refactor-gilded-rose`) |
+| `typecheck_pass` / `build_pass` | `pnpm typecheck` (`refactor-gilded-rose`) or `pnpm build` (`implement-react-router-todo`) passes |
+| `agent_tests_pass` | At least one agent test runs and the suite passes |
+| `contract_tests_pass` | The hidden verifier tests pass |
 | `reward` | Every metric above is 1 |
 
 These deterministic scores measure compliance and correctness, not qualitative review reasoning
@@ -260,12 +276,23 @@ PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
   harbor run -p evals/code-change/tasks/implement-mars-rover -a amp_agent:AmpAgent \
   -m openai/gpt-6.1-terra --ak reasoning_effort=high -n 1 -k 1 \
   --skill skills/code-change -o eval-results/harbor --job-name amp-mars-rover
+
+# Opt-in Amp run with judge-code (requires OPENROUTER_API_KEY in host env; omit --skill skills/code-change for baseline + judge-code)
+PYTHONPATH="$PWD/evals/code-change/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  harbor run -p evals/code-change/tasks/refactor-gilded-rose -a amp_agent:AmpAgent \
+  -m openai/gpt-6.1-terra --ak reasoning_effort=high --ak with_judge_code=true -n 1 -k 1 \
+  --skill skills/code-change --skill skills/judge-code \
+  --ae 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}' \
+  -o eval-results/harbor --job-name amp-gilded-rose-with-judge-code
 ```
 
 Use a fresh job name for each run. Add `--install-only` to check container installation and
 skill registration without credentials or inference. Amp is installed with npm at setup time;
 use `--ak version=<npm-version>` to pin its version. Supplied skills are copied into Amp's
-user skill directory without changing the task prompt. The adapter enables automatic tool
+user skill directory without changing the task prompt. By default, `AmpAgent` never forwards
+host `OPENROUTER_API_KEY`; pass `--ak with_judge_code=true` (and `--skill skills/judge-code`,
+optionally paired with `--ae 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'`) to opt into in-container
+`judge-code` linting and append the self-check instruction note. The adapter enables automatic tool
 approval inside the disposable container and saves native stream logs under `agent/`.
 It does not yet export Harbor's normalized trajectory or token/cost metrics. Keep Amp results
 separate from Codex results; `pnpm eval run` and automatic latest-run discovery remain Codex-only.

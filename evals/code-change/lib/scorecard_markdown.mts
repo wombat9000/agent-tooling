@@ -168,8 +168,9 @@ function renderTaskDetailsSection(row: TaskTargetRow): string {
       `task=\`${e.hashes.task_hash}\``,
       `rubric=\`${e.hashes.rubric_hash}\``,
     ].filter(Boolean).join(', ');
+    const condLabel = e.with_judge_code ? `${label} + judge-code` : label;
     lines.push(
-      `- **${label}** (${formatStalenessLabel(view)}): `
+      `- **${condLabel}** (${formatStalenessLabel(view)}): `
       + `${pct(e.quality.pass_rate)} pass rate, P(pass)=${pct(e.quality.mean_pass_probability)}, `
       + `reward ${det}, n=${e.trials.scored}/${e.trials.total}, `
       + `agent \`${e.agent_model}\`, judge \`${e.judge_model}\` (${e.scope}), `

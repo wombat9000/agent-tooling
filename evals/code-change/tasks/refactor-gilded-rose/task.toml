@@ -1,0 +1,17 @@
+schema_version = "1.4"
+artifacts = ["/workspace/src", "/workspace/tests"]
+
+[task]
+name = "agent-tooling/code-change-refactor-gilded-rose"
+description = "Refactor the legacy Gilded Rose inventory module in TypeScript, add Conjured item support, and write unit tests."
+keywords = ["code-change", "refactor", "typescript", "gilded-rose"]
+
+[environment]
+skills_dir = "/skills"
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 1800
+
+[verifier]
+timeout_sec = 300

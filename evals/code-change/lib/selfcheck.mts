@@ -165,3 +165,32 @@ test('CLI writes reward.json and stdout for present and missing reports; bad arg
     rmSync(out, { recursive: true, force: true });
   }
 });
+
+test('refactor-gilded-rose task declares standard TypeScript production and unit-test rubrics', () => {
+  const dir = join(TASKS, 'refactor-gilded-rose');
+  assert.ok(existsSync(join(dir, 'task.toml')));
+  assert.ok(existsSync(join(dir, 'environment/Dockerfile')));
+  assert.ok(existsSync(join(dir, 'environment/base/src/gilded-rose.ts')));
+  assert.ok(existsSync(join(dir, 'environment/base/tests/gilded-rose.test.ts')));
+  assert.ok(existsSync(join(dir, 'tests/contract.test.ts')));
+  assert.ok(existsSync(join(dir, 'solution/reference/src/gilded-rose.ts')));
+  assert.equal(taskSourceRoot(dir), 'src');
+  assert.equal(taskTestRoot(dir), 'tests');
+
+  const prodRubric = parseRubric(dir, '');
+  assert.equal(prodRubric.target, 'production_code');
+  assert.deepEqual(
+    Object.keys(prodRubric.groups ?? {}),
+    ['domain-modelling', 'readability', 'module-design', 'solid', 'fowler-smells'],
+  );
+
+  const testRubric = parseTestRubric(dir, '');
+  assert.equal(testRubric.target, 'test_code');
+  assert.deepEqual(Object.keys(testRubric.groups ?? {}), ['testing-core', 'testing-unit']);
+});
+
+test('AmpAgent Python unit tests pass offline', () => {
+  const result = spawnSync('python3', [join(LIB, 'amp_agent_test.py')], { encoding: 'utf8' });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});

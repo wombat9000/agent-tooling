@@ -1,6 +1,7 @@
 /** Record saved judge batch directories into checked-in per-task scorecard JSON files. */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { inspectHarborJobName, inspectHarborRunCondition } from './run_condition.mts';
 import {
   computeSkillHash,
   computeTaskHash,
@@ -60,6 +61,8 @@ interface BatchSummaryJson {
   model: string;
   scope?: ScorecardScope;
   target?: ScorecardTarget;
+  condition?: string;
+  with_judge_code?: boolean;
   reports: BatchReportItem[];
 }
 
@@ -121,43 +124,34 @@ function findHarborRunDir(judgeDir: string, sourceRun?: string): string | null {
 
 interface HarborRunMeta {
   condition: ScorecardCondition | null;
+  withJudgeCode: boolean;
   isOracleOrNop: boolean;
   agentModel: string | null;
   finishedDate: string | null;
 }
 
-function inspectHarborRun(judgeDir: string, sourceRun?: string): HarborRunMeta {
+function inspectHarborRun(
+  judgeDir: string,
+  sourceRun?: string,
+  summary?: { condition?: string; with_judge_code?: boolean },
+): HarborRunMeta {
   const harborDir = findHarborRunDir(judgeDir, sourceRun);
   let condition: ScorecardCondition | null = null;
+  let withJudgeCode = summary?.with_judge_code === true;
   let isOracleOrNop = false;
   let agentModel: string | null = null;
   let finishedDate: string | null = null;
 
   if (harborDir) {
-    const configPath = join(harborDir, 'config.json');
-    if (existsSync(configPath)) {
-      try {
-        const config = readJson(configPath) as {
-          agents?: Array<{ name?: string; model_name?: string; skills?: unknown[] }>;
-        };
-        const agent = Array.isArray(config.agents) ? config.agents[0] : undefined;
-        if (agent) {
-          if (agent.name === 'oracle' || agent.name === 'nop') {
-            isOracleOrNop = true;
-          } else {
-            if (typeof agent.model_name === 'string' && agent.model_name.trim()) {
-              agentModel = agent.model_name.trim();
-            } else if (typeof agent.name === 'string' && agent.name.trim()) {
-              agentModel = agent.name.trim();
-            }
-            const skills = Array.isArray(agent.skills) ? agent.skills : [];
-            condition = skills.length > 0 ? 'skill' : 'baseline';
-          }
-        }
-      } catch {
-        // Fall through to folder-name heuristics.
-      }
+    const inspected = inspectHarborRunCondition(harborDir);
+    if (inspected.baseCondition === 'oracle' || inspected.baseCondition === 'nop') {
+      isOracleOrNop = true;
+    } else if (inspected.baseCondition === 'skill' || inspected.baseCondition === 'baseline') {
+      condition = inspected.baseCondition;
     }
+    if (inspected.withJudgeCode) withJudgeCode = true;
+    if (inspected.agentModel) agentModel = inspected.agentModel;
+
     const resultPath = join(harborDir, 'result.json');
     if (existsSync(resultPath)) {
       try {
@@ -172,17 +166,23 @@ function inspectHarborRun(judgeDir: string, sourceRun?: string): HarborRunMeta {
   }
 
   const runName = sourceRun ? basename(sourceRun) : basename(dirname(judgeDir));
-  if (!condition && !isOracleOrNop && runName) {
-    if (runName.startsWith('oracle-') || runName.startsWith('nop-')) {
-      isOracleOrNop = true;
-    } else if (runName.startsWith('run-skill-') || runName.startsWith('canary-skill-') || runName.startsWith('canary-')) {
-      condition = 'skill';
-    } else if (runName.startsWith('run-baseline-')) {
-      condition = 'baseline';
+  if (runName) {
+    const nameHint = inspectHarborJobName(runName);
+    if (nameHint.withJudgeCode) withJudgeCode = true;
+    if (!condition && !isOracleOrNop) {
+      if (nameHint.baseCondition === 'oracle' || nameHint.baseCondition === 'nop') {
+        isOracleOrNop = true;
+      } else if (nameHint.baseCondition === 'skill' || nameHint.baseCondition === 'baseline') {
+        condition = nameHint.baseCondition;
+      }
     }
   }
 
-  return { condition, isOracleOrNop, agentModel, finishedDate };
+  if (!condition && !isOracleOrNop && (summary?.condition === 'skill' || summary?.condition === 'baseline')) {
+    condition = summary.condition;
+  }
+
+  return { condition, withJudgeCode, isOracleOrNop, agentModel, finishedDate };
 }
 
 function resolveTrialResultDir(judgeDir: string, report: BatchReportItem): string {
@@ -271,6 +271,7 @@ function buildEntryFromTrials(params: {
   agentModel: string;
   judgeModel: string;
   scope: ScorecardScope;
+  withJudgeCode?: boolean;
   recordedAt: string;
   trials: Array<{ status: string; result: SavedTrialResult | null; deterministic: Record<string, number> }>;
 }): ScorecardEntry {
@@ -285,6 +286,7 @@ function buildEntryFromTrials(params: {
     agentModel,
     judgeModel,
     scope,
+    withJudgeCode,
     recordedAt,
     trials,
   } = params;
@@ -372,6 +374,7 @@ function buildEntryFromTrials(params: {
     agent_model: agentModel,
     judge_model: judgeModel,
     scope,
+    ...(withJudgeCode ? { with_judge_code: true } : {}),
     rubric,
     ...(rubricGroups ? { rubric_groups: rubricGroups } : {}),
     trials: {
@@ -429,7 +432,7 @@ export function recordJudgeBatches(options: RecordJudgeBatchOptions): RecordedEn
     }
 
     const harborDir = findHarborRunDir(judgeDir, summary.source_run);
-    const harborMeta = inspectHarborRun(judgeDir, summary.source_run);
+    const harborMeta = inspectHarborRun(judgeDir, summary.source_run, summary);
 
     if (harborMeta.isOracleOrNop && !options.condition) {
       throw new Error(`Refusing to record oracle/nop smoke run from ${judgeDir}. Scorecards track skill and baseline agent runs.`);
@@ -494,6 +497,7 @@ export function recordJudgeBatches(options: RecordJudgeBatchOptions): RecordedEn
         agentModel,
         judgeModel,
         scope: bucket.scope,
+        withJudgeCode: harborMeta.withJudgeCode,
         recordedAt,
         trials: bucket.trials,
       });

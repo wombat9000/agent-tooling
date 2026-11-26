@@ -226,10 +226,11 @@ function renderConditionCard(label: string, view: EvaluatedEntryView | null): st
       .join('')
     : '';
   const refBadge = e.source?.git_ref ? `<span class="chip">git ${escape(e.source.git_ref)}</span>` : '';
+  const judgeCodeBadge = e.with_judge_code ? '<span class="chip">+judge-code</span>' : '';
   const condCls = view.condition === 'skill' ? 'cond-skill' : 'cond-baseline';
   return `<div class="cond-card">
     <div class="cond-card-head">
-      <div class="cond-title-group"><span class="cond-badge ${condCls}">${escape(label)}</span>${freshnessBadgeHtml(view)}</div>
+      <div class="cond-title-group"><span class="cond-badge ${condCls}">${escape(label)}</span>${judgeCodeBadge}${freshnessBadgeHtml(view)}</div>
       <span class="muted numeric">${escape(e.recorded_at)}</span>
     </div>
     <div class="cond-metrics">
