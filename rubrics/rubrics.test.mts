@@ -226,16 +226,16 @@ test('runRubricHarness runs dual file+module modes narrowed to expected checks, 
     expect: { direct_readability: 'pass' },
   }));
 
-  // Fixture 2: module-scoped check (open_closed) in a 2-file module (rubric solid has 5 checks total).
+  // Fixture 2: module-scoped check (liskov_substitution) in a 2-file module (rubric solid has 5 checks total).
   writeFileSync(join(fixturesDir, 'module-rule-bad.json'), JSON.stringify({
     id: 'module-rule-bad',
     description: '2-file fixture for module-scoped check',
     rubric: 'solid',
     files: {
-      'states.ts': ["export type Phase = 'a' | 'b';"],
-      'engine.ts': ["export const next = (p: string) => (p === 'a' ? 'b' : 'a');"],
+      'base.ts': ['export interface Store { delete(id: string): void; }'],
+      'readonly.ts': ["import type { Store } from './base'; export class ReadOnlyStore implements Store { delete() { throw new Error('unsupported'); } }"],
     },
-    expect: { open_closed: 'fail' },
+    expect: { liskov_substitution: 'fail' },
   }));
 
   interface CapturedReq {
@@ -265,7 +265,7 @@ test('runRubricHarness runs dual file+module modes narrowed to expected checks, 
           const p = fileCount === 1 ? 0.91 : 0.96;
           return [id, { type: 'choice', choice: 'pass', probabilities: { pass: p, fail: Number((1 - p).toFixed(4)) }, confidence: 0.9 }];
         }
-        // For open_closed (module-scoped, expected fail): file mode wrongly says pass (0.88), module mode rightly says fail (0.12).
+        // For liskov_substitution (module-scoped, expected fail): file mode wrongly says pass (0.88), module mode rightly says fail (0.12).
         const p = fileCount === 1 ? 0.88 : 0.12;
         return [id, {
           type: 'choice',
@@ -283,26 +283,26 @@ test('runRubricHarness runs dual file+module modes narrowed to expected checks, 
   for (const req of captured) {
     assert.equal(req.questionIds.length, 1, `Expected narrowed 1-question request, got ${req.questionIds.join(',')}`);
   }
-  // Verify file mode ran for module-scoped open_closed too (2 files x 2 repeats = 4 single-file calls) with jev-1.14!
-  const openClosedFileReqs = captured.filter((r) => r.questionIds[0] === 'open_closed' && r.fileCount === 1);
-  const openClosedModuleReqs = captured.filter((r) => r.questionIds[0] === 'open_closed' && r.fileCount === 2);
-  assert.equal(openClosedFileReqs.length, 4);
-  assert.equal(openClosedModuleReqs.length, 2);
-  assert.ok(openClosedFileReqs.every((r) => r.model === DEFAULT_FILE_MODE_DECISION_MODEL));
-  assert.ok(openClosedModuleReqs.every((r) => r.model === DEFAULT_DECISION_MODEL));
+  // Verify file mode ran for module-scoped liskov_substitution too (2 files x 2 repeats = 4 single-file calls) with jev-1.14!
+  const lspFileReqs = captured.filter((r) => r.questionIds[0] === 'liskov_substitution' && r.fileCount === 1);
+  const lspModuleReqs = captured.filter((r) => r.questionIds[0] === 'liskov_substitution' && r.fileCount === 2);
+  assert.equal(lspFileReqs.length, 4);
+  assert.equal(lspModuleReqs.length, 2);
+  assert.ok(lspFileReqs.every((r) => r.model === DEFAULT_FILE_MODE_DECISION_MODEL));
+  assert.ok(lspModuleReqs.every((r) => r.model === DEFAULT_DECISION_MODEL));
 
-  // Verify gating: overall report PASSED because module-scoped open_closed passed in module mode (file mode is informational).
+  // Verify gating: overall report PASSED because module-scoped liskov_substitution passed in module mode (file mode is informational).
   assert.equal(report.status, 'passed');
   assert.equal(report.fixtures_passed, 2);
   assert.equal(report.checks_passed, 2);
 
-  const openClosedCheck = report.fixtures.find((f) => f.id === 'module-rule-bad')!.checks[0];
-  assert.equal(openClosedCheck.declared_scope, 'module');
-  assert.equal(openClosedCheck.passed, true);
-  assert.equal(openClosedCheck.file?.enforced, false);
-  assert.equal(openClosedCheck.file?.passed, false);
-  assert.equal(openClosedCheck.module?.enforced, true);
-  assert.equal(openClosedCheck.module?.passed, true);
+  const lspCheck = report.fixtures.find((f) => f.id === 'module-rule-bad')!.checks[0];
+  assert.equal(lspCheck.declared_scope, 'module');
+  assert.equal(lspCheck.passed, true);
+  assert.equal(lspCheck.file?.enforced, false);
+  assert.equal(lspCheck.file?.passed, false);
+  assert.equal(lspCheck.module?.enforced, true);
+  assert.equal(lspCheck.module?.passed, true);
 
   // Case 2: file-scoped check fails when file mode passes on repeat 1 and flips to fail on repeat 2 (even if module mode passes).
   let fileCall = 0;
@@ -386,7 +386,7 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   withFakeApiKey(t);
 
   const pairs: Array<{ id: string; rubric: string; check: string }> = [
-    { id: 'oc', rubric: 'solid', check: 'open_closed' },
+    { id: 'inv', rubric: 'domain-modelling', check: 'domain_invariants' },
     { id: 'lsp', rubric: 'solid', check: 'liskov_substitution' },
     { id: 'isp', rubric: 'solid', check: 'interface_segregation' },
     { id: 'dip', rubric: 'solid', check: 'dependency_inversion' },
@@ -407,7 +407,7 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   }
 
   // Outcomes by check:
-  // - open_closed (declared module): both file and module discriminate -> 'both' + promote_hint=true
+  // - domain_invariants (declared module): both file and module discriminate -> 'both' + promote_hint=true
   // - liskov_substitution (declared module): module discriminates, file misses bad -> 'module-only'
   // - interface_segregation (declared module): file discriminates, module misses bad -> 'file-only'
   // - dependency_inversion (declared module): neither discriminates -> 'neither'
@@ -427,7 +427,7 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
 
       let passProb = 0.95;
       if (isBad) {
-        if (checkId === 'open_closed') passProb = 0.10;
+        if (checkId === 'domain_invariants') passProb = 0.10;
         else if (checkId === 'liskov_substitution') passProb = isFileMode ? 0.92 : 0.12;
         else if (checkId === 'interface_segregation') passProb = isFileMode ? 0.15 : 0.91;
         else if (checkId === 'dependency_inversion') passProb = 0.89;
@@ -448,8 +448,8 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   });
 
   const byCheck = new Map(report.criteria_matrix.map((row) => [row.check_id, row]));
-  assert.equal(byCheck.get('open_closed')?.classification, 'both');
-  assert.equal(byCheck.get('open_closed')?.promote_hint, true);
+  assert.equal(byCheck.get('domain_invariants')?.classification, 'both');
+  assert.equal(byCheck.get('domain_invariants')?.promote_hint, true);
   assert.equal(byCheck.get('liskov_substitution')?.classification, 'module-only');
   assert.equal(byCheck.get('liskov_substitution')?.promote_hint, false);
   assert.equal(byCheck.get('interface_segregation')?.classification, 'file-only');
@@ -459,7 +459,7 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   assert.match(rendered, /File \(P\)/);
   assert.match(rendered, /Module \(P\)/);
   assert.match(rendered, /Scope Signal Matrix:/);
-  assert.match(rendered, /open_closed.*both \(promote\?\)/);
+  assert.match(rendered, /domain_invariants.*both \(promote\?\)/);
   assert.match(rendered, /liskov_substitution.*module-only/);
   assert.match(rendered, /interface_segregation.*file-only/);
   assert.match(rendered, /dependency_inversion.*neither/);

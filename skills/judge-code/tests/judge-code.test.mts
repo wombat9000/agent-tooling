@@ -159,11 +159,11 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
     assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels \[file\], cohesive_resource_boundaries \[module\]/);
     assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state \[file\], domain_invariants \[module\], boundary_separation \[module\]/);
     assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\].*no_primitive_obsession \[file, >=0\.60\]/);
-    assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[module\]/);
+    assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[file\]/);
     assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
     assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
     assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=0\.60\]/);
-    assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[module\], open_closed \[module\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
+    assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
   }
 
   const badList = run('reject', ['list', 'extra-arg']);
@@ -174,10 +174,10 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
 test('default file-by-file linter accepts positional paths, runs all file-scoped checks with jev-1.14, needs no --out, and rejects legacy flags', (t) => {
   const { run, root } = setup(t);
 
-  // Default dry-run without --out writes no files and runs all 14 bundled file-scoped checks with typesafe/jev-1.14
+  // Default dry-run without --out writes no files and runs all 18 bundled file-scoped checks with typesafe/jev-1.14
   const dryText = run('preview', ['booking', '--dry-run']);
   assert.equal(dryText.status, 0, dryText.stderr);
-  assert.match(dryText.stdout, /DRY RUN \(file\): 4 files, 14 checks \[openrouter: typesafe\/jev-1\.14\]/);
+  assert.match(dryText.stdout, /DRY RUN \(file\): 4 files, 18 checks \[openrouter: typesafe\/jev-1\.14\]/);
   assert.match(dryText.stdout, /booking\/Booking\.kt/);
   assert.doesNotMatch(dryText.stdout, /Artifacts:/);
 
@@ -194,8 +194,9 @@ test('default file-by-file linter accepts positional paths, runs all file-scoped
     ['booking/Booking.kt', 'booking/env.ts', 'booking/password.ts', 'booking/Room.kt'].sort((a, b) => a.localeCompare(b)),
   );
   assert.equal('result_dir' in res.file_results[0], false);
-  assert.equal(Object.values(res.rubric_groups).flat().length, 14);
-  assert.ok(res.skipped_module_checks.includes('single_responsibility'));
+  assert.equal(Object.values(res.rubric_groups).flat().length, 18);
+  assert.ok(res.rubric_groups.solid.includes('single_responsibility'));
+  assert.ok(res.skipped_module_checks.includes('dependency_inversion'));
   assert.deepEqual(res.check_thresholds, {
     no_primitive_obsession: 0.6,
     named_domain_expressions: 0.6,
@@ -560,13 +561,13 @@ test('module subcommand runs file + module checks with liquid/d1.2-ultra across 
   assert.equal(ruleProc.status, 0, ruleProc.stderr);
   assert.deepEqual(Object.values(JSON.parse(ruleProc.stdout).rubric_groups).flat(), ['direct_readability']);
 
-  const modRuleInFile = run('reject', ['booking', '--rule', 'single_responsibility', '--dry-run']);
+  const modRuleInFile = run('reject', ['booking', '--rule', 'dependency_inversion', '--dry-run']);
   assert.equal(modRuleInFile.status, 2);
   assert.match(modRuleInFile.stderr, /module-scoped.*judge-code module/);
 
-  const modRuleOk = run('preview', ['module', 'booking', '--rule', 'single_responsibility', '--dry-run', '--json']);
+  const modRuleOk = run('preview', ['module', 'booking', '--rule', 'dependency_inversion', '--dry-run', '--json']);
   assert.equal(modRuleOk.status, 0, modRuleOk.stderr);
-  assert.deepEqual(Object.values(JSON.parse(modRuleOk.stdout).rubric_groups).flat(), ['single_responsibility']);
+  assert.deepEqual(Object.values(JSON.parse(modRuleOk.stdout).rubric_groups).flat(), ['dependency_inversion']);
 });
 
 test('structure subcommand builds compact manifest with .server/.client, rejects mixed rubrics, and reports oversize byte breakdown', async (t) => {

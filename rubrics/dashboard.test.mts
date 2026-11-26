@@ -1031,7 +1031,7 @@ test('runScanner runs module architectural scans with conventions and ignore for
   const mock1 = makeMockOpenRouterTransport((body) => {
     const prodFiles = Object.keys((body.state.production_files as Record<string, string>) ?? {}).sort();
     const questions = Object.keys(body.questions).sort();
-    if (questions.includes('single_responsibility')) {
+    if (questions.includes('modular_organization')) {
       capturedCodeRequests.push({
         files: prodFiles,
         conventions: typeof body.state.conventions === 'string' ? body.state.conventions : undefined,

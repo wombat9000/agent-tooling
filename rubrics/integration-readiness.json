@@ -13,7 +13,7 @@
     },
     "clean_api_contract_boundary": {
       "type": "choice",
-      "scope": "module",
+      "scope": "file",
       "instructions": "Does each backend capability go through a small, typed API client or thin JSON transport boundary without returning raw `fetch` `Response` pass-throughs or tacking speculative, unbacked, or demo-only optional fields onto live Phase 1 types?",
       "criteria": {
         "pass": "Each backend capability communicates through a focused, typed API client or thin server-side HTTP JSON transport + route boundary (generic typed JSON helpers like `getJson<T>` called by thin BFF proxy routes that parse JSON and map upstream errors consistently are fine), and live/existing domain types contain only fields backed by real contracts (legitimate nullable/optional runtime fields on real contracts are fine) so swapping in a real backend endpoint later only touches that capability's client boundary. Passes when no API clients, backend contracts, or domain/API types are present in the supplied files.",
