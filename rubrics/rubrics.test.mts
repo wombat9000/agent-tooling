@@ -186,6 +186,83 @@ test('runRubricHarness enforces expected choices across all repeats and reports 
   );
 });
 
+test('runRubricHarness builds structure manifests for mode "structure" fixtures and rejects unsafe paths', async (t) => {
+  const root = makeTempDir(t, 'rubric-harness-structure-');
+  const fixturesDir = join(root, 'fixtures');
+  mkdirSync(fixturesDir, { recursive: true });
+  writeFileSync(join(fixturesDir, 'struct-good.json'), JSON.stringify({
+    id: 'struct-good',
+    description: 'Modular feature tree for structure harness check',
+    mode: 'structure',
+    root_name: 'src',
+    rubric: 'project-structure',
+    files: {
+      'features/profile/types.ts': ['export interface Profile { id: string; }'],
+      'features/profile/service.ts': [
+        "import type { Profile } from './types';",
+        'export function loadProfile(id: string): Profile { return { id }; }',
+      ],
+      'features/profile/service.test.ts': [
+        "import { loadProfile } from './service';",
+        "export const sample = loadProfile('p-1');",
+      ],
+    },
+    expect: {
+      no_junk_drawer_directories: 'pass',
+      descriptive_file_roles: 'pass',
+    },
+  }));
+
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'fixture-test-key';
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  });
+
+  let capturedManifest: Record<string, unknown> | null = null;
+  const report = await runRubricHarness({
+    fixturesDir,
+    repeats: 1,
+    transport: (async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      capturedManifest = body.state.project_structure;
+      const answers = Object.fromEntries(Object.keys(body.questions).map((id) => [id, {
+        type: 'choice',
+        choice: 'pass',
+        probabilities: { pass: 0.94, fail: 0.06 },
+        confidence: 0.9,
+      }]));
+      return Response.json({ model: 'liquid/d1.2-ultra-mock', answers });
+    }) as typeof fetch,
+  });
+
+  assert.equal(report.status, 'passed');
+  assert.equal(report.fixtures[0].mode, 'structure');
+  assert.ok(capturedManifest);
+  assert.equal(capturedManifest.root_name, 'src');
+  assert.equal(capturedManifest.total_files, 3);
+  const manifestFiles = capturedManifest.files as Record<string, { kind: string; local_imports: string[] }>;
+  assert.equal(manifestFiles['features/profile/service.ts'].kind, 'source');
+  assert.deepEqual(manifestFiles['features/profile/service.ts'].local_imports, ['./types']);
+  assert.equal(manifestFiles['features/profile/service.test.ts'].kind, 'test');
+
+  const unsafeFixturesDir = join(root, 'unsafe-fixtures');
+  mkdirSync(unsafeFixturesDir, { recursive: true });
+  writeFileSync(join(unsafeFixturesDir, 'unsafe.json'), JSON.stringify({
+    id: 'unsafe-path',
+    description: 'Traversal path in structure mode',
+    mode: 'structure',
+    rubric: 'project-structure',
+    files: { '../escape.ts': ['export const x = 1;'] },
+    expect: { no_junk_drawer_directories: 'pass' },
+  }));
+  await assert.rejects(
+    runRubricHarness({ fixturesDir: unsafeFixturesDir, dryRun: true }),
+    /safe relative POSIX path/,
+  );
+});
+
 test('evals/code-change/rubrics/ has been removed in favor of authoritative rubrics/', () => {
   const legacyDir = fileURLToPath(new URL('../evals/code-change/rubrics', import.meta.url));
   assert.equal(existsSync(legacyDir), false, 'Legacy evals/code-change/rubrics/ directory must not exist');

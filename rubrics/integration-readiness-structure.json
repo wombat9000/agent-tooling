@@ -4,10 +4,10 @@
   "questions": {
     "no_bundled_stub_or_demo_modules": {
       "type": "choice",
-      "instructions": "Is the project structure free of in-process stub/fixture/demo-world backend modules bundled inside production source directories?",
+      "instructions": "Is the production runtime free of bundled fake implementations, stub backends, or demo-world modules reachable from production entry points?",
       "criteria": {
-        "pass": "Production source directories contain only real application modules and external API clients; any mock servers, fixtures, or seed worlds live strictly outside production runtime directories (such as in dedicated test/e2e/external mock tooling).",
-        "fail": "Production source directories (such as `app/lib/` or `src/server/`) bundle in-process fake backends, stub stores, demo-world seed files, or demo-overlay modules imported by production routes. Naming or commenting them as temporary demo aids does not turn a fail into a pass."
+        "pass": "Production entry points and runtime modules wire only real application modules and external clients without reaching in-process fake backends, fixed stubs, or demo-world overlays in place of required real behavior. Clearly test-only support files, test factories, mocks, or fixtures (including those colocated alongside feature code or tests) do not fail solely because of their directory location when no production module imports them.",
+        "fail": "Concrete evidence in the manifest shows a production entry point or runtime module can reach a bundled fake implementation, in-process stub store/backend, demo-world seed module, or demo overlay used in place of required real behavior. Naming or commenting such runtime-reachable modules as temporary demo aids does not turn a fail into a pass."
       }
     },
     "no_parallel_shadow_directories": {

@@ -1,0 +1,74 @@
+{
+  "id": "project-structure-junk-drawer-bad",
+  "description": "Flat junk-drawer features directory mixing unrelated concerns, catch-all utils/helpers/common files, and inconsistent subfolder extraction for comparable peer clusters",
+  "mode": "structure",
+  "root_name": "src",
+  "rubric": "project-structure",
+  "files": {
+    "features/reports/report-types.ts": [
+      "export interface ReportRow { readonly id: string; }"
+    ],
+    "features/reports/report-query.ts": [
+      "import type { ReportRow } from './report-types';",
+      "export function fetchReports(): ReportRow[] { return []; }"
+    ],
+    "features/reports/report-formatter.ts": [
+      "import type { ReportRow } from './report-types';",
+      "export function formatReports(rows: ReportRow[]): string { return String(rows.length); }"
+    ],
+    "features/reports/report-service.ts": [
+      "import { fetchReports } from './report-query';",
+      "import { formatReports } from './report-formatter';",
+      "export function buildReport(): string { return formatReports(fetchReports()); }"
+    ],
+    "features/billing-types.ts": [
+      "export interface Invoice { readonly id: string; readonly cents: number; }"
+    ],
+    "features/billing-db.ts": [
+      "import type { Invoice } from './billing-types';",
+      "export function saveInvoice(inv: Invoice): void { void inv; }"
+    ],
+    "features/billing-tax.ts": [
+      "import type { Invoice } from './billing-types';",
+      "export function computeTax(inv: Invoice): number { return Math.round(inv.cents * 0.1); }"
+    ],
+    "features/billing-service.ts": [
+      "import { saveInvoice } from './billing-db';",
+      "import { computeTax } from './billing-tax';",
+      "import type { Invoice } from './billing-types';",
+      "export function finalizeInvoice(inv: Invoice): number { saveInvoice(inv); return computeTax(inv); }"
+    ],
+    "features/auth-jwt.ts": [
+      "export function verifyJwt(raw: string): boolean { return raw.length > 0; }"
+    ],
+    "features/auth-session-db.ts": [
+      "import { verifyJwt } from './auth-jwt';",
+      "export function loadSession(raw: string): boolean { return verifyJwt(raw); }"
+    ],
+    "features/email-smtp-client.ts": [
+      "export function sendEmail(to: string, body: string): void { void to; void body; }"
+    ],
+    "features/notification-banner.tsx": [
+      "export function NotificationBanner({ text }: { text: string }) { return text; }"
+    ],
+    "features/utils.ts": [
+      "export function slugify(s: string): string { return s.toLowerCase(); }",
+      "export function formatCents(c: number): string { return `$${(c / 100).toFixed(2)}`; }"
+    ],
+    "features/helpers.ts": [
+      "export function retryAsync<T>(fn: () => Promise<T>): Promise<T> { return fn(); }"
+    ],
+    "features/common.ts": [
+      "export const DEFAULT_LIMIT = 50;"
+    ],
+    "features/misc.ts": [
+      "export function noop(): void {}"
+    ]
+  },
+  "expect": {
+    "no_junk_drawer_directories": "fail",
+    "cohesive_subfeature_grouping": "fail",
+    "consistent_organization_depth": "fail",
+    "descriptive_file_roles": "fail"
+  }
+}

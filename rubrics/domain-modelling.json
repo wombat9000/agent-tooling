@@ -5,10 +5,10 @@
     "immutable_state": {
       "type": "choice",
       "scope": "file",
-      "instructions": "Does the supplied production code avoid mutable domain state and model state transitions immutably?",
+      "instructions": "Does the supplied production code keep domain state transitions non-mutating and protect domain values across ownership boundaries?",
       "criteria": {
-        "pass": "Domain models represent state with read-only/immutable properties and immutable or defensively-copied collections, and state transitions return new values rather than mutating domain objects or collections in place. Local variables inside parsing loops, fold/loop accumulators holding immutable values, and UI state containers that replace state with new immutable values are acceptable.",
-        "fail": "Domain types store mutable fields, mutate collections or domain state in place, or share mutable state across independent runs or calls."
+        "pass": "Domain transitions preserve caller-owned inputs and previously published snapshots by returning new values rather than mutating them in place, and values crossing ownership boundaries are immutable, defensively copied, or governed by a clear non-mutating ownership contract. Fresh unescaped local builders, per-call accumulators and parsing loops, UI or async coordination references, SDK/client infrastructure handles, persistence/storage effects, and intentionally scoped infrastructure caches may use local mutability. Absence of language-level immutability annotations (such as read-only or final field modifiers) alone does not fail when values are not mutated across boundaries.",
+        "fail": "A domain transition mutates caller-owned or previously published domain objects or collections in place, exposes internal mutable structures across an ownership boundary where callers can corrupt domain state, or stores unisolated mutable domain state shared across independent callers or runs."
       }
     },
     "domain_invariants": {

@@ -104,7 +104,7 @@ export interface RepoSnapshot {
 
 export interface FixtureCheckSnapshot {
   fixture_id: string;
-  mode: 'file' | 'code';
+  mode: JudgeMode;
   rubric: string;
   check_id: string;
   expected: 'pass' | 'fail';

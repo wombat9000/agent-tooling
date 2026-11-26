@@ -1,0 +1,74 @@
+{
+  "id": "project-structure-modular-feature-good",
+  "description": "Clean modular decomposition of complex features with path-scoped role filenames alongside a small flat sibling feature",
+  "mode": "structure",
+  "root_name": "src",
+  "rubric": "project-structure",
+  "files": {
+    "features/health.ts": [
+      "export interface HealthStatus { readonly ok: boolean; }",
+      "export function checkHealth(): HealthStatus { return { ok: true }; }"
+    ],
+    "features/profile/types.ts": [
+      "export interface UserProfile { readonly id: string; readonly displayName: string; readonly bio: string; }"
+    ],
+    "features/profile/decisions.ts": [
+      "import type { UserProfile } from './types';",
+      "export function canPublishProfile(profile: UserProfile): boolean { return profile.displayName.trim().length > 0; }"
+    ],
+    "features/profile/store.ts": [
+      "import type { UserProfile } from './types';",
+      "export interface ProfileStore { load(id: string): Promise<UserProfile | null>; save(profile: UserProfile): Promise<void>; }"
+    ],
+    "features/profile/service.ts": [
+      "import { canPublishProfile } from './decisions';",
+      "import type { ProfileStore } from './store';",
+      "import type { UserProfile } from './types';",
+      "export class ProfileService {",
+      "  constructor(private readonly store: ProfileStore) {}",
+      "  async publish(profile: UserProfile): Promise<void> {",
+      "    if (!canPublishProfile(profile)) throw new Error('Invalid profile');",
+      "    await this.store.save(profile);",
+      "  }",
+      "}"
+    ],
+    "features/profile/service.test.ts": [
+      "import { ProfileService } from './service';",
+      "export const serviceRef = ProfileService;"
+    ],
+    "features/profile-chat/types.ts": [
+      "export interface ChatMessage { readonly id: string; readonly senderId: string; readonly body: string; }"
+    ],
+    "features/profile-chat/decisions.ts": [
+      "import type { ChatMessage } from './types';",
+      "export function isNonEmptyMessage(msg: ChatMessage): boolean { return msg.body.trim().length > 0; }"
+    ],
+    "features/profile-chat/store.ts": [
+      "import type { ChatMessage } from './types';",
+      "export interface ChatStore { append(msg: ChatMessage): Promise<void>; }"
+    ],
+    "features/profile-chat/service.ts": [
+      "import { isNonEmptyMessage } from './decisions';",
+      "import type { ChatStore } from './store';",
+      "import type { ChatMessage } from './types';",
+      "export class ProfileChatService {",
+      "  constructor(private readonly store: ChatStore) {}",
+      "  async send(msg: ChatMessage): Promise<void> {",
+      "    if (!isNonEmptyMessage(msg)) throw new Error('Empty message');",
+      "    await this.store.append(msg);",
+      "  }",
+      "}"
+    ],
+    "features/profile-chat/service.test.ts": [
+      "import { ProfileChatService } from './service';",
+      "export const chatServiceRef = ProfileChatService;"
+    ]
+  },
+  "expect": {
+    "no_junk_drawer_directories": "pass",
+    "cohesive_subfeature_grouping": "pass",
+    "clear_concern_separation": "pass",
+    "consistent_organization_depth": "pass",
+    "descriptive_file_roles": "pass"
+  }
+}

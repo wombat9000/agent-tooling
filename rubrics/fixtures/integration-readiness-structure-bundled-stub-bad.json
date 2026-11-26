@@ -1,0 +1,40 @@
+{
+  "id": "integration-readiness-structure-bundled-stub-bad",
+  "description": "Production routes reach bundled in-process demo-world seed stores and fake backend stubs in place of real backend clients",
+  "mode": "structure",
+  "root_name": "app",
+  "rubric": "integration-readiness-structure",
+  "files": {
+    "lib/demo-world-seed.ts": [
+      "export interface DemoOrder { readonly id: string; readonly totalCents: number; readonly status: string; }",
+      "export const DEMO_ORDERS: DemoOrder[] = [",
+      "  { id: 'ord-demo-1', totalCents: 4900, status: 'paid' },",
+      "  { id: 'ord-demo-2', totalCents: 12900, status: 'pending' },",
+      "];"
+    ],
+    "lib/fake-orders-backend-stub.ts": [
+      "import { DEMO_ORDERS, type DemoOrder } from './demo-world-seed';",
+      "const inMemoryOrders = [...DEMO_ORDERS];",
+      "export async function listOrdersFromStub(): Promise<DemoOrder[]> { return inMemoryOrders; }",
+      "export async function createOrderInStub(order: DemoOrder): Promise<DemoOrder> {",
+      "  inMemoryOrders.push(order);",
+      "  return order;",
+      "}"
+    ],
+    "features/orders/service.ts": [
+      "import { createOrderInStub, listOrdersFromStub } from '../../lib/fake-orders-backend-stub';",
+      "export function getOrders() { return listOrdersFromStub(); }",
+      "export function submitOrder(id: string, totalCents: number) {",
+      "  return createOrderInStub({ id, totalCents, status: 'paid' });",
+      "}"
+    ],
+    "routes/orders.ts": [
+      "import { getOrders, submitOrder } from '../features/orders/service';",
+      "export function loader() { return getOrders(); }",
+      "export function action(id: string, totalCents: number) { return submitOrder(id, totalCents); }"
+    ]
+  },
+  "expect": {
+    "no_bundled_stub_or_demo_modules": "fail"
+  }
+}
