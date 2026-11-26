@@ -203,6 +203,27 @@ class AmpAgentTests(unittest.TestCase):
             {"AMP_API_KEY": "amp-secret", "OPENROUTER_API_KEY": "from-ae-flag"},
         )
 
+    def test_fast_option_passes_fast_flag_only_when_enabled(self) -> None:
+        default_agent = self._make_agent(
+            model_name="openai/gpt-6.1-terra",
+            reasoning_effort="high",
+        )
+        default_env = FakeEnvironment()
+        with mock.patch.dict(os.environ, {"AMP_EVAL_API_KEY": "amp-secret"}, clear=False):
+            asyncio.run(default_agent.run("Refactor module.", default_env, AgentContext()))
+        self.assertNotIn("--fast", default_env.calls[0]["command"])
+
+        fast_agent = self._make_agent(
+            model_name="openai/gpt-6.1-terra",
+            reasoning_effort="high",
+            fast=True,
+        )
+        fast_env = FakeEnvironment()
+        with mock.patch.dict(os.environ, {"AMP_EVAL_API_KEY": "amp-secret"}, clear=False):
+            asyncio.run(fast_agent.run("Refactor module.", fast_env, AgentContext()))
+        cmd = fast_env.calls[0]["command"]
+        self.assertIn("--effort high --fast -x", cmd)
+
     def test_configure_copies_all_mounted_skills_into_amp_skills_dir(self) -> None:
         agent = self._make_agent(skills_dir="/skills")
         env = FakeEnvironment()
