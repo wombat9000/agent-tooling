@@ -50,8 +50,13 @@ if [ "$has_production_code" -eq 1 ]; then
   fi
 
   if [ "$has_tests" -eq 1 ]; then
-    if pnpm test &&
-      pnpm exec tsx --test --test-reporter=tap tests > "$injected/agent.tap" &&
+    agent_test_files=()
+    while IFS= read -r file; do
+      agent_test_files+=("$file")
+    done < <(find tests -type f \( -name '*.test.ts' -o -name '*.spec.ts' \) | sort)
+    if [ "${#agent_test_files[@]}" -gt 0 ] &&
+      pnpm test &&
+      node --import tsx --test --test-reporter=tap "${agent_test_files[@]}" > "$injected/agent.tap" &&
       check_tap_passed "$injected/agent.tap"; then
       agent_tests_pass=1
     elif [ -f "$injected/agent.tap" ]; then
@@ -60,7 +65,7 @@ if [ "$has_production_code" -eq 1 ]; then
   fi
 
   cp "$verifier/contract.test.ts" "$injected/contract.test.ts"
-  if pnpm exec tsx --test --test-reporter=tap "$injected/contract.test.ts" > "$injected/contract.tap" &&
+  if node --import tsx --test --test-reporter=tap "$injected/contract.test.ts" > "$injected/contract.tap" &&
     check_tap_passed "$injected/contract.tap"; then
     contract_tests_pass=1
   elif [ -f "$injected/contract.tap" ]; then
