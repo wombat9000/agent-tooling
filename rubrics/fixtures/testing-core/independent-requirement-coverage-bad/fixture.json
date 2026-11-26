@@ -1,0 +1,8 @@
+{
+  "id": "independent-requirement-coverage-bad",
+  "description": "Tests compute expected values by re-running the production formula, use assertion-free non-null probes, and omit cap and error requirements",
+  "rubric": "testing-core",
+  "expect": {
+    "independent_requirement_coverage": "fail"
+  }
+}

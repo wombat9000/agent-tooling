@@ -1,0 +1,8 @@
+{
+  "id": "workaround-proxies-bad",
+  "description": "BFF proxy authenticates redundantly twice, serializes synthetic Request/Response JSON round-trips into an in-process stub, and scrapes paginated live APIs to hydrate the stub",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_workaround_proxies_or_parity_tax": "fail"
+  }
+}

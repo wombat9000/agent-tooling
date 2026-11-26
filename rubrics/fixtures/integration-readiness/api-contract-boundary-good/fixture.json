@@ -1,0 +1,8 @@
+{
+  "id": "api-contract-boundary-good",
+  "description": "Typed catalog API client parses JSON into backed DTOs and maps upstream HTTP errors consistently without speculative optional fields or raw Response leaks",
+  "rubric": "integration-readiness",
+  "expect": {
+    "clean_api_contract_boundary": "pass"
+  }
+}

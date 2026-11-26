@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-small-helper-good",
+  "description": "Small focused usage-accounting helper module with pricing metadata constant, event aggregation function, and input rate parser",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}

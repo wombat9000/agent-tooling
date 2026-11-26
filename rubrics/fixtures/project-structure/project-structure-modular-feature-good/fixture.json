@@ -1,0 +1,14 @@
+{
+  "id": "project-structure-modular-feature-good",
+  "description": "Clean modular decomposition of complex features with path-scoped role filenames alongside a small flat sibling feature",
+  "mode": "structure",
+  "root_name": "src",
+  "rubric": "project-structure",
+  "expect": {
+    "no_junk_drawer_directories": "pass",
+    "cohesive_subfeature_grouping": "pass",
+    "clear_concern_separation": "pass",
+    "consistent_organization_depth": "pass",
+    "descriptive_file_roles": "pass"
+  }
+}

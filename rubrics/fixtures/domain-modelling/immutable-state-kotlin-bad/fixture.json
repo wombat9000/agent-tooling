@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-kotlin-bad",
+  "description": "Kotlin domain class mutating caller-shared state in place, exposing mutable collections, and sharing mutable companion state across calls",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "fail"
+  }
+}

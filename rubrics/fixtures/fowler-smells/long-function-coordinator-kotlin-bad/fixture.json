@@ -1,0 +1,8 @@
+{
+  "id": "long-function-coordinator-kotlin-bad",
+  "description": "Monolithic Kotlin transfer procedure embedding raw parsing, compliance checks, FX math, fee tiers, ledger updates, audit formatting, and notifications inline",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "independent-requirement-coverage-good",
+  "description": "Tests independently derive expected discount outcomes from the specification and cover all tiers, exact boundaries, cap, and negative-input rejection",
+  "rubric": "testing-core",
+  "expect": {
+    "independent_requirement_coverage": "pass"
+  }
+}

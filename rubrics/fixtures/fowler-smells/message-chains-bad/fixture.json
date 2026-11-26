@@ -1,0 +1,8 @@
+{
+  "id": "message-chains-bad",
+  "description": "Repeatedly navigates deep object-graph getter chains across multiple nested domain objects",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_message_chains": "fail"
+  }
+}

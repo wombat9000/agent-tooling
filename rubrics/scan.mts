@@ -51,6 +51,7 @@ import {
   countChecksFindings,
   equalStringRecords,
   formatUtcFileTimestamp,
+  hashDirectoryTree,
   hashJsonDirectory,
   loadSnapshotsFromDir,
   readAgentToolingGitInfo,
@@ -1850,7 +1851,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
     };
   } else {
     const rubricHashes = hashJsonDirectory(rubricsDir);
-    const fixtureHashes = hashJsonDirectory(fixturesDir);
+    const fixtureHashes = hashDirectoryTree(fixturesDir);
     const combinedHash = computeHashesDigest({
       ...Object.fromEntries(Object.entries(rubricHashes).map(([k, v]) => [`rubric:${k}`, v])),
       ...Object.fromEntries(Object.entries(fixtureHashes).map(([k, v]) => [`fixture:${k}`, v])),

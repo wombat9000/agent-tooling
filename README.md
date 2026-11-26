@@ -27,12 +27,13 @@ opens an HTML report of saved judge scores and rubric criteria without another A
 
 ## Rubric Fixture Harness
 
-Verify all authoritative `rubrics/*.json` criteria against curated good/bad multi-file fixtures under `rubrics/fixtures/`:
+Verify all 52 criteria across all 13 authoritative `rubrics/*.json` rubrics (32 `production_code`, 7 `project_structure`, and 13 `test_code`) against curated real-file pass/fail fixtures under `rubrics/fixtures/<rubric>/<fixture-id>/`:
 
+- Each fixture directory contains `fixture.json` (metadata and `expect` verdicts only—no inline code strings), a `files/` directory of real `.ts`/`.tsx`/`.kt` source files on disk, and optional `context/` (read-only `production_files_context` for `test_code` fixtures), `requirements.md`, and `conventions.md`.
 - `pnpm test:rubrics [--dry-run] [--repeats N] [--fixture ID] [--rubric SLUG] [--rule CHECK_ID] [--modes both|file|module] [--file-model ID] [--module-model ID] [--model ID] [--backend openrouter|codex|claude] [--json]`
-- Production fixtures (`target: "production_code"`) run in **both** `file` mode (per-file scoring aggregated via all-files-pass, default `typesafe/jev-1.14`) and `module` mode (bundled scoring, default `liquid/d1.2-ultra`), narrowed strictly to each fixture's expected check ID(s) and ignoring criterion `scope` filtering in `file` mode so module-scoped checks also report single-file signal.
-- `file`-scoped checks require both `file` and `module` modes to pass across all repeats; `module`-scoped checks require `module` mode and report `file` mode as informational signal; `project_structure` fixtures run in `structure` mode only.
-- Outputs a per-fixture table and a **Scope Signal Matrix** (also emitted as `criteria_matrix` in `--json`) classifying every production criterion as `both` (with a `promote?` hint for `module`-scoped criteria), `module-only`, `file-only`, or `neither`.
+- Both `production_code` and `test_code` fixtures run in **both** `file` mode (per-file scoring aggregated via all-files-pass, default `typesafe/jev-1.14`) and `module` mode (bundled scoring, default `liquid/d1.2-ultra`), narrowed strictly to each fixture's expected check ID(s) and ignoring criterion `scope` filtering in `file` mode so module-scoped checks also report single-file signal.
+- `file`-scoped checks require both `file` and `module` modes to pass across all repeats; `module`-scoped checks require `module` mode and report `file` mode as informational signal; `project_structure` fixtures read their `files/` directory tree directly in `structure` mode only.
+- Outputs per-fixture tables (Production, Test Code, and Project Structure) plus a **Scope Signal Matrix** (also emitted as `criteria_matrix` in `--json`) classifying every dual-mode criterion (`production_code` + `test_code`) as `both` (with a `promote?` hint for `module`-scoped criteria), `module-only`, `file-only`, or `neither`.
 
 ## Local Rubric Scanner & Offline Dashboard
 

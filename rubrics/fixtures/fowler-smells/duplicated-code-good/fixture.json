@@ -1,0 +1,8 @@
+{
+  "id": "duplicated-code-good",
+  "description": "Factors shared discount, coupon, and tax-exemption rules into one focused pricing module reused by checkout and quote services",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_duplicated_code": "pass"
+  }
+}

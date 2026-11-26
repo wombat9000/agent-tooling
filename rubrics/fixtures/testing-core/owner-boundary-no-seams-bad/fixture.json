@@ -1,0 +1,8 @@
+{
+  "id": "owner-boundary-no-seams-bad",
+  "description": "Kotlin tests rely on test-only production bypass flags and visibility widened solely to invoke private helpers directly",
+  "rubric": "testing-core",
+  "expect": {
+    "owner_boundary_no_seams": "fail"
+  }
+}

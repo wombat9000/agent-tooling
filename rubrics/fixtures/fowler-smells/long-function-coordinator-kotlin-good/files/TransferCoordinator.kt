@@ -1,0 +1,58 @@
+package com.acme.ledger
+
+data class TransferCommand(
+    val transferId: String,
+    val sourceAccountId: String,
+    val destinationAccountId: String,
+    val amountCents: Long,
+    val currency: String,
+)
+
+data class TransferReceipt(val transferId: String, val feeCents: Long, val ledgerEntryId: String)
+
+interface TransactionRunner { fun <T> inTransaction(block: () -> T): T }
+interface AccountGateway { fun loadPairLocked(srcId: String, dstId: String): Pair<AccountRecord, AccountRecord> }
+interface FeeCalculator { fun calculateFeeCents(amountCents: Long, currency: String): Long }
+interface LedgerWriter { fun recordTransfer(cmd: TransferCommand, feeCents: Long): String }
+interface EventPublisher { fun publishTransferCompleted(receipt: TransferReceipt) }
+data class AccountRecord(val id: String, val frozen: Boolean, val availableCents: Long)
+
+class TransferCoordinator(
+    private val transactions: TransactionRunner,
+    private val accounts: AccountGateway,
+    private val fees: FeeCalculator,
+    private val ledger: LedgerWriter,
+    private val events: EventPublisher,
+) {
+    fun executeTransfer(command: TransferCommand): TransferReceipt {
+        validateCommand(command)
+        val receipt = transactions.inTransaction {
+            val (source, destination) = accounts.loadPairLocked(command.sourceAccountId, command.destinationAccountId)
+            ensureTransferAllowed(source, destination, command.amountCents)
+            val feeCents = fees.calculateFeeCents(command.amountCents, command.currency)
+            ensureSufficientFunds(source, command.amountCents + feeCents)
+            val entryId = ledger.recordTransfer(command, feeCents)
+            TransferReceipt(command.transferId, feeCents, entryId)
+        }
+        events.publishTransferCompleted(receipt)
+        return receipt
+    }
+
+    private fun validateCommand(command: TransferCommand) {
+        require(command.amountCents > 0) { "Transfer amount must be positive" }
+        require(command.sourceAccountId != command.destinationAccountId) { "Accounts must differ" }
+    }
+
+    private fun ensureTransferAllowed(source: AccountRecord, destination: AccountRecord, amountCents: Long) {
+        check(!source.frozen && !destination.frozen) { "Frozen account cannot participate in transfer" }
+        check(amountCents <= MAX_SINGLE_TRANSFER_CENTS) { "Transfer exceeds single-transfer limit" }
+    }
+
+    private fun ensureSufficientFunds(source: AccountRecord, totalDebitCents: Long) {
+        check(source.availableCents >= totalDebitCents) { "Insufficient available funds" }
+    }
+
+    companion object {
+        private const val MAX_SINGLE_TRANSFER_CENTS = 10_000_000L
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-bad",
+  "description": "ReportHub class bundles usage analytics, billing overage pricing, CSV and HTML email rendering, and archive pruning into one multi-axis unit",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "fail"
+  }
+}

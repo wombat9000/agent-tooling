@@ -1,0 +1,8 @@
+{
+  "id": "long-function-bad",
+  "description": "Monolithic checkout procedure packing parsing, validation, discounts, tax, inventory checks, and receipt formatting inline",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "fail"
+  }
+}

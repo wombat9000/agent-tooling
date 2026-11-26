@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-ui-component-bad",
+  "description": "React checkout view component mixing raw fetch network calls, multi-step business pricing and tax calculation, localStorage persistence, and UI rendering in one file",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "fail"
+  }
+}

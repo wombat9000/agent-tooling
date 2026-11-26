@@ -1,0 +1,8 @@
+{
+  "id": "boundary-separation-good",
+  "description": "Keeps HTTP parsing/status mapping in the handler, persistence queries in the repository, and pure domain logic operating strictly on typed domain values",
+  "rubric": "domain-modelling",
+  "expect": {
+    "boundary_separation": "pass"
+  }
+}

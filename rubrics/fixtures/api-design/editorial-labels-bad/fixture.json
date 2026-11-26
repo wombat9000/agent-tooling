@@ -1,0 +1,8 @@
+{
+  "id": "editorial-labels-bad",
+  "description": "Hardcodes a closed code-owned enum and runtime allow-list for editorial content categories, rejecting custom user-supplied labels",
+  "rubric": "api-design",
+  "expect": {
+    "no_rigid_enums_for_editorial_labels": "fail"
+  }
+}

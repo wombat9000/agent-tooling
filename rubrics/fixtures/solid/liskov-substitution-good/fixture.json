@@ -1,0 +1,8 @@
+{
+  "id": "liskov-substitution-good",
+  "description": "Separates ReadOnlyKeyStore from WritableKeyStore so every subtype honors its declared contract without throwing unsupported-operation errors or runtime type checks",
+  "rubric": "solid",
+  "expect": {
+    "liskov_substitution": "pass"
+  }
+}

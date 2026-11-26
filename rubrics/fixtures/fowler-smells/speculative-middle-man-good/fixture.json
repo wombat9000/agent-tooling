@@ -1,0 +1,8 @@
+{
+  "id": "speculative-middle-man-good",
+  "description": "Focused contact model, repository, and service where each class owns concrete validation or persistence work without pass-through wrappers or unused hooks",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_speculative_or_middle_man": "pass"
+  }
+}

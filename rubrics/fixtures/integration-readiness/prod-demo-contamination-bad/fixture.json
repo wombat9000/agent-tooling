@@ -1,0 +1,8 @@
+{
+  "id": "prod-demo-contamination-bad",
+  "description": "Production orders client falls back to hardcoded seed records when API URL is unset, merges synthetic demo overlays into live responses, and filters isDemo rows",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_prod_fixture_or_demo_contamination": "fail"
+  }
+}

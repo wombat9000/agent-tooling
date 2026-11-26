@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-good",
+  "description": "Read-only domain model where every state transition returns a new immutable value without mutating inputs",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "pass"
+  }
+}

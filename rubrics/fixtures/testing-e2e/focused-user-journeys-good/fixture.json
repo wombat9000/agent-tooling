@@ -1,0 +1,8 @@
+{
+  "id": "focused-user-journeys-good",
+  "description": "Each browser E2E test verifies one coherent user-visible flow without sprawling mega-scripts or exhaustive pure-logic matrices",
+  "rubric": "testing-e2e",
+  "expect": {
+    "focused_user_journeys": "pass"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "resilient-user-visible-locators-bad",
+  "description": "Browser E2E tests rely heavily on deep CSS class chains, structural DOM hierarchy paths, XPath, and hardcoded positional nth-child indexes",
+  "rubric": "testing-e2e",
+  "expect": {
+    "resilient_user_visible_locators": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "repeated-switches-good",
+  "description": "Consolidates all membership tier rules into one authoritative policy table on membership-tier.ts instead of repeating switches across callers",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_repeated_switches": "pass"
+  }
+}

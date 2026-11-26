@@ -1,9 +1,9 @@
 /** Offline tests for authoritative rubrics/, SHA-256 sync parity, and unified dual-mode rubric fixture harness. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -19,6 +19,7 @@ import {
   syncRubrics,
 } from './sync.mts';
 import {
+  assertSafeRelativePosixPath,
   formatReportTable,
   loadFixtures,
   resolveFixtureRubric,
@@ -42,6 +43,38 @@ function withFakeApiKey(t: TestContext): void {
     if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = prevKey;
   });
+}
+
+function writeRealFixture(
+  fixturesRoot: string,
+  relDir: string,
+  meta: Record<string, unknown>,
+  files: Record<string, string>,
+  extras?: { context?: Record<string, string>; requirementsMd?: string; conventionsMd?: string },
+): string {
+  const fixtureDir = join(fixturesRoot, ...relDir.split('/'));
+  mkdirSync(join(fixtureDir, 'files'), { recursive: true });
+  writeFileSync(join(fixtureDir, 'fixture.json'), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+  for (const [relPath, content] of Object.entries(files)) {
+    const abs = join(fixtureDir, 'files', ...relPath.split('/'));
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content, 'utf8');
+  }
+  if (extras?.context) {
+    mkdirSync(join(fixtureDir, 'context'), { recursive: true });
+    for (const [relPath, content] of Object.entries(extras.context)) {
+      const abs = join(fixtureDir, 'context', ...relPath.split('/'));
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, content, 'utf8');
+    }
+  }
+  if (extras?.requirementsMd !== undefined) {
+    writeFileSync(join(fixtureDir, 'requirements.md'), extras.requirementsMd, 'utf8');
+  }
+  if (extras?.conventionsMd !== undefined) {
+    writeFileSync(join(fixtureDir, 'conventions.md'), extras.conventionsMd, 'utf8');
+  }
+  return fixtureDir;
 }
 
 test('skills/judge-code/rubrics/ has exact file-set and SHA-256 parity with shipped rubrics in rubrics/', () => {
@@ -95,39 +128,50 @@ test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricS
   assert.deepEqual(second.unchanged, ['prod.json', 'struct.json']);
 });
 
-test('all 32 production criteria have multi-file pass and fail fixture coverage under rubrics/fixtures/', () => {
-  const productionRubricFiles = readdirSync(AUTHORITATIVE_RUBRICS_DIR)
+test('all 52 criteria across all 13 authoritative rubrics have full paired pass and fail fixture coverage under rubrics/fixtures/', () => {
+  const allRubricFiles = readdirSync(AUTHORITATIVE_RUBRICS_DIR)
     .filter((f) => f.endsWith('.json'))
-    .sort()
-    .filter((f) => {
-      const parsed = JSON.parse(readFileSync(join(AUTHORITATIVE_RUBRICS_DIR, f), 'utf8')) as Record<string, unknown>;
-      return (parsed.target ?? 'production_code') === 'production_code';
-    });
+    .sort();
+  assert.equal(allRubricFiles.length, 13, `Expected 13 authoritative rubrics, found ${allRubricFiles.length}`);
 
-  assert.equal(productionRubricFiles.length, 7, `Expected 7 production rubrics, found ${productionRubricFiles.length}`);
-
-  const allProductionCriteria: string[] = [];
-  for (const file of productionRubricFiles) {
+  const criteriaByTarget: Record<'production_code' | 'project_structure' | 'test_code', string[]> = {
+    production_code: [],
+    project_structure: [],
+    test_code: [],
+  };
+  for (const file of allRubricFiles) {
     const parsed = JSON.parse(readFileSync(join(AUTHORITATIVE_RUBRICS_DIR, file), 'utf8')) as {
+      target?: 'production_code' | 'project_structure' | 'test_code';
       questions: Record<string, unknown>;
     };
-    allProductionCriteria.push(...Object.keys(parsed.questions));
+    const target = parsed.target ?? 'production_code';
+    criteriaByTarget[target].push(...Object.keys(parsed.questions));
   }
-  assert.equal(allProductionCriteria.length, 32, `Expected 32 production criteria, found ${allProductionCriteria.length}`);
+
+  assert.equal(criteriaByTarget.production_code.length, 32, 'Expected 32 production_code criteria');
+  assert.equal(criteriaByTarget.project_structure.length, 7, 'Expected 7 project_structure criteria');
+  assert.equal(criteriaByTarget.test_code.length, 13, 'Expected 13 test_code criteria');
+  assert.equal(
+    criteriaByTarget.production_code.length + criteriaByTarget.project_structure.length + criteriaByTarget.test_code.length,
+    52,
+    'Expected 52 total authoritative criteria',
+  );
 
   const fixtures = loadFixtures();
-  const coverage = new Map<string, { pass: number; fail: number; multiFilePass: number; multiFileFail: number }>();
-  for (const criterion of allProductionCriteria) {
-    coverage.set(criterion, { pass: 0, fail: 0, multiFilePass: 0, multiFileFail: 0 });
+  const coverage = new Map<string, { target: string; pass: number; fail: number; multiFilePass: number; multiFileFail: number }>();
+  for (const [target, list] of Object.entries(criteriaByTarget)) {
+    for (const criterion of list) {
+      coverage.set(criterion, { target, pass: 0, fail: 0, multiFilePass: 0, multiFileFail: 0 });
+    }
   }
 
   for (const fixture of fixtures) {
     const resolved = resolveFixtureRubric(fixture);
-    if (resolved.target !== 'production_code') continue;
     const isMultiFile = Object.keys(fixture.files).length >= 2;
     for (const [checkId, verdict] of Object.entries(fixture.expect)) {
       const stats = coverage.get(checkId);
-      if (!stats) continue;
+      assert.ok(stats, `Fixture ${fixture.id} expects unknown check "${checkId}"`);
+      assert.equal(stats.target, resolved.target, `Fixture ${fixture.id} target mismatch for "${checkId}"`);
       if (verdict === 'pass') {
         stats.pass += 1;
         if (isMultiFile) stats.multiFilePass += 1;
@@ -140,18 +184,117 @@ test('all 32 production criteria have multi-file pass and fail fixture coverage 
 
   const gaps: string[] = [];
   for (const [criterion, stats] of coverage.entries()) {
-    if (stats.pass < 1 || stats.fail < 1 || stats.multiFilePass < 1 || stats.multiFileFail < 1) {
-      gaps.push(
-        `${criterion}: pass=${stats.pass} (multi=${stats.multiFilePass}), fail=${stats.fail} (multi=${stats.multiFileFail})`,
-      );
+    if (stats.target === 'production_code') {
+      if (stats.pass < 1 || stats.fail < 1 || stats.multiFilePass < 1 || stats.multiFileFail < 1) {
+        gaps.push(
+          `[production_code] ${criterion}: pass=${stats.pass} (multi=${stats.multiFilePass}), fail=${stats.fail} (multi=${stats.multiFileFail})`,
+        );
+      }
+    } else if (stats.pass < 1 || stats.fail < 1) {
+      gaps.push(`[${stats.target}] ${criterion}: pass=${stats.pass}, fail=${stats.fail}`);
     }
   }
-  assert.deepEqual(gaps, [], `Missing multi-file pass/fail coverage for criteria:\n${gaps.join('\n')}`);
+  assert.deepEqual(gaps, [], `Missing pass/fail fixture coverage for criteria:\n${gaps.join('\n')}`);
 });
 
-test('pnpm test:rubrics --dry-run validates all checked-in fixtures, rubrics, CLI filters, and criteria_matrix offline', () => {
+test('loadFixtures enforces real-file fixture.json + files/ layout and rejects inline files, missing/empty files/, flat JSON, duplicates, symlinks, and unsafe paths', (t) => {
+  const root = makeTempDir(t, 'fixture-loader-validation-');
+
+  // 1. Inline "files" in fixture.json is rejected.
+  const inlineDir = join(root, 'inline-files');
+  mkdirSync(join(inlineDir, 'readability/bad-inline/files'), { recursive: true });
+  writeFileSync(join(inlineDir, 'readability/bad-inline/files/a.ts'), 'export const a = 1;\n');
+  writeFileSync(join(inlineDir, 'readability/bad-inline/fixture.json'), JSON.stringify({
+    id: 'bad-inline',
+    description: 'Inline files should be rejected',
+    rubric: 'readability',
+    files: { 'a.ts': ['export const a = 1;'] },
+    expect: { direct_readability: 'pass' },
+  }));
+  assert.throws(() => loadFixtures(inlineDir), /inline "files" in fixture\.json is not supported/);
+
+  // 2. Missing files/ directory is rejected.
+  const missingFilesDir = join(root, 'missing-files');
+  mkdirSync(join(missingFilesDir, 'readability/no-files'), { recursive: true });
+  writeFileSync(join(missingFilesDir, 'readability/no-files/fixture.json'), JSON.stringify({
+    id: 'no-files',
+    description: 'Missing files dir',
+    rubric: 'readability',
+    expect: { direct_readability: 'pass' },
+  }));
+  assert.throws(() => loadFixtures(missingFilesDir), /missing required "files\/" directory/);
+
+  // 3. Empty files/ directory is rejected.
+  const emptyFilesDir = join(root, 'empty-files');
+  mkdirSync(join(emptyFilesDir, 'readability/empty/files'), { recursive: true });
+  writeFileSync(join(emptyFilesDir, 'readability/empty/fixture.json'), JSON.stringify({
+    id: 'empty-files',
+    description: 'Empty files dir',
+    rubric: 'readability',
+    expect: { direct_readability: 'pass' },
+  }));
+  assert.throws(() => loadFixtures(emptyFilesDir), /"files\/" directory must contain at least one file/);
+
+  // 4. Legacy flat *.json directly in fixtures root is rejected.
+  const flatDir = join(root, 'flat-json');
+  mkdirSync(flatDir, { recursive: true });
+  writeFileSync(join(flatDir, 'legacy.json'), '{}');
+  assert.throws(() => loadFixtures(flatDir), /Legacy flat fixture JSON/);
+
+  // 5. Duplicate IDs across different groups are rejected.
+  const dupDir = join(root, 'dup-ids');
+  writeRealFixture(
+    dupDir,
+    'readability/dup-one',
+    { id: 'same-id', description: 'First', rubric: 'readability', expect: { direct_readability: 'pass' } },
+    { 'a.ts': 'export const a = 1;\n' },
+  );
+  writeRealFixture(
+    dupDir,
+    'solid/dup-two',
+    { id: 'same-id', description: 'Second', rubric: 'solid', expect: { open_closed: 'pass' } },
+    { 'b.ts': 'export const b = 2;\n' },
+  );
+  assert.throws(() => loadFixtures(dupDir), /Duplicate fixture id: same-id/);
+
+  // 6. Symlink inside files/ is rejected.
+  const symDir = join(root, 'symlink-fixture');
+  const outsideFile = join(root, 'outside.ts');
+  writeFileSync(outsideFile, 'export const secret = 1;\n');
+  const symFx = writeRealFixture(
+    symDir,
+    'readability/sym-bad',
+    { id: 'sym-bad', description: 'Symlink escape', rubric: 'readability', expect: { direct_readability: 'pass' } },
+    { 'a.ts': 'export const a = 1;\n' },
+  );
+  symlinkSync(outsideFile, join(symFx, 'files/escape.ts'));
+  assert.throws(() => loadFixtures(symDir), /symlink not allowed/);
+
+  // 7. Unsafe POSIX paths & unsafe root_name are rejected.
+  assert.throws(() => assertSafeRelativePosixPath('../escape.ts', 'test'), /safe relative POSIX path/);
+  assert.throws(() => assertSafeRelativePosixPath('/abs.ts', 'test'), /safe relative POSIX path/);
+  assert.throws(() => assertSafeRelativePosixPath('a\\b.ts', 'test'), /safe relative POSIX path/);
+
+  const badRootDir = join(root, 'bad-root-name');
+  writeRealFixture(
+    badRootDir,
+    'project-structure/bad-root',
+    {
+      id: 'bad-root',
+      description: 'Traversal root_name',
+      mode: 'structure',
+      root_name: '../escape',
+      rubric: 'project-structure',
+      expect: { no_junk_drawer_directories: 'pass' },
+    },
+    { 'a.ts': 'export const a = 1;\n' },
+  );
+  assert.throws(() => loadFixtures(badRootDir), /must be a single safe directory name/);
+});
+
+test('pnpm test:rubrics --dry-run validates all 132 checked-in fixtures, rubrics, CLI filters, and 45-criterion criteria_matrix offline', () => {
   const fixtures = loadFixtures();
-  assert.ok(fixtures.length >= 64, `Expected complete fixture coverage, found ${fixtures.length}`);
+  assert.ok(fixtures.length >= 132, `Expected at least 132 fixtures across all 52 criteria, found ${fixtures.length}`);
 
   const env = { ...process.env };
   delete env.OPENROUTER_API_KEY;
@@ -170,9 +313,9 @@ test('pnpm test:rubrics --dry-run validates all checked-in fixtures, rubrics, CL
   assert.equal(report.models.module, DEFAULT_DECISION_MODEL);
   assert.equal(report.fixtures_total, fixtures.length);
   assert.equal(report.fixtures_passed, fixtures.length);
-  assert.equal(report.criteria_matrix.length, 32);
+  assert.equal(report.criteria_matrix.length, 45, 'Expected 32 production_code + 13 test_code dual-mode criteria');
 
-  // Verify --rule, --file-model, --module-model, and --modes CLI options offline.
+  // Verify --rule works for both production_code and test_code rules offline.
   const filtered = spawnSync(
     process.execPath,
     [
@@ -181,6 +324,8 @@ test('pnpm test:rubrics --dry-run validates all checked-in fixtures, rubrics, CL
       '--json',
       '--rule',
       'open_closed',
+      '--rule',
+      'independent_requirement_coverage',
       '--file-model',
       'liquid/d1.2-ultra',
       '--module-model',
@@ -195,8 +340,9 @@ test('pnpm test:rubrics --dry-run validates all checked-in fixtures, rubrics, CL
   const filteredReport = JSON.parse(filtered.stdout) as RubricHarnessReport;
   assert.equal(filteredReport.models.file, 'liquid/d1.2-ultra');
   assert.equal(filteredReport.models.module, 'liquid/d1.2-ultra');
-  assert.ok(filteredReport.fixtures_total >= 2);
-  assert.ok(filteredReport.fixtures.every((f) => f.checks.some((c) => c.check_id === 'open_closed')));
+  assert.ok(filteredReport.fixtures_total >= 4);
+  assert.ok(filteredReport.fixtures.some((f) => f.target === 'production_code'));
+  assert.ok(filteredReport.fixtures.some((f) => f.target === 'test_code'));
 
   // Conflicting --model + --file-model is rejected.
   const conflict = spawnSync(
@@ -215,28 +361,36 @@ test('runRubricHarness runs dual file+module modes narrowed to expected checks, 
   withFakeApiKey(t);
 
   // Fixture 1: file-scoped check (direct_readability) in a 2-file module (rubric readability also has named_domain_expressions).
-  writeFileSync(join(fixturesDir, 'file-rule-good.json'), JSON.stringify({
-    id: 'file-rule-good',
-    description: 'Clean 2-file fixture for file-scoped check',
-    rubric: 'readability',
-    files: {
-      'a.ts': ['export const isPositive = (n: number) => n > 0;'],
-      'b.ts': ['export const isEven = (n: number) => n % 2 === 0;'],
+  writeRealFixture(
+    fixturesDir,
+    'readability/file-rule-good',
+    {
+      id: 'file-rule-good',
+      description: 'Clean 2-file fixture for file-scoped check',
+      rubric: 'readability',
+      expect: { direct_readability: 'pass' },
     },
-    expect: { direct_readability: 'pass' },
-  }));
+    {
+      'a.ts': 'export const isPositive = (n: number) => n > 0;\n',
+      'b.ts': 'export const isEven = (n: number) => n % 2 === 0;\n',
+    },
+  );
 
   // Fixture 2: module-scoped check (liskov_substitution) in a 2-file module (rubric solid has 5 checks total).
-  writeFileSync(join(fixturesDir, 'module-rule-bad.json'), JSON.stringify({
-    id: 'module-rule-bad',
-    description: '2-file fixture for module-scoped check',
-    rubric: 'solid',
-    files: {
-      'base.ts': ['export interface Store { delete(id: string): void; }'],
-      'readonly.ts': ["import type { Store } from './base'; export class ReadOnlyStore implements Store { delete() { throw new Error('unsupported'); } }"],
+  writeRealFixture(
+    fixturesDir,
+    'solid/module-rule-bad',
+    {
+      id: 'module-rule-bad',
+      description: '2-file fixture for module-scoped check',
+      rubric: 'solid',
+      expect: { liskov_substitution: 'fail' },
     },
-    expect: { liskov_substitution: 'fail' },
-  }));
+    {
+      'base.ts': 'export interface Store { delete(id: string): void; }\n',
+      'readonly.ts': "import type { Store } from './base'; export class ReadOnlyStore implements Store { delete() { throw new Error('unsupported'); } }\n",
+    },
+  );
 
   interface CapturedReq {
     model: string;
@@ -362,20 +516,159 @@ test('runRubricHarness runs dual file+module modes narrowed to expected checks, 
   assert.equal(moduleFailOnFileRule.fixtures[0].checks[0].module?.passed, false);
   assert.equal(moduleFailOnFileRule.fixtures[0].checks[0].passed, false);
 
-  // Case 4: obsolete "mode": "file" in fixture JSON is rejected cleanly.
+  // Case 4: obsolete "mode": "file" in fixture.json is rejected cleanly.
   const legacyDir = join(root, 'legacy-fixtures');
-  mkdirSync(legacyDir, { recursive: true });
-  writeFileSync(join(legacyDir, 'legacy.json'), JSON.stringify({
-    id: 'legacy-mode',
-    description: 'Legacy mode field',
-    mode: 'file',
-    rubric: 'readability',
-    files: { 'a.ts': ['export const a = 1;'] },
-    expect: { direct_readability: 'pass' },
-  }));
+  writeRealFixture(
+    legacyDir,
+    'readability/legacy-mode',
+    {
+      id: 'legacy-mode',
+      description: 'Legacy mode field',
+      mode: 'file',
+      rubric: 'readability',
+      expect: { direct_readability: 'pass' },
+    },
+    { 'a.ts': 'export const a = 1;\n' },
+  );
   await assert.rejects(
     runRubricHarness({ fixturesDir: legacyDir, dryRun: true }),
     /"mode": "file" is obsolete/,
+  );
+});
+
+test('runRubricHarness evaluates test_code fixtures in dual file+module modes with test_files, production_files_context, and requirement payload', async (t) => {
+  const root = makeTempDir(t, 'rubric-harness-test-code-');
+  const fixturesDir = join(root, 'fixtures');
+  mkdirSync(fixturesDir, { recursive: true });
+  withFakeApiKey(t);
+
+  writeRealFixture(
+    fixturesDir,
+    'testing-core/req-cov-good',
+    {
+      id: 'req-cov-good',
+      description: 'Good test_code fixture with requirements.md and context/',
+      rubric: 'testing-core',
+      expect: { independent_requirement_coverage: 'pass' },
+    },
+    {
+      'a.test.ts': 'import assert from "node:assert/strict"; assert.equal(1 + 1, 2);\n',
+      'b.test.ts': 'import assert from "node:assert/strict"; assert.equal(2 + 2, 4);\n',
+    },
+    {
+      context: { 'calc.ts': 'export const add = (a: number, b: number) => a + b;\n' },
+      requirementsMd: '# Spec\nAdd two integers.\n',
+    },
+  );
+
+  writeRealFixture(
+    fixturesDir,
+    'testing-core/req-cov-bad',
+    {
+      id: 'req-cov-bad',
+      description: 'Bad test_code fixture with requirements.md and context/',
+      rubric: 'testing-core',
+      expect: { independent_requirement_coverage: 'fail' },
+    },
+    {
+      'a.test.ts': 'import { add } from "../context/calc"; const x = add(1, 2); if (x !== x) throw new Error();\n',
+      'b.test.ts': 'export const emptyProbe = true;\n',
+    },
+    {
+      context: { 'calc.ts': 'export const add = (a: number, b: number) => a + b;\n' },
+      requirementsMd: '# Spec\nAdd two integers.\n',
+    },
+  );
+
+  interface CapturedTestReq {
+    model: string;
+    hasProductionFiles: boolean;
+    testFileCount: number;
+    contextKeys: string[];
+    requirement?: string;
+    instructions: string;
+  }
+  const captured: CapturedTestReq[] = [];
+
+  const report = await runRubricHarness({
+    fixturesDir,
+    repeats: 1,
+    concurrency: 1,
+    transport: (async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        model: string;
+        state: {
+          requirement?: string;
+          production_files?: Record<string, string>;
+          test_files?: Record<string, string>;
+          production_files_context?: Record<string, string>;
+        };
+        questions: Record<string, { instructions: string }>;
+      };
+      const testFiles = body.state.test_files ?? {};
+      const joined = Object.values(testFiles).join('\n');
+      const isBad = joined.includes('emptyProbe') || joined.includes('x !== x');
+      const isFileMode = Object.keys(testFiles).length === 1;
+      captured.push({
+        model: body.model,
+        hasProductionFiles: body.state.production_files !== undefined,
+        testFileCount: Object.keys(testFiles).length,
+        contextKeys: Object.keys(body.state.production_files_context ?? {}),
+        requirement: body.state.requirement,
+        instructions: body.questions.independent_requirement_coverage.instructions,
+      });
+
+      // Module mode discriminates cleanly; file mode says pass on both (informational since scope is module).
+      const passProb = !isBad ? 0.93 : isFileMode ? 0.85 : 0.14;
+      return Response.json({
+        model: `${body.model}-mock`,
+        answers: {
+          independent_requirement_coverage: {
+            type: 'choice',
+            choice: passProb >= 0.5 ? 'pass' : 'fail',
+            probabilities: { pass: passProb, fail: Number((1 - passProb).toFixed(4)) },
+            confidence: 0.9,
+          },
+        },
+      });
+    }) as typeof fetch,
+  });
+
+  assert.equal(report.status, 'passed');
+  assert.equal(report.fixtures_total, 2);
+  assert.equal(report.fixtures_passed, 2);
+  assert.ok(captured.length === 6, `Expected 4 file-mode + 2 module-mode requests, got ${captured.length}`);
+  for (const req of captured) {
+    assert.equal(req.hasProductionFiles, false, 'test_code requests must send state.test_files, not state.production_files');
+    assert.deepEqual(req.contextKeys, ['calc.ts']);
+    assert.match(req.requirement ?? '', /Add two integers/);
+    assert.match(req.instructions, /`test_files`/);
+    assert.match(req.instructions, /`production_files_context`/);
+  }
+
+  // test_code criteria appear in Scope Signal Matrix and rendered Test Code Fixtures table.
+  assert.equal(report.criteria_matrix.length, 1);
+  assert.equal(report.criteria_matrix[0].check_id, 'independent_requirement_coverage');
+  assert.equal(report.criteria_matrix[0].declared_scope, 'module');
+  assert.equal(report.criteria_matrix[0].classification, 'module-only');
+
+  const rendered = formatReportTable(report);
+  assert.match(rendered, /Test Code Fixtures:/);
+  assert.match(rendered, /req-cov-good/);
+  assert.match(rendered, /independent_requirement_coverage.*module-only/);
+
+  // Reject context/ directory on non-test_code fixtures.
+  const badCtxDir = join(root, 'bad-context-target');
+  writeRealFixture(
+    badCtxDir,
+    'readability/prod-with-ctx',
+    { id: 'prod-with-ctx', description: 'Invalid context dir on production_code', rubric: 'readability', expect: { direct_readability: 'pass' } },
+    { 'a.ts': 'export const a = 1;\n' },
+    { context: { 'b.ts': 'export const b = 2;\n' } },
+  );
+  await assert.rejects(
+    runRubricHarness({ fixturesDir: badCtxDir, dryRun: true }),
+    /"context\/" directory is only supported for test_code fixtures/,
   );
 });
 
@@ -393,16 +686,20 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   ];
   for (const { id, rubric, check } of pairs) {
     for (const kind of ['good', 'bad'] as const) {
-      writeFileSync(join(fixturesDir, `${id}-${kind}.json`), JSON.stringify({
-        id: `${id}-${kind}`,
-        description: `${check} ${kind}`,
-        rubric,
-        files: {
-          'a.ts': [`export const marker = '${id}-${kind}-a';`],
-          'b.ts': [`export const other = '${id}-${kind}-b';`],
+      writeRealFixture(
+        fixturesDir,
+        `${rubric}/${id}-${kind}`,
+        {
+          id: `${id}-${kind}`,
+          description: `${check} ${kind}`,
+          rubric,
+          expect: { [check]: kind === 'good' ? 'pass' : 'fail' },
         },
-        expect: { [check]: kind === 'good' ? 'pass' : 'fail' },
-      }));
+        {
+          'a.ts': `export const marker = '${id}-${kind}-a';\n`,
+          'b.ts': `export const other = '${id}-${kind}-b';\n`,
+        },
+      );
     }
   }
 
@@ -465,33 +762,39 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   assert.match(rendered, /dependency_inversion.*neither/);
 });
 
-test('runRubricHarness builds structure manifests (with or without explicit mode) and rejects unsafe paths', async (t) => {
+test('runRubricHarness reads project_structure manifests directly from files/ preserving root_name parity', async (t) => {
   const root = makeTempDir(t, 'rubric-harness-structure-');
   const fixturesDir = join(root, 'fixtures');
   mkdirSync(fixturesDir, { recursive: true });
   withFakeApiKey(t);
 
-  writeFileSync(join(fixturesDir, 'struct-good.json'), JSON.stringify({
-    id: 'struct-good',
-    description: 'Modular feature tree for structure harness check (mode inferred from project-structure rubric)',
-    root_name: 'src',
-    rubric: 'project-structure',
-    files: {
-      'features/profile/types.ts': ['export interface Profile { id: string; }'],
+  writeRealFixture(
+    fixturesDir,
+    'project-structure/struct-good',
+    {
+      id: 'struct-good',
+      description: 'Modular feature tree for structure harness check (mode inferred from project-structure rubric)',
+      root_name: 'src',
+      rubric: 'project-structure',
+      expect: {
+        no_junk_drawer_directories: 'pass',
+        descriptive_file_roles: 'pass',
+      },
+    },
+    {
+      'features/profile/types.ts': 'export interface Profile { id: string; }\n',
       'features/profile/service.ts': [
         "import type { Profile } from './types';",
         'export function loadProfile(id: string): Profile { return { id }; }',
-      ],
+        '',
+      ].join('\n'),
       'features/profile/service.test.ts': [
         "import { loadProfile } from './service';",
         "export const sample = loadProfile('p-1');",
-      ],
+        '',
+      ].join('\n'),
     },
-    expect: {
-      no_junk_drawer_directories: 'pass',
-      descriptive_file_roles: 'pass',
-    },
-  }));
+  );
 
   let capturedManifest: Record<string, unknown> | null = null;
   let capturedQuestions: string[] = [];
@@ -522,20 +825,6 @@ test('runRubricHarness builds structure manifests (with or without explicit mode
   assert.equal(manifestFiles['features/profile/service.ts'].kind, 'source');
   assert.deepEqual(manifestFiles['features/profile/service.ts'].local_imports, ['./types']);
   assert.deepEqual(manifestFiles['features/profile/service.test.ts'], { kind: 'test' });
-
-  const unsafeFixturesDir = join(root, 'unsafe-fixtures');
-  mkdirSync(unsafeFixturesDir, { recursive: true });
-  writeFileSync(join(unsafeFixturesDir, 'unsafe.json'), JSON.stringify({
-    id: 'unsafe-path',
-    description: 'Traversal path in structure mode',
-    rubric: 'project-structure',
-    files: { '../escape.ts': ['export const x = 1;'] },
-    expect: { no_junk_drawer_directories: 'pass' },
-  }));
-  await assert.rejects(
-    runRubricHarness({ fixturesDir: unsafeFixturesDir, dryRun: true }),
-    /safe relative POSIX path/,
-  );
 });
 
 test('evals/code-change/rubrics/ has been removed in favor of authoritative rubrics/', () => {

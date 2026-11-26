@@ -1,0 +1,8 @@
+{
+  "id": "editorial-labels-kotlin-good",
+  "description": "Kotlin closed enums with human-readable names select real routing policies and grade calculations while editorial collection labels remain open strings with non-restrictive suggestions",
+  "rubric": "api-design",
+  "expect": {
+    "no_rigid_enums_for_editorial_labels": "pass"
+  }
+}

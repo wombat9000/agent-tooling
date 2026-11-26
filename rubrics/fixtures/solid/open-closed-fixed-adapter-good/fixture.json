@@ -1,0 +1,8 @@
+{
+  "id": "open-closed-fixed-adapter-good",
+  "description": "Localized outbound transport adapter dispatching over two fixed external providers without speculative plugin or registry abstractions",
+  "rubric": "solid",
+  "expect": {
+    "open_closed": "pass"
+  }
+}

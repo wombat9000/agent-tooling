@@ -1,0 +1,8 @@
+{
+  "id": "repeated-switches-bad",
+  "description": "Repeats separate switch chains on the same MembershipTier enum across discount, SLA, seat-limit, and grace-period functions",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_repeated_switches": "fail"
+  }
+}

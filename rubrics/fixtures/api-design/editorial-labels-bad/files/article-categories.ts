@@ -1,0 +1,37 @@
+// Editorial team requested a fixed category list for consistent sidebar grouping and sorting.
+export const ALLOWED_ARTICLE_CATEGORIES = [
+  'Company News',
+  'Engineering Culture',
+  'Customer Stories',
+  'Product Updates',
+] as const;
+
+export type ArticleCategory = (typeof ALLOWED_ARTICLE_CATEGORIES)[number];
+
+export interface CreateArticleRequest {
+  readonly title: string;
+  readonly bodyMarkdown: string;
+  readonly category: ArticleCategory;
+}
+
+export function parseArticleCategory(raw: string): ArticleCategory {
+  if (!ALLOWED_ARTICLE_CATEGORIES.includes(raw as ArticleCategory)) {
+    throw new Error(`Unsupported article category: ${raw}`);
+  }
+  return raw as ArticleCategory;
+}
+
+export function groupArticlesByCategory<T extends { category: ArticleCategory }>(
+  articles: readonly T[],
+): Record<ArticleCategory, T[]> {
+  const grouped: Record<ArticleCategory, T[]> = {
+    'Company News': [],
+    'Engineering Culture': [],
+    'Customer Stories': [],
+    'Product Updates': [],
+  };
+  for (const article of articles) {
+    grouped[article.category].push(article);
+  }
+  return grouped;
+}

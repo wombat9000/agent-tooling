@@ -1,0 +1,8 @@
+{
+  "id": "server-owned-contracts-bad",
+  "description": "BFF proxy duplicates backend field validation and enum whitelists, fills domain defaults, and parses prefixed sequential template IDs",
+  "rubric": "api-design",
+  "expect": {
+    "clean_server_owned_contracts_and_opaque_ids": "fail"
+  }
+}

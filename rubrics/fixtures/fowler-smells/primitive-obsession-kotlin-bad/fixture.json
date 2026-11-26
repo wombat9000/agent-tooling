@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-kotlin-bad",
+  "description": "Kotlin service branching on visibly unconstrained raw status/tier strings, untyped Triple tuples, and coupled boolean flags",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "fail"
+  }
+}

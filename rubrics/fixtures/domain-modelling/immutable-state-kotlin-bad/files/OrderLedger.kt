@@ -1,0 +1,26 @@
+package com.acme.warehouse
+
+class OrderItem(val sku: String, var quantity: Int)
+
+class OrderBook(val id: String) {
+    var status: String = "OPEN"
+    val items: MutableList<OrderItem> = mutableListOf()
+
+    fun addOrIncrement(sku: String, qty: Int) {
+        val existing = items.firstOrNull { it.sku == sku }
+        if (existing != null) {
+            existing.quantity += qty
+        } else {
+            items.add(OrderItem(sku, qty))
+        }
+        globalHistory.add(this)
+    }
+
+    fun close() {
+        status = "CLOSED"
+    }
+
+    companion object {
+        val globalHistory: MutableList<OrderBook> = mutableListOf()
+    }
+}

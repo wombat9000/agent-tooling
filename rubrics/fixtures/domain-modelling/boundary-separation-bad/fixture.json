@@ -1,0 +1,8 @@
+{
+  "id": "boundary-separation-bad",
+  "description": "Core shipment domain policy parses raw HTTP query text, reads config from disk, formats HTTP responses, and throws HTTP status exceptions",
+  "rubric": "domain-modelling",
+  "expect": {
+    "boundary_separation": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "shared-fixtures-no-raw-db-in-api-bad",
+  "description": "Sibling API integration test files copy-paste private auth helpers with hardcoded magic UUIDs and run inline raw SQL inserts, updates, and row counts inside API test bodies",
+  "rubric": "testing-integration",
+  "expect": {
+    "shared_fixtures_no_raw_db_in_api": "fail"
+  }
+}

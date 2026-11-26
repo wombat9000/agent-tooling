@@ -1,0 +1,8 @@
+{
+  "id": "deterministic-e2e-waiting-and-isolation-bad",
+  "description": "Browser E2E tests rely on arbitrary fixed waitForTimeout/setTimeout sleeps and share mutable state across ordered tests",
+  "rubric": "testing-e2e",
+  "expect": {
+    "deterministic_e2e_waiting_and_isolation": "fail"
+  }
+}

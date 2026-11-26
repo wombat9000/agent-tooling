@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-bad",
+  "description": "Domain class with mutable fields, in-place array mutations, and shared mutable static registry",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "fail"
+  }
+}

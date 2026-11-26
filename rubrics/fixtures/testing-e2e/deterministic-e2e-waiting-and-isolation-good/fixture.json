@@ -1,0 +1,8 @@
+{
+  "id": "deterministic-e2e-waiting-and-isolation-good",
+  "description": "Browser E2E tests use web-first auto-waiting assertions without fixed sleeps and seed clean isolated state per test",
+  "rubric": "testing-e2e",
+  "expect": {
+    "deterministic_e2e_waiting_and_isolation": "pass"
+  }
+}

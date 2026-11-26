@@ -1,0 +1,8 @@
+{
+  "id": "long-function-declarative-ui-good",
+  "description": "Declarative UI component grouping several short independent handlers and clean declarative markup composition",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "pass"
+  }
+}

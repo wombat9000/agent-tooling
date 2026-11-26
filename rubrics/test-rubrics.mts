@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
  * Unified dual-mode rubric test harness (`pnpm test:rubrics`).
- * Evaluates curated fixtures under rubrics/fixtures/ using judge-code's own scoring logic:
- * - production_code fixtures run in both `file` (per-file aggregated) and `module` (bundled) modes,
+ * Evaluates curated real-file fixtures under rubrics/fixtures/<group>/<id>/ using judge-code's own scoring logic:
+ * - production_code and test_code fixtures run in both `file` (per-file aggregated) and `module` (bundled) modes,
  *   narrowed to the fixture's expected check ID(s) and ignoring `scope` filtering in `file` mode so
  *   module-scoped checks report single-file signal alongside enforced module results.
- * - project_structure fixtures run in `structure` mode only.
+ * - project_structure fixtures read their real `files/` tree directly in `structure` mode only.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scripts/cli-backend.mts';
@@ -20,6 +19,7 @@ import {
   runWithConcurrency,
   type JudgeBackend,
   type JudgeResult,
+  type JudgeRunOptions,
 } from '../skills/judge-code/scripts/decisions.mts';
 import {
   PASS_THRESHOLD,
@@ -43,14 +43,14 @@ const OPENROUTER_MODEL_RE = /^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i;
 
 const USAGE = `Usage: node rubrics/test-rubrics.mts [options]
 
-Run curated good/bad code fixtures under rubrics/fixtures/ against authoritative rubrics/*.json.
-Production fixtures run in both \`file\` (per-file) and \`module\` (bundled) modes; structure fixtures run in \`structure\` mode.
+Run curated good/bad real-file fixtures under rubrics/fixtures/<group>/<id>/ against authoritative rubrics/*.json.
+Production and test_code fixtures run in both \`file\` (per-file) and \`module\` (bundled) modes; structure fixtures run in \`structure\` mode.
 
   --repeats N          Number of live repeats per mode/fixture (default: ${DEFAULT_REPEATS}; every repeat must pass)
   --fixture ID         Run only matching fixture ID(s) (repeatable)
   --rubric SLUG        Run only fixtures testing this rubric slug (repeatable)
   --rule CHECK_ID      Run only fixtures asserting this check ID (repeatable)
-  --modes MODE         Production modes to run: both (default), file, or module
+  --modes MODE         Dual-mode target execution: both (default), file, or module
   --backend BACKEND    Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
   --file-model ID      OpenRouter model override for file mode (default: ${DEFAULT_FILE_MODE_DECISION_MODEL})
   --module-model ID    OpenRouter model override for module/structure mode (default: ${DEFAULT_DECISION_MODEL})
@@ -70,6 +70,8 @@ export type ScopeSignalClassification = 'both' | 'module-only' | 'file-only' | '
 export interface LoadedFixture {
   id: string;
   file: string;
+  dir: string;
+  filesDir: string;
   description: string;
   mode?: 'structure';
   rootName?: string;
@@ -77,6 +79,7 @@ export interface LoadedFixture {
   allRubrics: boolean;
   exclude: string[];
   files: Record<string, string>;
+  contextFiles?: Record<string, string>;
   requirements?: string;
   conventions?: string;
   expect: Record<string, ExpectedChoice>;
@@ -176,7 +179,7 @@ function normalizeTextBlock(value: unknown, label: string): string {
   throw new Error(`${label} must be a nonempty string or array of lines`);
 }
 
-function assertSafeRelativePosixPath(fileName: string, label: string): void {
+export function assertSafeRelativePosixPath(fileName: string, label: string): void {
   const segments = fileName.split('/');
   if (
     fileName.startsWith('/')
@@ -184,8 +187,99 @@ function assertSafeRelativePosixPath(fileName: string, label: string): void {
     || fileName.includes('\0')
     || segments.some((seg) => seg === '' || seg === '.' || seg === '..')
   ) {
-    throw new Error(`${label}.files key "${fileName}" must be a safe relative POSIX path in structure mode`);
+    throw new Error(`${label} file path "${fileName}" must be a safe relative POSIX path`);
   }
+}
+
+function discoverFixtureDirs(fixturesDir: string): string[] {
+  const discovered: string[] = [];
+
+  function walk(dir: string, relDir = ''): void {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    if (entries.some((entry) => entry.isFile() && entry.name === 'fixture.json')) {
+      discovered.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const fullPath = join(dir, entry.name);
+      const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Fixture symlinks are not supported: ${relPath}`);
+      }
+      if (entry.isDirectory()) {
+        walk(fullPath, relPath);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        throw new Error(
+          `Legacy flat fixture JSON "${relPath}" is not supported; use <group>/<id>/fixture.json with real source files under files/`,
+        );
+      }
+    }
+  }
+
+  walk(fixturesDir);
+  return discovered;
+}
+
+function readFixtureFilesTree(dir: string, label: string): Record<string, string> {
+  const dirName = basename(dir);
+  if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new Error(`${label}: missing required "${dirName}/" directory`);
+  }
+  const files: Record<string, string> = {};
+
+  function walk(currentDir: string, prefix = ''): void {
+    const entries = readdirSync(currentDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (entry.name === '.DS_Store') continue;
+      const fullPath = join(currentDir, entry.name);
+      const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) {
+        throw new Error(`${label}: symlink not allowed in ${dirName}/ at "${relPath}"`);
+      }
+      if (entry.isDirectory()) {
+        walk(fullPath, relPath);
+      } else if (entry.isFile()) {
+        assertSafeRelativePosixPath(relPath, `${label}.${dirName}`);
+        const content = readFileSync(fullPath, 'utf8');
+        if (!content.trim()) {
+          throw new Error(`${label}.${dirName}[${relPath}] must contain nonempty text`);
+        }
+        files[relPath] = content;
+      }
+    }
+  }
+
+  walk(dir);
+  if (Object.keys(files).length === 0) {
+    throw new Error(`${label}: "${dirName}/" directory must contain at least one file`);
+  }
+  return files;
+}
+
+function readOptionalFixtureDoc(
+  fixtureDir: string,
+  fileName: string,
+  inlineValue: unknown,
+  label: string,
+  fieldName: string,
+): string | undefined {
+  const docPath = join(fixtureDir, fileName);
+  const docStat = lstatSync(docPath, { throwIfNoEntry: false });
+  if (docStat?.isSymbolicLink()) {
+    throw new Error(`${label}: symlink not allowed at "${fileName}"`);
+  }
+  const hasFile = Boolean(docStat?.isFile());
+  if (hasFile && inlineValue !== undefined) {
+    throw new Error(`${label}: specify either ${fileName} or "${fieldName}" in fixture.json, not both`);
+  }
+  if (hasFile) {
+    return normalizeTextBlock(readFileSync(docPath, 'utf8'), `${label} (${fileName})`);
+  }
+  if (inlineValue !== undefined) {
+    return normalizeTextBlock(inlineValue, `${label}.${fieldName}`);
+  }
+  return undefined;
 }
 
 function parseFixtureRubricSpec(raw: Record<string, unknown>, label: string): { rubrics: string[]; allRubrics: boolean } {
@@ -222,20 +316,27 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
   if (!statSync(fixturesDir, { throwIfNoEntry: false })?.isDirectory()) {
     throw new Error(`Fixtures directory not found: ${fixturesDir}`);
   }
-  const files = readdirSync(fixturesDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-  if (files.length === 0) {
-    throw new Error(`No *.json fixture files found in ${fixturesDir}`);
+  const fixtureDirs = discoverFixtureDirs(fixturesDir);
+  if (fixtureDirs.length === 0) {
+    throw new Error(`No fixture.json files found in ${fixturesDir}`);
   }
 
   const seenIds = new Set<string>();
   const fixtures: LoadedFixture[] = [];
 
-  for (const file of files) {
-    const label = `fixture ${file}`;
-    const raw = object(JSON.parse(readFileSync(join(fixturesDir, file), 'utf8')), label);
+  for (const fixtureDir of fixtureDirs) {
+    const metaPath = join(fixtureDir, 'fixture.json');
+    const relMetaPath = relative(fixturesDir, metaPath).split(sep).join('/');
+    const label = `fixture ${relMetaPath}`;
+    const raw = object(JSON.parse(readFileSync(metaPath, 'utf8')), label);
+
+    if (raw.files !== undefined) {
+      throw new Error(`${label}: inline "files" in fixture.json is not supported; place real source files under files/`);
+    }
+    if (raw.context !== undefined || raw.production_files_context !== undefined) {
+      throw new Error(`${label}: inline production context in fixture.json is not supported; place real source files under context/`);
+    }
+
     const id = nonempty(raw.id, `${label}.id`);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
       throw new Error(`${label}: id "${id}" must be lowercase kebab-case`);
@@ -253,10 +354,10 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
         mode = 'structure';
       } else if (raw.mode === 'file' || raw.mode === 'code') {
         throw new Error(
-          `${label}: "mode": "${raw.mode}" is obsolete; omit "mode" for production_code fixtures (they run in both file and module modes)`,
+          `${label}: "mode": "${raw.mode}" is obsolete; omit "mode" for production_code and test_code fixtures (they run in both file and module modes)`,
         );
       } else {
-        throw new Error(`${label}: mode must be omitted (for production_code) or "structure" (got ${String(raw.mode)})`);
+        throw new Error(`${label}: mode must be omitted (for production_code/test_code) or "structure" (got ${String(raw.mode)})`);
       }
     }
 
@@ -274,26 +375,23 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
       for (const item of excludeRaw) exclude.push(nonempty(item, `${label}.exclude`));
     }
 
-    const rawFiles = object(raw.files, `${label}.files`);
-    const fileEntries = Object.entries(rawFiles);
-    if (fileEntries.length === 0) {
-      throw new Error(`${label}.files must contain at least one file`);
-    }
-    const normalizedFiles: Record<string, string> = {};
-    for (const [fileName, content] of fileEntries) {
-      const cleanName = nonempty(fileName, `${label}.files key`);
-      if (mode === 'structure') {
-        assertSafeRelativePosixPath(cleanName, label);
-      }
-      normalizedFiles[cleanName] = normalizeTextBlock(content, `${label}.files[${cleanName}]`);
-    }
+    const filesDir = join(fixtureDir, 'files');
+    const normalizedFiles = readFixtureFilesTree(filesDir, label);
 
-    const requirements = raw.requirements !== undefined
-      ? normalizeTextBlock(raw.requirements, `${label}.requirements`)
+    const contextDir = join(fixtureDir, 'context');
+    const contextStat = lstatSync(contextDir, { throwIfNoEntry: false });
+    if (contextStat?.isSymbolicLink()) {
+      throw new Error(`${label}: symlink not allowed at "context"`);
+    }
+    if (contextStat && !contextStat.isDirectory()) {
+      throw new Error(`${label}: "context" must be a directory`);
+    }
+    const contextFiles = contextStat?.isDirectory()
+      ? readFixtureFilesTree(contextDir, label)
       : undefined;
-    const conventions = raw.conventions !== undefined
-      ? normalizeTextBlock(raw.conventions, `${label}.conventions`)
-      : undefined;
+
+    const requirements = readOptionalFixtureDoc(fixtureDir, 'requirements.md', raw.requirements, label, 'requirements');
+    const conventions = readOptionalFixtureDoc(fixtureDir, 'conventions.md', raw.conventions, label, 'conventions');
 
     const rawExpect = object(raw.expect, `${label}.expect`);
     const expectEntries = Object.entries(rawExpect);
@@ -310,7 +408,9 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
 
     fixtures.push({
       id,
-      file,
+      file: relMetaPath,
+      dir: fixtureDir,
+      filesDir,
       description,
       ...(mode !== undefined ? { mode } : {}),
       ...(rootName !== undefined ? { rootName } : {}),
@@ -318,12 +418,14 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
       allRubrics,
       exclude,
       files: normalizedFiles,
+      ...(contextFiles !== undefined ? { contextFiles } : {}),
       ...(requirements !== undefined ? { requirements } : {}),
       ...(conventions !== undefined ? { conventions } : {}),
       expect,
     });
   }
 
+  fixtures.sort((a, b) => a.id.localeCompare(b.id));
   return fixtures;
 }
 
@@ -334,7 +436,7 @@ function readAuthoritativeRubricMeta(rubricsDir: string, slug: string, fixtureId
   }
   const parsed = object(JSON.parse(readFileSync(fullPath, 'utf8')), `Rubric ${slug}`);
   const rawTarget = parsed.target === undefined ? 'production_code' : parsed.target;
-  if (rawTarget !== 'production_code' && rawTarget !== 'project_structure') {
+  if (rawTarget !== 'production_code' && rawTarget !== 'project_structure' && rawTarget !== 'test_code') {
     throw new Error(`Fixture ${fixtureId}: rubric "${slug}" targets unsupported "${String(rawTarget)}"`);
   }
   return { path: fullPath, target: rawTarget, id: nonempty(parsed.rubric, `${slug}.rubric`) };
@@ -361,7 +463,7 @@ function listAllAuthoritativeCheckIds(rubricsDir: string): Set<string> {
   for (const file of files) {
     const parsed = JSON.parse(readFileSync(join(rubricsDir, file), 'utf8')) as Record<string, unknown>;
     const rawTarget = parsed.target === undefined ? 'production_code' : parsed.target;
-    if (rawTarget !== 'production_code' && rawTarget !== 'project_structure') continue;
+    if (rawTarget !== 'production_code' && rawTarget !== 'project_structure' && rawTarget !== 'test_code') continue;
     const questions = parsed.questions;
     if (questions && typeof questions === 'object' && !Array.isArray(questions)) {
       for (const checkId of Object.keys(questions as Record<string, unknown>)) {
@@ -374,8 +476,9 @@ function listAllAuthoritativeCheckIds(rubricsDir: string): Set<string> {
 
 /**
  * Resolve and narrow a fixture's authoritative rubric(s) to ONLY the check IDs listed in `fixture.expect`.
- * Uses `mode: 'code'` for `production_code` rubrics so `module`-scoped checks are NOT stripped, allowing
- * the harness to evaluate them in both `file` and `module` modes while preserving their declared `scopes`.
+ * Uses `mode: 'code'` for `production_code` (and omits `mode` with `allowTestCode: true` for `test_code`)
+ * so `module`-scoped checks are NOT stripped, allowing the harness to evaluate them in both `file` and `module`
+ * modes while preserving their declared `scopes`.
  */
 export function resolveFixtureRubric(
   fixture: LoadedFixture,
@@ -391,7 +494,7 @@ export function resolveFixtureRubric(
     inferredTarget = explicitMeta[0].target;
     for (const meta of explicitMeta) {
       if (meta.target !== inferredTarget) {
-        throw new Error(`Fixture ${fixture.id}: cannot mix production_code and project_structure rubrics`);
+        throw new Error(`Fixture ${fixture.id}: cannot mix ${inferredTarget} and ${meta.target} rubrics`);
       }
     }
     if (fixture.mode === 'structure' && inferredTarget !== 'project_structure') {
@@ -403,10 +506,12 @@ export function resolveFixtureRubric(
     inferredTarget = fixture.mode === 'structure' ? 'project_structure' : 'production_code';
   }
 
-  if (inferredTarget === 'project_structure') {
-    for (const fileName of Object.keys(fixture.files)) {
-      assertSafeRelativePosixPath(fileName, `fixture ${fixture.file}`);
-    }
+  if (fixture.contextFiles !== undefined && inferredTarget !== 'test_code') {
+    throw new Error(`Fixture ${fixture.id}: "context/" directory is only supported for test_code fixtures`);
+  }
+
+  for (const fileName of Object.keys(fixture.files)) {
+    assertSafeRelativePosixPath(fileName, `fixture ${fixture.file}`);
   }
 
   const slugs = new Set<string>();
@@ -423,13 +528,14 @@ export function resolveFixtureRubric(
     return meta.path;
   });
 
-  // Resolve in 'code' mode for production_code so module-scoped checks stay active for dual-mode testing.
+  // Resolve in 'code' mode for production_code (and target-inferred mode for test_code) so module-scoped checks stay active.
   const fullResolved = resolveRubrics({
-    mode: inferredTarget === 'project_structure' ? 'structure' : 'code',
+    mode: inferredTarget === 'project_structure' ? 'structure' : inferredTarget === 'test_code' ? undefined : 'code',
     rubrics: rubricPaths,
     exclude: fixture.exclude,
     hasRequirements: fixture.requirements !== undefined,
     hasConventions: fixture.conventions !== undefined,
+    allowTestCode: inferredTarget === 'test_code',
   });
 
   const expectedIds = Object.keys(fixture.expect);
@@ -568,18 +674,12 @@ export interface RunHarnessOptions {
   transport?: typeof fetch;
 }
 
-function buildStructureManifestForFixture(
-  fixture: LoadedFixture,
-  sourceContainerDir: string,
-): StructureManifest {
-  const rootDir = join(sourceContainerDir, fixture.rootName ?? fixture.id);
-  mkdirSync(rootDir, { recursive: true });
-  for (const [relPath, content] of Object.entries(fixture.files)) {
-    const absPath = join(rootDir, ...relPath.split('/'));
-    mkdirSync(dirname(absPath), { recursive: true });
-    writeFileSync(absPath, content, 'utf8');
-  }
-  return readStructureInputs({ source: rootDir }).manifest;
+function buildStructureManifestForFixture(fixture: LoadedFixture): StructureManifest {
+  const { manifest } = readStructureInputs({ source: fixture.filesDir });
+  return {
+    ...manifest,
+    root_name: fixture.rootName ?? fixture.id,
+  };
 }
 
 function computeModeSignalStats(
@@ -638,7 +738,7 @@ export function buildScopeSignalMatrix(
   }>();
 
   for (const fixture of fixtures) {
-    if (fixture.target !== 'production_code') continue;
+    if (fixture.target !== 'production_code' && fixture.target !== 'test_code') continue;
     for (const check of fixture.checks) {
       if (check.declared_scope !== 'file' && check.declared_scope !== 'module') continue;
       let bucket = byCheck.get(check.check_id);
@@ -747,7 +847,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   }));
 
   const selected = resolvedPairs.filter(({ fixture, resolved }) => {
-    if (modes !== 'both' && resolved.target !== 'production_code') return false;
+    if (modes !== 'both' && resolved.target === 'project_structure') return false;
     if (fixtureFilter.length > 0 && !fixtureFilter.includes(fixture.id)) return false;
     if (rubricFilter.length > 0) {
       const activeGroups = new Set(Object.keys(resolved.groups));
@@ -766,7 +866,6 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   }
 
   const effectiveRepeats = dryRun ? 1 : repeats;
-  const scratchRoot = mkdtempSync(join(tmpdir(), 'test-rubrics-'));
 
   interface RunUnit {
     fixtureIndex: number;
@@ -804,51 +903,48 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     error?: string;
   }
 
-  let outcomes: UnitOutcome[];
-  try {
-    outcomes = await runWithConcurrency(units, concurrency, async (unit): Promise<UnitOutcome> => {
-      const unitStart = performance.now();
-      try {
-        const judgeMode: JudgeMode = unit.execMode === 'module' ? 'code' : unit.execMode;
-        const structure = judgeMode === 'structure'
-          ? buildStructureManifestForFixture(
-            unit.fixture,
-            join(scratchRoot, 'sources', `${unit.fixture.id}--r${unit.repeatIndex + 1}`),
-          )
-          : undefined;
-        const runOptions = {
-          mode: judgeMode,
-          ...(structure !== undefined ? { structure } : { files: unit.fixture.files }),
-          requirements: unit.fixture.requirements,
-          conventions: unit.fixture.conventions,
-          rubric: unit.resolved,
-          model: backend === 'openrouter' ? unit.model : undefined,
-          concurrency,
-          dryRun,
-        };
-        const result = backend === 'openrouter'
-          ? await runDecisionJudge(runOptions, options.transport)
-          : await runCliJudge(runOptions, backend);
-        return {
-          fixtureIndex: unit.fixtureIndex,
-          execMode: unit.execMode,
-          repeatIndex: unit.repeatIndex,
-          elapsedMs: Math.round(performance.now() - unitStart),
-          result,
-        };
-      } catch (error) {
-        return {
-          fixtureIndex: unit.fixtureIndex,
-          execMode: unit.execMode,
-          repeatIndex: unit.repeatIndex,
-          elapsedMs: Math.round(performance.now() - unitStart),
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    });
-  } finally {
-    rmSync(scratchRoot, { recursive: true, force: true });
-  }
+  const outcomes = await runWithConcurrency(units, concurrency, async (unit): Promise<UnitOutcome> => {
+    const unitStart = performance.now();
+    try {
+      const judgeMode: JudgeMode = unit.execMode === 'module' ? 'code' : unit.execMode;
+      const structure = judgeMode === 'structure'
+        ? buildStructureManifestForFixture(unit.fixture)
+        : undefined;
+      const runOptions: JudgeRunOptions = {
+        mode: judgeMode,
+        ...(structure !== undefined
+          ? { structure }
+          : {
+            files: unit.fixture.files,
+            ...(unit.fixture.contextFiles !== undefined ? { productionContext: unit.fixture.contextFiles } : {}),
+          }),
+        requirements: unit.fixture.requirements,
+        conventions: unit.fixture.conventions,
+        rubric: unit.resolved,
+        model: backend === 'openrouter' ? unit.model : undefined,
+        concurrency,
+        dryRun,
+      };
+      const result = backend === 'openrouter'
+        ? await runDecisionJudge(runOptions, options.transport)
+        : await runCliJudge(runOptions, backend);
+      return {
+        fixtureIndex: unit.fixtureIndex,
+        execMode: unit.execMode,
+        repeatIndex: unit.repeatIndex,
+        elapsedMs: Math.round(performance.now() - unitStart),
+        result,
+      };
+    } catch (error) {
+      return {
+        fixtureIndex: unit.fixtureIndex,
+        execMode: unit.execMode,
+        repeatIndex: unit.repeatIndex,
+        elapsedMs: Math.round(performance.now() - unitStart),
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
 
   const fixtureSummaries: FixtureEvaluationSummary[] = selected.map(({ fixture, resolved }, fixtureIndex) => {
     const execModes = modesForFixture(resolved.target);
@@ -1054,13 +1150,16 @@ export function formatReportTable(report: RubricHarnessReport): string {
   lines.push(`Rubric fixture tests [${modeLabel}]`);
 
   const prodFixtures = report.fixtures.filter((f) => f.target === 'production_code');
+  const testFixtures = report.fixtures.filter((f) => f.target === 'test_code');
   const structFixtures = report.fixtures.filter((f) => f.target === 'project_structure');
 
-  if (prodFixtures.length > 0) {
+  const appendDualModeTable = (heading: string | null, subset: FixtureEvaluationSummary[]) => {
+    if (subset.length === 0) return;
     lines.push('');
+    if (heading) lines.push(heading);
     const headers = ['Fixture', 'Files', 'Scope', 'Check', 'Expect', 'File (P)', 'Module (P)', 'Thr', 'Status'];
     const rows: string[][] = [];
-    for (const fixture of prodFixtures) {
+    for (const fixture of subset) {
       for (const check of fixture.checks) {
         const thr = check.pass_threshold !== null ? `>=${check.pass_threshold.toFixed(2)}` : '-';
         const status = report.dry_run
@@ -1084,7 +1183,10 @@ export function formatReportTable(report: RubricHarnessReport): string {
       }
     }
     lines.push(...formatTable(headers, rows));
-  }
+  };
+
+  appendDualModeTable(null, prodFixtures);
+  appendDualModeTable('Test Code Fixtures:', testFixtures);
 
   if (structFixtures.length > 0) {
     lines.push('');
@@ -1166,7 +1268,7 @@ export function formatReportTable(report: RubricHarnessReport): string {
   if (report.dry_run) {
     lines.push(
       `Dry-run validated ${report.fixtures_passed}/${report.fixtures_total} fixtures `
-      + `(${report.checks_total} expected checks, ${report.criteria_matrix.length} production criteria) in ${secs}s.`,
+      + `(${report.checks_total} expected checks, ${report.criteria_matrix.length} dual-mode criteria) in ${secs}s.`,
     );
   } else {
     lines.push(

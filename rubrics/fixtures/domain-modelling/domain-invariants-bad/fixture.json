@@ -1,0 +1,8 @@
+{
+  "id": "domain-invariants-bad",
+  "description": "Represents reservation dates, status, and guest counts as unvalidated primitives and tuples while checking invariants only ad hoc in one HTTP handler",
+  "rubric": "domain-modelling",
+  "expect": {
+    "domain_invariants": "fail"
+  }
+}

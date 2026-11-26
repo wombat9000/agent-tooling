@@ -1,0 +1,8 @@
+{
+  "id": "direct-readability-good",
+  "description": "Expresses compass turns and rover movement using clear domain names and explicit exhaustive switch transitions",
+  "rubric": "readability",
+  "expect": {
+    "direct_readability": "pass"
+  }
+}

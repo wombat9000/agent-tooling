@@ -1,0 +1,8 @@
+{
+  "id": "single-responsibility-outbound-adapter-good",
+  "description": "Focused outbound HTTP provider adapter handling request execution, bounded JSON parsing, telemetry/cost extraction, and safe error mapping for one external provider",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}

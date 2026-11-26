@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-imported-types-bad",
+  "description": "Visibly unconstrained string/number parameters repeating raw semantic sentinels and unnamed thresholds across multiple functions",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "fail"
+  }
+}

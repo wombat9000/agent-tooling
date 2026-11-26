@@ -1,0 +1,8 @@
+{
+  "id": "long-function-coordinator-kotlin-good",
+  "description": "Cohesive Kotlin transactional coordinator whose substantial mechanics are delegated to named collaborators and clear step ordering",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "pass"
+  }
+}

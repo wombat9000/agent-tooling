@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-local-builders-bad",
+  "description": "Mutates caller-owned domain objects and arrays in place, leaks internal mutable collections across ownership boundaries, and shares global mutable domain state",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "domain-invariants-good",
+  "description": "Domain types and validated constructors enforce reservation date range, guest count, and state transition invariants directly on the owning types",
+  "rubric": "domain-modelling",
+  "expect": {
+    "domain_invariants": "pass"
+  }
+}

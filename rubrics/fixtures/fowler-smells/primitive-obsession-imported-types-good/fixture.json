@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-imported-types-good",
+  "description": "Compares against imported domain union types in single-file mode alongside standard HTTP literals, opaque IDs, ordinary counts, and independent UI flags",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "pass"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "shadow-screen-forks-good",
+  "description": "Keeps one authoritative orders table, column builder, and filter helper that toggles a phased fulfillment column cleanly in place",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_shadow_screen_forks": "pass"
+  }
+}

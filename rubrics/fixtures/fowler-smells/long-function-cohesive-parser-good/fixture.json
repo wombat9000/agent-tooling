@@ -1,0 +1,8 @@
+{
+  "id": "long-function-cohesive-parser-good",
+  "description": "A single cohesive bounded RFC-style delimited line parser with brief normalization and one unified state-machine loop",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_functions": "pass"
+  }
+}

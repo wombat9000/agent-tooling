@@ -1,0 +1,25 @@
+export interface AccountSnapshot {
+  readonly method: string;
+  readonly accountAgeDays: number;
+  readonly overdueInvoiceCount: number;
+  readonly monthlySpendCents: number;
+  readonly disputeRateBps: number;
+  readonly countryCode: string;
+  readonly verifiedDomain: boolean;
+}
+
+export function evaluateCreditUpgrade(req: AccountSnapshot): 'approve' | 'review' | 'deny' {
+  if (req.method !== 'POST') {
+    return 'deny';
+  }
+  if (
+    (req.accountAgeDays < 90 && req.monthlySpendCents < 150_000) ||
+    (req.overdueInvoiceCount > 0 && req.disputeRateBps >= 75) ||
+    (!req.verifiedDomain && !/^(US|CA|GB|DE)$/.test(req.countryCode) && req.monthlySpendCents > 50_000)
+  ) {
+    return 'deny';
+  }
+  return req.accountAgeDays >= 180 && req.overdueInvoiceCount === 0 && req.disputeRateBps < 25 && req.monthlySpendCents >= 100_000
+    ? 'approve'
+    : 'review';
+}

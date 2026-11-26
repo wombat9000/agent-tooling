@@ -1,0 +1,8 @@
+{
+  "id": "interface-segregation-good",
+  "description": "Defines small focused printer and archiver contracts so each implementation and service depends only on the operations it actually uses",
+  "rubric": "solid",
+  "expect": {
+    "interface_segregation": "pass"
+  }
+}

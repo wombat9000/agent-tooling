@@ -1,0 +1,8 @@
+{
+  "id": "direct-readability-bad",
+  "description": "Derives compass turns via clever array-index modular arithmetic, uses opaque single-letter variable names, and embeds an unnamed cryptic regex",
+  "rubric": "readability",
+  "expect": {
+    "direct_readability": "fail"
+  }
+}

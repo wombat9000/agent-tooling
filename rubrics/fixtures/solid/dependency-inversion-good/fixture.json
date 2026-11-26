@@ -1,0 +1,8 @@
+{
+  "id": "dependency-inversion-good",
+  "description": "Trial domain policy and application service depend strictly on domain values and focused repository/clock/notifier ports rather than concrete fs, env, Date, or fetch APIs",
+  "rubric": "solid",
+  "expect": {
+    "dependency_inversion": "pass"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "unit-single-behavior-aaa-bad",
+  "description": "Unit tests chain multiple unrelated behaviors, mutations, error checks, and formatting rules into sprawling compound test methods",
+  "rubric": "testing-unit",
+  "expect": {
+    "unit_single_behavior_aaa": "fail"
+  }
+}

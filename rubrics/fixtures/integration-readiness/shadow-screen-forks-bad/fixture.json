@@ -1,0 +1,8 @@
+{
+  "id": "shadow-screen-forks-bad",
+  "description": "Duplicates the entire orders screen, column definitions, and filter logic into a parallel phase1/ shadow fork switched at runtime",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_shadow_screen_forks": "fail"
+  }
+}

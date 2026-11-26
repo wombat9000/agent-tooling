@@ -1,0 +1,11 @@
+{
+  "id": "integration-readiness-structure-test-helpers-good",
+  "description": "Production routes wire only real API/storage clients while clearly test-only colocated helpers and fixtures are imported exclusively by tests",
+  "mode": "structure",
+  "root_name": "app",
+  "rubric": "integration-readiness-structure",
+  "expect": {
+    "no_bundled_stub_or_demo_modules": "pass",
+    "no_parallel_shadow_directories": "pass"
+  }
+}

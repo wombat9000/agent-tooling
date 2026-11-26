@@ -1,0 +1,8 @@
+{
+  "id": "owner-boundary-no-seams-good",
+  "description": "Kotlin tests exercise the public InvoiceService boundary without test-only production flags or widened private helpers",
+  "rubric": "testing-core",
+  "expect": {
+    "owner_boundary_no_seams": "pass"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "observable-diagnostic-assertions-good",
+  "description": "Tests verify typed contract fields, stable ID-keyed collection entries, specific error codes, and state preservation after rejected mutations",
+  "rubric": "testing-core",
+  "expect": {
+    "observable_diagnostic_assertions": "pass"
+  }
+}

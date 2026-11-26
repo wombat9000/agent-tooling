@@ -1,0 +1,8 @@
+{
+  "id": "api-contract-boundary-bad",
+  "description": "Pollutes live catalog types with speculative unbuilt Phase-2 optional fields and demo markers while the API client returns raw unparsed fetch Response objects",
+  "rubric": "integration-readiness",
+  "expect": {
+    "clean_api_contract_boundary": "fail"
+  }
+}

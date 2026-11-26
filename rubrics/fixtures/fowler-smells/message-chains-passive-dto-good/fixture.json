@@ -1,0 +1,8 @@
+{
+  "id": "message-chains-passive-dto-good",
+  "description": "Reads deeply nested fields on passive DTO projections and configuration trees alongside a standard collection pipeline without violating Law of Demeter",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_message_chains": "pass"
+  }
+}

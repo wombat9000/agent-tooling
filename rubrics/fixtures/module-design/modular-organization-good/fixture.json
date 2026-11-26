@@ -1,0 +1,8 @@
+{
+  "id": "modular-organization-good",
+  "description": "Separates domain model, input parsing, persistence store, and workflow coordination into distinct, focused files",
+  "rubric": "module-design",
+  "expect": {
+    "modular_organization": "pass"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "solid-module-good",
+  "description": "Cohesive multi-file invoice module with clear SRP and dependency inversion through focused repository and clock ports",
+  "rubric": "solid",
+  "expect": {
+    "single_responsibility": "pass",
+    "dependency_inversion": "pass"
+  }
+}

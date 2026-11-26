@@ -1,0 +1,8 @@
+{
+  "id": "speculative-complexity-good",
+  "description": "Direct, proportional typed filter function for three fixed ticket statuses without a rule engine or pass-through wrappers",
+  "rubric": "integration-readiness",
+  "expect": {
+    "no_accidental_or_speculative_complexity": "pass"
+  }
+}

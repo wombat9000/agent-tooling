@@ -1,0 +1,10 @@
+{
+  "id": "project-structure-mixed-concerns-bad",
+  "description": "UI presentation, raw SQL persistence, HTTP routing, external transport clients, domain rules, and production-named test helpers all mixed flat together without architectural boundaries",
+  "mode": "structure",
+  "root_name": "src",
+  "rubric": "project-structure",
+  "expect": {
+    "clear_concern_separation": "fail"
+  }
+}

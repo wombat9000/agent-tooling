@@ -1,0 +1,8 @@
+{
+  "id": "minimal-http-surface-bad",
+  "description": "Campaign API uses a bloated kitchen-sink super-DTO, overloaded exclusive-branch PATCH modes, and a bespoke previewHash token handshake gating send",
+  "rubric": "api-design",
+  "expect": {
+    "minimal_standard_http_surface": "fail"
+  }
+}

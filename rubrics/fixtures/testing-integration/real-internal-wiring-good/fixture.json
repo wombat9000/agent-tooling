@@ -1,0 +1,8 @@
+{
+  "id": "real-internal-wiring-good",
+  "description": "Kotlin full-stack integration tests exercise real internal controller, service, and repository wiring while faking only the external third-party PaymentGateway",
+  "rubric": "testing-integration",
+  "expect": {
+    "real_internal_wiring": "pass"
+  }
+}

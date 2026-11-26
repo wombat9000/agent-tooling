@@ -1,0 +1,8 @@
+{
+  "id": "unit-single-behavior-aaa-good",
+  "description": "Each unit test verifies one cohesive inventory behavior or failure condition with a clean Arrange-Act-Assert flow",
+  "rubric": "testing-unit",
+  "expect": {
+    "unit_single_behavior_aaa": "pass"
+  }
+}

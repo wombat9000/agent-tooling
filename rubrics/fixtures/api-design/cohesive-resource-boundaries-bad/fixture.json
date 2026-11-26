@@ -1,0 +1,8 @@
+{
+  "id": "cohesive-resource-boundaries-bad",
+  "description": "Message template API DTO bolts on unrelated lifecycle picker hooks, unbuilt attachment placeholders, synthetic demo flags, and query-overloaded fields",
+  "rubric": "api-design",
+  "expect": {
+    "cohesive_resource_boundaries": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "integration-cohesive-scope-bad",
+  "description": "Integration tests act as sprawling kitchen-sink scripts chaining unrelated endpoints, workflows, and multiple unrelated validation errors in one mega-test",
+  "rubric": "testing-integration",
+  "expect": {
+    "integration_cohesive_scope": "fail"
+  }
+}
