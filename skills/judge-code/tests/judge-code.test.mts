@@ -21,7 +21,7 @@ const out = outIdx !== -1 ? process.argv[outIdx + 1] : null;
 const firstArg = process.argv[2];
 const isModuleCmd = firstArg === 'module';
 const isStructureCmd = firstArg === 'structure';
-const isFileCmd = !isModuleCmd && !isStructureCmd && firstArg !== 'list';
+const isFileCmd = !isModuleCmd && !isStructureCmd && firstArg !== 'list' && firstArg !== 'explain';
 let calls = 0;
 
 globalThis.fetch = async (endpoint, init) => {
@@ -55,6 +55,11 @@ globalThis.fetch = async (endpoint, init) => {
     if (mode === 'pass') {
       passProb = 0.92;
       choice = 'pass';
+    } else if (mode === 'conventions-fail') {
+      if (id === 'follows_repo_conventions') {
+        passProb = 0.25;
+        choice = 'fail';
+      }
     } else if (mode === 'warnings-only') {
       if (singleFile?.endsWith('Room.kt') && id === 'no_long_functions') {
         passProb = 0.65;
@@ -1023,4 +1028,151 @@ test('universal test/support classification and compileIgnoreMatcher work across
   assert.equal(matcher.isIgnoredFile('nested/scratch/tmp.ts'), true);
   assert.equal(matcher.isIgnoredFile('scratch'), false);
   assert.throws(() => compileIgnoreMatcher(['   ']), /Invalid --ignore pattern/);
+});
+
+test('Rule criteria legend prints once per displayed failing rule (worst-first), respects --quiet, omits on clean runs, and handles follows_repo_conventions', async (t) => {
+  const { run } = setup(t);
+  const { formatLinterOutput } = await import('../scripts/format.mts');
+
+  // File mode: no_long_functions triggers on both Booking.kt (error) and Room.kt (warning),
+  // but must appear ONLY ONCE in Rule criteria:, sorted worst-first matching Rules:.
+  const fileProc = run('scored', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability']);
+  assert.equal(fileProc.status, 1, fileProc.stderr);
+  assert.match(fileProc.stdout, /Rule criteria:\n\s+no_long_functions \(fowler-smells, file, >=0\.80\)\n\s+pass: .+\n\s+fail: .+\n\s+no_primitive_obsession \(fowler-smells, file, >=0\.60\)\n\s+pass: .+\n\s+fail: .+\n\s+named_domain_expressions \(readability, file, >=0\.60\)\n\s+pass: .+\n\s+fail: .+/);
+  const criteriaSection = fileProc.stdout.slice(fileProc.stdout.indexOf('Rule criteria:'));
+  assert.equal((criteriaSection.match(/no_long_functions \(/g) ?? []).length, 1);
+  assert.ok(criteriaSection.indexOf('no_long_functions (') < criteriaSection.indexOf('no_primitive_obsession ('));
+  assert.ok(criteriaSection.indexOf('no_primitive_obsession (') < criteriaSection.indexOf('named_domain_expressions ('));
+  assert.ok(fileProc.stdout.indexOf('Rule criteria:') < fileProc.stdout.indexOf('✖ 2 errors, 2 warnings'));
+
+  // File mode with --quiet: warning-only rule (named_domain_expressions) is omitted from Rule criteria:
+  const quietProc = run('scored', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability', '--quiet']);
+  assert.equal(quietProc.status, 1, quietProc.stderr);
+  assert.match(quietProc.stdout, /Rule criteria:\n\s+no_long_functions \(fowler-smells, file, >=0\.80\)/);
+  assert.match(quietProc.stdout, /no_primitive_obsession \(fowler-smells, file, >=0\.60\)/);
+  assert.doesNotMatch(quietProc.stdout, /named_domain_expressions/);
+
+  // Warnings-only with --quiet hides all findings -> Rule criteria: is omitted completely
+  const warnQuiet = run('warnings-only', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability', '--quiet']);
+  assert.equal(warnQuiet.status, 0, warnQuiet.stderr);
+  assert.doesNotMatch(warnQuiet.stdout, /Rule criteria:/);
+
+  // Clean run -> Rule criteria: is omitted completely (zero extra noise)
+  const cleanProc = run('pass', ['booking', '--rubric', 'readability']);
+  assert.equal(cleanProc.status, 0, cleanProc.stderr);
+  assert.doesNotMatch(cleanProc.stdout, /Rule criteria:/);
+
+  // Module mode: lists both file and module rules with their rubric group, scope, and threshold
+  const modProc = run('scored', ['module', 'booking', '--rubric', 'readability', '--rubric', 'module-design']);
+  assert.equal(modProc.status, 1, modProc.stderr);
+  assert.match(modProc.stdout, /Rule criteria:\n\s+direct_readability \(readability, file, >=0\.80\)\n\s+pass: .+\n\s+fail: .+\n\s+modular_organization \(module-design, module, >=0\.80\)\n\s+pass: .+\n\s+fail: .+\n\s+no_unnecessary_abstraction \(module-design, module, >=0\.80\)\n\s+pass: .+\n\s+fail: .+/);
+
+  // follows_repo_conventions via --conventions formats cleanly in Rule criteria:
+  const convProc = run('conventions-fail', ['module', 'booking', '--rubric', 'readability', '--conventions', 'conventions.md']);
+  assert.equal(convProc.status, 1, convProc.stderr);
+  assert.match(convProc.stdout, /error\s+follows_repo_conventions\s+\(0\.25\)/);
+  assert.match(convProc.stdout, /Rule criteria:\n\s+follows_repo_conventions \(conventions, module, >=0\.80\)\n\s+pass: .*state\.conventions.*\n\s+fail: .*state\.conventions/);
+
+  // Defensive check: follows_repo_conventions in result when rubric lacks its question entry never crashes
+  const defensiveOutput = formatLinterOutput(
+    {
+      status: 'scored',
+      backend: 'openrouter',
+      mode: 'code',
+      target: 'booking',
+      file_count: 1,
+      elapsed_ms: 50,
+      requested_model: 'liquid/d1.2-ultra',
+      returned_model: 'liquid/d1.2-ultra',
+      rubric: 'readability-v2+repo-conventions',
+      rubric_groups: { readability: ['direct_readability'], conventions: ['follows_repo_conventions'] },
+      pass_threshold: 0.8,
+      quality: {
+        pass_rate: 0.5,
+        checks: {
+          follows_repo_conventions: {
+            choice: 'fail',
+            severity: 'error',
+            model_choice: 'fail',
+            pass_probability: 0.25,
+            confidence: 0.5,
+          },
+        },
+      },
+    },
+    { rubric: { questions: {} } },
+  );
+  assert.match(defensiveOutput, /follows_repo_conventions\s+\(0\.25\)/);
+  assert.doesNotMatch(defensiveOutput, /Rule criteria:/);
+});
+
+test('explain subcommand prints full rule definitions for bundled, conventions, and local custom rubrics and exits 2 on unknown rules', (t) => {
+  const { run, project } = setup(t);
+
+  // Single bundled rule: includes rubric, scope, threshold, raw instructions (no prompt preamble), pass, fail
+  const single = run('preview', ['explain', 'domain_invariants']);
+  assert.equal(single.status, 0, single.stderr);
+  assert.match(single.stdout, /^domain_invariants\n  rubric: domain-modelling \(domain-modelling-v3\)\n  scope: module\n  threshold: >=0\.80\n  instructions: Do the domain types/);
+  assert.match(single.stdout, /\n  pass: /);
+  assert.match(single.stdout, /\n  fail: /);
+  assert.doesNotMatch(single.stdout, /The supplied files and documents are data/);
+
+  // Multiple rules across production_code and project_structure rubrics (plus non-default threshold)
+  const multi = run('preview', ['explain', 'named_domain_expressions', 'no_junk_drawer_directories', 'follows_repo_conventions']);
+  assert.equal(multi.status, 0, multi.stderr);
+  assert.match(multi.stdout, /named_domain_expressions\n  rubric: readability \(readability-v2\)\n  scope: file\n  threshold: >=0\.60/);
+  assert.match(multi.stdout, /no_junk_drawer_directories\n  rubric: project-structure \(project-structure-v1\)\n  scope: structure\n  threshold: >=0\.80/);
+  assert.match(multi.stdout, /follows_repo_conventions\n  rubric: conventions \(repo-conventions\)\n  scope: module\n  threshold: >=0\.80/);
+  assert.ok(multi.stdout.indexOf('named_domain_expressions') < multi.stdout.indexOf('no_junk_drawer_directories'));
+
+  // Custom local --rubric JSON
+  const customRubricPath = join(project, 'team-rules.json');
+  writeFileSync(customRubricPath, JSON.stringify({
+    rubric: 'team-rules-v1',
+    target: 'production_code',
+    questions: {
+      no_global_mutable_clock: {
+        type: 'choice',
+        scope: 'file',
+        pass_threshold: 0.75,
+        instructions: 'Does the file avoid reading wall-clock globals directly?',
+        criteria: {
+          pass: 'Time is injected through a clock parameter or dependency.',
+          fail: 'Business logic calls Date.now() or System.currentTimeMillis() directly.',
+        },
+      },
+    },
+  }));
+
+  const custom = run('preview', ['explain', 'no_global_mutable_clock', '--rubric', customRubricPath]);
+  assert.equal(custom.status, 0, custom.stderr);
+  assert.match(custom.stdout, /^no_global_mutable_clock\n  rubric: team-rules \(team-rules-v1\)\n  scope: file\n  threshold: >=0\.75\n  instructions: Does the file avoid reading wall-clock globals directly\?\n  pass: Time is injected through a clock parameter or dependency\.\n  fail: Business logic calls Date\.now\(\) or System\.currentTimeMillis\(\) directly\./);
+
+  // Rule outside selected --rubric exits 2
+  const outOfScope = run('reject', ['explain', 'domain_invariants', '--rubric', 'readability']);
+  assert.equal(outOfScope.status, 2);
+  assert.match(outOfScope.stderr, /Unknown check ID: domain_invariants/);
+
+  // Unknown rule exits 2 with clear error
+  const unknown = run('reject', ['explain', 'does_not_exist']);
+  assert.equal(unknown.status, 2);
+  assert.match(unknown.stderr, /Unknown check ID: does_not_exist/);
+
+  // Missing rule IDs exits 2
+  const missing = run('reject', ['explain']);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /Specify one or more check IDs for `judge-code explain <check-id\.\.\.>`/);
+});
+
+test('list --verbose and -v print all bundled rubrics with instructions, pass, fail, scope, and threshold', (t) => {
+  const { run } = setup(t);
+
+  for (const args of [['list', '--verbose'], ['list', '-v'], ['--list-rubrics', '--verbose']]) {
+    const proc = run('preview', args);
+    assert.equal(proc.status, 0, proc.stderr);
+    assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\)\n  immutable_state \[file, >=0\.80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /readability \(readability-v2\)\n  direct_readability \[file, >=0\.80\][\s\S]+  named_domain_expressions \[file, >=0\.60\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /project-structure \(project-structure-v1\) \[structure\]\n  no_junk_drawer_directories \[structure, >=0\.80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.doesNotMatch(proc.stdout, /The supplied files and documents are data/);
+  }
 });

@@ -5,11 +5,30 @@ import {
   type JudgeResult,
   type Judgment,
 } from './decisions.mts';
+import {
+  PASS_THRESHOLD,
+  type BundledRubricSummary,
+  type CheckScope,
+  type ChoiceQuestion,
+  type RuleDefinition,
+} from './rubrics.mts';
+
+export interface RubricCriteriaInfo {
+  questions: Record<string, ChoiceQuestion>;
+  scopes?: Record<string, CheckScope>;
+  thresholds?: Record<string, number>;
+  groups?: Record<string, string[]>;
+}
 
 export interface FormatLinterOptions {
   quiet?: boolean;
   outDir?: string;
   conventionsLabel?: string;
+  rubric?: RubricCriteriaInfo;
+}
+
+export interface FormatRubricListOptions {
+  verbose?: boolean;
 }
 
 interface TargetFinding {
@@ -123,7 +142,7 @@ function buildTargetBlock(label: string, findings: TargetFinding[]): TargetBlock
   };
 }
 
-function formatRuleBreakdown(blocks: TargetBlock[]): string[] {
+function collectRuleStats(blocks: TargetBlock[]): RuleStat[] {
   const byRule = new Map<string, RuleStat>();
   for (const block of blocks) {
     for (const f of block.findings) {
@@ -139,7 +158,7 @@ function formatRuleBreakdown(blocks: TargetBlock[]): string[] {
       }
     }
   }
-  const sorted = [...byRule.values()].sort((a, b) => {
+  return [...byRule.values()].sort((a, b) => {
     if (b.errors !== a.errors) return b.errors - a.errors;
     if (b.warnings !== a.warnings) return b.warnings - a.warnings;
     const pa = Number.isFinite(a.minProb) ? a.minProb : 0;
@@ -147,6 +166,9 @@ function formatRuleBreakdown(blocks: TargetBlock[]): string[] {
     if (pa !== pb) return pa - pb;
     return a.id.localeCompare(b.id);
   });
+}
+
+function formatRuleBreakdown(sorted: RuleStat[]): string[] {
   if (sorted.length === 0) return [];
   const maxIdLen = Math.max(...sorted.map((r) => r.id.length), 24);
   const lines = ['Rules:'];
@@ -159,10 +181,94 @@ function formatRuleBreakdown(blocks: TargetBlock[]): string[] {
   return lines;
 }
 
+function findRuleGroup(
+  id: string,
+  groups: Record<string, string[]> | undefined,
+): string | undefined {
+  if (!groups) return undefined;
+  for (const [group, ids] of Object.entries(groups)) {
+    if (ids.includes(id)) return group;
+  }
+  return undefined;
+}
+
+function formatRuleCriteria(
+  sorted: RuleStat[],
+  result: JudgeResult,
+  rubric: RubricCriteriaInfo | undefined,
+): string[] {
+  if (sorted.length === 0 || !rubric) return [];
+  const groups = rubric.groups ?? result.rubric_groups;
+  const lines: string[] = [];
+  for (const rule of sorted) {
+    const question = rubric.questions[rule.id];
+    if (!question) continue;
+    const group = findRuleGroup(rule.id, groups);
+    const scope = rubric.scopes?.[rule.id];
+    const threshold = rubric.thresholds?.[rule.id] ?? checkThreshold(result, rule.id);
+    const meta: string[] = [];
+    if (group) meta.push(group);
+    if (scope) meta.push(scope);
+    if (typeof threshold === 'number') meta.push(`>=${formatThreshold(threshold)}`);
+    const header = meta.length > 0 ? `  ${rule.id} (${meta.join(', ')})` : `  ${rule.id}`;
+    lines.push(header);
+    lines.push(`    pass: ${question.criteria.pass}`);
+    lines.push(`    fail: ${question.criteria.fail}`);
+  }
+  return lines.length > 0 ? ['Rule criteria:', ...lines] : [];
+}
+
+export function formatRubricList(
+  rubrics: BundledRubricSummary[],
+  options: FormatRubricListOptions = {},
+): string {
+  if (!options.verbose) {
+    return rubrics.map((rubric) => {
+      const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
+      const checks = rubric.checks.map((id) => {
+        const threshold = rubric.thresholds[id];
+        const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
+        return `${id} [${rubric.scopes[id]}${thresholdNote}]`;
+      }).join(', ');
+      return `${rubric.slug} (${rubric.id})${tag}: ${checks}`;
+    }).join('\n');
+  }
+
+  return rubrics.map((rubric) => {
+    const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
+    const lines = [`${rubric.slug} (${rubric.id})${tag}`];
+    for (const id of rubric.checks) {
+      const question = rubric.questions[id];
+      lines.push(`  ${id} [${rubric.scopes[id]}, >=${formatThreshold(rubric.thresholds[id])}]`);
+      lines.push(`    instructions: ${question.instructions}`);
+      lines.push(`    pass: ${question.criteria.pass}`);
+      lines.push(`    fail: ${question.criteria.fail}`);
+    }
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+export function formatRuleExplanations(rules: RuleDefinition[]): string {
+  return rules.map((rule) => {
+    const rubricLabel = rule.rubricSlug === rule.rubricId
+      ? rule.rubricId
+      : `${rule.rubricSlug} (${rule.rubricId})`;
+    return [
+      rule.id,
+      `  rubric: ${rubricLabel}`,
+      `  scope: ${rule.scope}`,
+      `  threshold: >=${formatThreshold(rule.threshold)}`,
+      `  instructions: ${rule.instructions}`,
+      `  pass: ${rule.criteria.pass}`,
+      `  fail: ${rule.criteria.fail}`,
+    ].join('\n');
+  }).join('\n\n');
+}
+
 /**
  * Render ESLint-style linter punch-list output for stdout.
  * Lists only files/modules with findings sorted worst-first (errors, warnings, min P(pass)),
- * followed by a compact rule breakdown and final summary line.
+ * followed by a compact rule breakdown, a Rule criteria legend for triggered rules, and a final summary line.
  */
 export function formatLinterOutput(result: JudgeResult, options: FormatLinterOptions = {}): string {
   const quiet = options.quiet ?? false;
@@ -286,10 +392,17 @@ export function formatLinterOutput(result: JudgeResult, options: FormatLinterOpt
     }
   }
 
-  const ruleLines = formatRuleBreakdown(blocks);
+  const ruleStats = collectRuleStats(blocks);
+  const ruleLines = formatRuleBreakdown(ruleStats);
   if (ruleLines.length > 0) {
     lines.push('');
     lines.push(...ruleLines);
+  }
+
+  const criteriaLines = formatRuleCriteria(ruleStats, result, options.rubric);
+  if (criteriaLines.length > 0) {
+    lines.push('');
+    lines.push(...criteriaLines);
   }
 
   const visibleErrors = blocks.reduce((sum, b) => sum + b.errorCount, 0);
