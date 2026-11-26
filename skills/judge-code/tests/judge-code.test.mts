@@ -341,39 +341,53 @@ test('ESLint-style error vs. warning output, --quiet, and standard linter exit c
   assert.match(badMaxWarnStr.stderr, /Invalid --max-warnings/);
 });
 
-test('auto-discovers AGENTS.md and .judge-code.json, merges ignore/exclude, and respects --conventions / --no-conventions / --config', (t) => {
+test('auto-discovers AGENTS.md, supports CLI --ignore/--exclude, ignores any .judge-code.json, and respects --conventions / --no-conventions', (t) => {
   const { run, root, project, source } = setup(t);
 
-  // Add repo-specific helper file + AGENTS.md + .judge-code.json
+  // Add repo-specific helper file + AGENTS.md + a .judge-code.json file that must be ignored
   writeFileSync(join(source, 'booking-test-support.ts'), 'export const helper = true;\n');
   writeFileSync(join(project, 'AGENTS.md'), '# Project Rules\nUse explicit Result types.\n');
   writeFileSync(join(project, '.judge-code.json'), JSON.stringify({
-    ignore: ['*-test-support.*'],
-    exclude: ['no_comment_deodorant_or_dead_code', 'no_junk_drawer_directories'],
-    modules: [
-      { name: 'booking-mod', path: 'booking', ignore: ['password.ts'] },
-    ],
+    ignore: ['Booking.kt'],
+    exclude: ['direct_readability'],
+    conventions: false,
+    modules: [{ name: 'booking-mod', path: 'booking' }],
   }, null, 2));
 
-  // Auto-loads AGENTS.md and .judge-code.json in file mode (cross-target structure exclude is tolerated!)
-  const out = join(root, 'auto-cfg');
+  // Auto-loads AGENTS.md in file mode and ignores .judge-code.json completely
+  const out = join(root, 'auto-agents');
   const proc = run('preview', ['booking', '--out', out, '--dry-run', '--json']);
   assert.equal(proc.status, 0, proc.stderr);
   const res = JSON.parse(proc.stdout);
-  assert.deepEqual(res.ignored_patterns, ['*-test-support.*']);
-  assert.deepEqual(res.excluded_checks, ['no_comment_deodorant_or_dead_code']);
-  assert.ok(!res.file_results.some((f: { file: string }) => f.file.includes('booking-test-support.ts')));
+  assert.equal('ignored_patterns' in res, false);
+  assert.equal('excluded_checks' in res, false);
+  assert.ok(res.file_results.some((f: { file: string }) => f.file.endsWith('Booking.kt')));
+  assert.ok(res.file_results.some((f: { file: string }) => f.file.endsWith('booking-test-support.ts')));
   const firstReq = JSON.parse(readFileSync(join(out, res.file_results[0].result_dir, 'request.json'), 'utf8'));
   assert.match(firstReq.state.conventions, /Use explicit Result types/);
   assert.match(firstReq.questions.direct_readability.instructions, /state\.conventions takes precedence/);
 
-  // CLI --ignore and --exclude merge with config
-  const merged = run('preview', ['booking', '--ignore', 'env.ts', '--exclude', 'immutable_state', '--dry-run', '--json']);
-  assert.equal(merged.status, 0, merged.stderr);
-  const mergedRes = JSON.parse(merged.stdout);
-  assert.deepEqual(mergedRes.ignored_patterns, ['*-test-support.*', 'env.ts']);
-  assert.deepEqual(mergedRes.excluded_checks, ['no_comment_deodorant_or_dead_code', 'immutable_state']);
-  assert.ok(!mergedRes.file_results.some((f: { file: string }) => f.file.endsWith('env.ts')));
+  // Auto-loads AGENTS.md in module mode and adds follows_repo_conventions
+  const modOut = join(root, 'mod-agents');
+  const modProc = run('preview', ['module', 'booking', '--ignore', '*-test-support.*', '--ignore', 'password.ts', '--out', modOut, '--dry-run', '--json']);
+  assert.equal(modProc.status, 0, modProc.stderr);
+  const modRes = JSON.parse(modProc.stdout);
+  assert.equal(modRes.mode, 'code');
+  assert.equal(modRes.target, 'booking');
+  const modReq = JSON.parse(readFileSync(join(modOut, 'request.json'), 'utf8'));
+  assert.equal('password.ts' in modReq.state.production_files, false);
+  assert.equal('booking-test-support.ts' in modReq.state.production_files, false);
+  assert.ok('Booking.kt' in modReq.state.production_files);
+  assert.ok('follows_repo_conventions' in modReq.questions);
+
+  // CLI --ignore and --exclude customize runs directly
+  const custom = run('preview', ['booking', '--ignore', '*-test-support.*', '--ignore', 'env.ts', '--exclude', 'no_comment_deodorant_or_dead_code', '--exclude', 'immutable_state', '--dry-run', '--json']);
+  assert.equal(custom.status, 0, custom.stderr);
+  const customRes = JSON.parse(custom.stdout);
+  assert.deepEqual(customRes.ignored_patterns, ['*-test-support.*', 'env.ts']);
+  assert.deepEqual(customRes.excluded_checks, ['no_comment_deodorant_or_dead_code', 'immutable_state']);
+  assert.ok(!customRes.file_results.some((f: { file: string }) => f.file.endsWith('env.ts')));
+  assert.ok(!customRes.file_results.some((f: { file: string }) => f.file.includes('booking-test-support.ts')));
 
   // --no-conventions disables auto-loaded AGENTS.md
   const noConvOut = join(root, 'no-conv');
@@ -395,35 +409,15 @@ test('auto-discovers AGENTS.md and .judge-code.json, merges ignore/exclude, and 
   assert.equal(conflictConv.status, 2);
   assert.match(conflictConv.stderr, /Cannot combine --conventions and --no-conventions/);
 
-  // Explicit --config with conventions: false disables AGENTS.md auto-loading
-  const customCfg = join(root, 'custom.judge-code.json');
-  writeFileSync(customCfg, JSON.stringify({ conventions: false, ignore: ['env.ts'] }));
-  const cfgFalseOut = join(root, 'cfg-false');
-  const cfgFalse = run('preview', ['booking/Booking.kt', '--config', customCfg, '--out', cfgFalseOut, '--dry-run', '--json']);
-  assert.equal(cfgFalse.status, 0, cfgFalse.stderr);
-  const cfgFalseRes = JSON.parse(cfgFalse.stdout);
-  const cfgFalseReq = JSON.parse(readFileSync(join(cfgFalseOut, cfgFalseRes.file_results[0].result_dir, 'request.json'), 'utf8'));
-  assert.equal('conventions' in cfgFalseReq.state, false);
+  // --config flag is not supported (rejected with exit 2)
+  const cfgFlag = run('reject', ['booking', '--config', '.judge-code.json', '--dry-run']);
+  assert.equal(cfgFlag.status, 2);
+  assert.match(cfgFlag.stderr, /Unknown option/);
 
-  // `judge-code module` with no positional args uses .judge-code.json modules + per-module ignore!
-  const modCfgOut = join(root, 'mod-from-cfg');
-  const modCfgProc = run('preview', ['module', '--out', modCfgOut, '--dry-run', '--json']);
-  assert.equal(modCfgProc.status, 0, modCfgProc.stderr);
-  const modCfgRes = JSON.parse(modCfgProc.stdout);
-  assert.equal(modCfgRes.mode, 'code');
-  assert.equal(modCfgRes.target, 'booking-mod');
-  const modCfgReq = JSON.parse(readFileSync(join(modCfgOut, 'request.json'), 'utf8'));
-  assert.equal('password.ts' in modCfgReq.state.production_files, false);
-  assert.equal('booking-test-support.ts' in modCfgReq.state.production_files, false);
-  assert.ok('Booking.kt' in modCfgReq.state.production_files);
-  assert.ok('follows_repo_conventions' in modCfgReq.questions);
-
-  // Typo in config exclude is rejected with exit 2
-  const badCfg = join(root, 'bad-exclude.json');
-  writeFileSync(badCfg, JSON.stringify({ exclude: ['nonexistent_rule_xyz'] }));
-  const badCfgProc = run('reject', ['booking', '--config', badCfg, '--dry-run']);
-  assert.equal(badCfgProc.status, 2);
-  assert.match(badCfgProc.stderr, /Unknown check ID in config exclude/);
+  // `judge-code module` requires explicit path arguments (no .judge-code.json fallback)
+  const modMissingArgs = run('reject', ['module', '--dry-run']);
+  assert.equal(modMissingArgs.status, 2);
+  assert.match(modMissingArgs.stderr, /Specify one or more paths for `judge-code module <path\.\.\.>`/);
 });
 
 test('--changed resolves modified, staged, and untracked files vs main or HEAD fallback, supports path filters, and exits 0 when clean', (t) => {
