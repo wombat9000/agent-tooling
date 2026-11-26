@@ -17,6 +17,19 @@ import { writeScorecardHtml } from './lib/scorecard_html.mts';
 import type { ScorecardCondition } from './lib/scorecard_schema.mts';
 import { DEFAULT_RUN_CONCURRENCY, countRunningDockerContainers, resolveRunConcurrency } from './lib/docker_concurrency.mts';
 import { HarborLockInterruptedError, signalExitCode, withHarborLock } from './lib/harbor_lock.mts';
+import {
+  JUDGE_CODE_EXTRA_INSTRUCTION,
+  inspectHarborRunCondition,
+  type BaseRunCondition,
+} from './lib/run_condition.mts';
+import {
+  aggregateTrialMetrics,
+  formatAggregateUsageLine,
+  normalizeTrialMetrics,
+  readTrialMetrics,
+  type AggregateUsageMetrics,
+  type TrialUsageMetrics,
+} from './lib/trial_metrics.mts';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TASKS = join(ROOT, 'evals/code-change/tasks');
@@ -41,6 +54,7 @@ Run options (canary, run):
   --service-tier TIER   Codex service tier (default: priority / Fast)
   --auth local|api      Codex auth (default: local login)
   --baseline            Omit the skill
+  --with-judge-code     Install skills/judge-code and forward OPENROUTER_API_KEY into the agent container
   --attempts N          Attempts per task (canary: 1, run: 5)
   --concurrency N       Concurrent trials (canary: 1, run: 2; 1 if Docker is busy)
 
@@ -173,9 +187,21 @@ function run(
 }
 
 /** Explicit auth selection prevents an inherited local-login flag from overriding API mode. */
-function codexEnvironment(auth: string, dryRun: boolean): NodeJS.ProcessEnv {
+function codexEnvironment(auth: string, dryRun: boolean, withJudgeCode = false): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  delete env.OPENROUTER_API_KEY;
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim() ?? '';
+  if (withJudgeCode) {
+    if (!dryRun && !openRouterKey) {
+      throw new Error('Set OPENROUTER_API_KEY in the host environment when using --with-judge-code.');
+    }
+    if (openRouterKey) {
+      env.OPENROUTER_API_KEY = openRouterKey;
+    } else {
+      delete env.OPENROUTER_API_KEY;
+    }
+  } else {
+    delete env.OPENROUTER_API_KEY;
+  }
   if (auth === 'local') {
     env.CODEX_AUTH_JSON_PATH = env.CODEX_AUTH_JSON_PATH
       || join(env.CODEX_HOME || join(homedir(), '.codex'), 'auth.json');
@@ -262,6 +288,8 @@ interface BatchSummaryReport {
   report: string;
   contextDir?: string;
   rewardPath?: string;
+  trialResultPath?: string;
+  usage?: TrialUsageMetrics;
   status: string;
   result_dir: string;
   quality_pass_rate: number | null;
@@ -273,6 +301,9 @@ interface BatchSummary {
   model: string;
   scope: JudgeScope;
   target?: 'test_code';
+  condition?: BaseRunCondition;
+  with_judge_code?: boolean;
+  usage?: AggregateUsageMetrics | null;
   reports: BatchSummaryReport[];
 }
 
@@ -317,11 +348,18 @@ function loadResumeSummary(directory: string): { out: string; summary: BatchSumm
       : raw.target === 'test_code'
         ? 'test_code'
         : taskTarget(taskDir);
+    const normalizedUsage = normalizeTrialMetrics(item.usage);
     return {
       ...(item as unknown as BatchSummaryReport),
+      ...(normalizedUsage ? { usage: normalizedUsage } : {}),
       target,
     };
   });
+  const condition = raw.condition === 'skill' || raw.condition === 'baseline' || raw.condition === 'oracle' || raw.condition === 'nop'
+    ? raw.condition
+    : undefined;
+  const withJudgeCode = raw.with_judge_code === true ? true : undefined;
+  const aggregatedUsage = aggregateTrialMetrics(reports.map((entry) => entry.usage));
   return {
     out,
     summary: {
@@ -329,6 +367,9 @@ function loadResumeSummary(directory: string): { out: string; summary: BatchSumm
       model: raw.model,
       scope,
       ...(raw.target === 'test_code' ? { target: 'test_code' as const } : {}),
+      ...(condition ? { condition } : {}),
+      ...(withJudgeCode ? { with_judge_code: true } : {}),
+      ...(aggregatedUsage ? { usage: aggregatedUsage } : {}),
       reports,
     },
   };
@@ -343,6 +384,12 @@ async function runBatchJudge(
 ): Promise<number> {
   const resolvedOut = resolve(out);
   const saveSummary = () => {
+    const aggregatedUsage = aggregateTrialMetrics(summary.reports.map((entry) => entry.usage));
+    if (aggregatedUsage) {
+      summary.usage = aggregatedUsage;
+    } else {
+      delete summary.usage;
+    }
     writeFileSync(join(resolvedOut, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
     writeHtmlReport(resolvedOut);
   };
@@ -388,6 +435,8 @@ async function runBatchJudge(
       return 1;
     }
   }
+  const usageLine = formatAggregateUsageLine(summary.usage);
+  if (usageLine) console.log(`Usage: ${usageLine}`);
   return showReport(join(resolvedOut, 'report.html'), open);
 }
 
@@ -518,7 +567,29 @@ async function main(): Promise<number> {
       console.log(`HTML report source: ${directory}`);
       return 0;
     }
-    return showReport(writeHtmlReport(directory, values.out), values.open);
+    const reportPath = writeHtmlReport(directory, values.out);
+    const summaryPath = join(directory, 'summary.json');
+    if (existsSync(summaryPath)) {
+      try {
+        const savedSummary = JSON.parse(readFileSync(summaryPath, 'utf8')) as {
+          source_run?: string;
+          usage?: AggregateUsageMetrics | null;
+          reports?: Array<{ trial?: string; usage?: unknown }>;
+        };
+        const usage = savedSummary.usage ?? aggregateTrialMetrics(
+          (savedSummary.reports ?? []).map((entry) =>
+            normalizeTrialMetrics(entry.usage)
+            ?? (savedSummary.source_run && entry.trial
+              ? readTrialMetrics(join(savedSummary.source_run, entry.trial, 'result.json'))
+              : null)),
+        );
+        const usageLine = formatAggregateUsageLine(usage);
+        if (usageLine) console.log(`Usage: ${usageLine}`);
+      } catch {
+        // Optional usage summary line.
+      }
+    }
+    return showReport(reportPath, values.open);
   }
   if (command === 'judge') {
     const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
@@ -584,11 +655,23 @@ async function main(): Promise<number> {
         : join(RESULTS, 'judges', basename(source), `${modelSlug}-${randomUUID()}`);
       mkdirSync(dirname(out), { recursive: true });
       mkdirSync(out);
+      const runCondition = inspectHarborRunCondition(source);
+      const summaryReports: BatchSummaryReport[] = reports.map((entry) => ({
+        ...entry,
+        usage: readTrialMetrics(entry.trialResultPath),
+        status: 'pending',
+        result_dir: join(out, entry.trial),
+        quality_pass_rate: null as number | null,
+        error: null as string | null,
+      }));
+      const aggregatedUsage = aggregateTrialMetrics(summaryReports.map((entry) => entry.usage));
       const summary: BatchSummary = {
         source_run: source, model, scope,
         ...(isTestsTarget ? { target: 'test_code' as const } : {}),
-        reports: reports.map((entry) => ({ ...entry, status: 'pending', result_dir: join(out, entry.trial),
-          quality_pass_rate: null as number | null, error: null as string | null })),
+        ...(runCondition.baseCondition ? { condition: runCondition.baseCondition } : {}),
+        ...(runCondition.withJudgeCode ? { with_judge_code: true } : {}),
+        ...(aggregatedUsage ? { usage: aggregatedUsage } : {}),
+        reports: summaryReports,
       };
       console.log(`Run: ${source}`);
       console.log(`Judge: ${model} (${scope}${isTestsTarget ? ', test_code' : ''}); reports: ${reports.length}`);
@@ -665,6 +748,7 @@ async function main(): Promise<number> {
       'service-tier': { type: 'string', default: 'priority' },
       auth: { type: 'string', default: 'local' },
       baseline: { type: 'boolean', default: false },
+      'with-judge-code': { type: 'boolean', default: false },
       attempts: { type: 'string' }, concurrency: { type: 'string' },
       task: { type: 'string' },
       'no-wait': { type: 'boolean', default: false },
@@ -681,15 +765,24 @@ async function main(): Promise<number> {
     const defaultAttempts = command === 'canary' ? 1 : 5;
     const attempts = String(parseOptionalPositiveInteger(values.attempts, '--attempts') ?? defaultAttempts);
     const requestedConcurrency = parseOptionalPositiveInteger(values.concurrency, '--concurrency');
-    const env = codexEnvironment(values.auth, values['dry-run']);
+    const withJudgeCode = values['with-judge-code'];
+    const env = codexEnvironment(values.auth, values['dry-run'], withJudgeCode);
+    const conditionSlug = `${values.baseline ? 'baseline' : 'skill'}${withJudgeCode ? '-with-judge-code' : ''}`;
     const buildHarborArgs = (concurrency: number): string[] => {
       const harborArgs = ['run', '-p', task, '-a', 'codex', '-m', values.model,
         '--ak', `reasoning_effort=${values.effort}`,
         '--ak', `config=${JSON.stringify({ service_tier: values['service-tier'] })}`,
         '-k', attempts, '-n', String(concurrency), '-o', join(RESULTS, 'harbor'),
-        '--job-name', `${command}-${values.baseline ? 'baseline' : 'skill'}-${randomUUID()}`];
+        '--job-name', `${command}-${conditionSlug}-${randomUUID()}`];
       if (targets.some((dir) => taskTarget(dir) === 'review')) harborArgs.push('--artifact', '/output/REVIEW.md');
       if (!values.baseline) harborArgs.push('--skill', join(ROOT, 'skills/code-change'));
+      if (withJudgeCode) {
+        harborArgs.push(
+          '--skill', join(ROOT, 'skills/judge-code'),
+          '--ae', 'OPENROUTER_API_KEY=${OPENROUTER_API_KEY}',
+          '--extra-instruction', JUDGE_CODE_EXTRA_INSTRUCTION,
+        );
+      }
       return harborArgs;
     };
     if (values['dry-run']) {

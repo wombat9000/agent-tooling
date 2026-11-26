@@ -41,11 +41,36 @@ export interface ScorecardSource {
   git_ref?: string;
 }
 
+export interface ScorecardUsageMetric {
+  total: number;
+  mean: number;
+  count: number;
+}
+
+export interface ScorecardUsage {
+  n_input_tokens?: ScorecardUsageMetric;
+  n_cache_tokens?: ScorecardUsageMetric;
+  n_output_tokens?: ScorecardUsageMetric;
+  cost_usd?: ScorecardUsageMetric;
+  duration_sec?: ScorecardUsageMetric;
+  agent_duration_sec?: ScorecardUsageMetric;
+}
+
+export const USAGE_METRIC_KEYS = [
+  'n_input_tokens',
+  'n_cache_tokens',
+  'n_output_tokens',
+  'cost_usd',
+  'duration_sec',
+  'agent_duration_sec',
+] as const;
+
 export interface ScorecardEntry {
   recorded_at: string;
   agent_model: string;
   judge_model: string;
   scope: ScorecardScope;
+  with_judge_code?: boolean;
   rubric: string;
   rubric_groups?: Record<string, string[]>;
   trials: {
@@ -54,6 +79,7 @@ export interface ScorecardEntry {
     errored: number;
   };
   deterministic: ScorecardDeterministic | null;
+  usage?: ScorecardUsage;
   quality: {
     pass_rate: number;
     mean_pass_probability: number;
@@ -102,6 +128,23 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortKeysDeep(value));
 }
 
+function normalizeUsage(usage: ScorecardUsage | undefined): ScorecardUsage | undefined {
+  if (!usage) return undefined;
+  const normalized: ScorecardUsage = {};
+  let hasAny = false;
+  for (const key of USAGE_METRIC_KEYS) {
+    const metric = usage[key];
+    if (!metric) continue;
+    normalized[key] = {
+      total: round4(metric.total),
+      mean: round4(metric.mean),
+      count: metric.count,
+    };
+    hasAny = true;
+  }
+  return hasAny ? normalized : undefined;
+}
+
 function normalizeEntry(entry: ScorecardEntry): ScorecardEntry {
   const sortedChecks: Record<string, ScorecardCheckStats> = {};
   for (const key of Object.keys(entry.quality.checks).sort(compareCodepoint)) {
@@ -141,6 +184,7 @@ function normalizeEntry(entry: ScorecardEntry): ScorecardEntry {
     agent_model: entry.agent_model,
     judge_model: entry.judge_model,
     scope: entry.scope,
+    ...(entry.with_judge_code === true ? { with_judge_code: true } : {}),
     rubric: entry.rubric,
     ...(entry.rubric_groups && Object.keys(entry.rubric_groups).length > 0
       ? {
@@ -157,6 +201,7 @@ function normalizeEntry(entry: ScorecardEntry): ScorecardEntry {
       errored: entry.trials.errored,
     },
     deterministic,
+    ...(normalizeUsage(entry.usage) ? { usage: normalizeUsage(entry.usage) } : {}),
     quality: {
       pass_rate: round4(entry.quality.pass_rate),
       mean_pass_probability: round4(entry.quality.mean_pass_probability),
@@ -243,6 +288,39 @@ function rejectUnsafePathsOrUuids(value: string, label: string): void {
   }
 }
 
+function asNonNegativeNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+function validateUsage(raw: unknown, label: string): ScorecardUsage | undefined {
+  if (raw === undefined) return undefined;
+  const obj = asObject(raw, label);
+  const allowed = new Set<string>(USAGE_METRIC_KEYS);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      throw new Error(`${label} contains unsupported field: ${key}`);
+    }
+  }
+  const usage: ScorecardUsage = {};
+  let hasAny = false;
+  for (const key of USAGE_METRIC_KEYS) {
+    if (obj[key] === undefined) continue;
+    const mObj = asObject(obj[key], `${label}.${key}`);
+    const total = asNonNegativeNumber(mObj.total, `${label}.${key}.total`);
+    const mean = asNonNegativeNumber(mObj.mean, `${label}.${key}.mean`);
+    const count = asNonNegativeInt(mObj.count, `${label}.${key}.count`);
+    if (count < 1) {
+      throw new Error(`${label}.${key}.count must be >= 1`);
+    }
+    usage[key] = { total, mean, count };
+    hasAny = true;
+  }
+  return hasAny ? usage : undefined;
+}
+
 function validateMetricSummary(raw: unknown, label: string): ScorecardMetricSummary {
   const obj = asObject(raw, label);
   const passed = asNonNegativeInt(obj.passed, `${label}.passed`);
@@ -271,6 +349,14 @@ function validateEntry(raw: unknown, condition: ScorecardCondition, label: strin
     throw new Error(`${label}.scope must be "whole" or "per-file"`);
   }
   const scope: ScorecardScope = obj.scope;
+
+  let with_judge_code: boolean | undefined;
+  if (obj.with_judge_code !== undefined) {
+    if (typeof obj.with_judge_code !== 'boolean') {
+      throw new Error(`${label}.with_judge_code must be a boolean`);
+    }
+    if (obj.with_judge_code) with_judge_code = true;
+  }
 
   const rubric = asNonEmptyString(obj.rubric, `${label}.rubric`);
   rejectUnsafePathsOrUuids(rubric, `${label}.rubric`);
@@ -322,6 +408,8 @@ function validateEntry(raw: unknown, condition: ScorecardCondition, label: strin
     }
     deterministic = metrics ? { ...base, metrics } : base;
   }
+
+  const usage = validateUsage(obj.usage, `${label}.usage`);
 
   const qualityObj = asObject(obj.quality, `${label}.quality`);
   const pass_rate = asUnitInterval(qualityObj.pass_rate, `${label}.quality.pass_rate`);
@@ -402,10 +490,12 @@ function validateEntry(raw: unknown, condition: ScorecardCondition, label: strin
     agent_model,
     judge_model,
     scope,
+    ...(with_judge_code ? { with_judge_code } : {}),
     rubric,
     ...(rubric_groups ? { rubric_groups } : {}),
     trials: { total, scored, errored },
     deterministic,
+    ...(usage ? { usage } : {}),
     quality: {
       pass_rate,
       mean_pass_probability,

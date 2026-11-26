@@ -1,0 +1,7 @@
+{
+  "test_source_root": "tests",
+  "extends": [
+    "testing-core",
+    "testing-unit"
+  ]
+}

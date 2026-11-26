@@ -1,0 +1,17 @@
+schema_version = "1.4"
+artifacts = ["/workspace/src", "/workspace/tests"]
+
+[task]
+name = "agent-tooling/code-change-refactor-shipping-rates"
+description = "Refactor a legacy TypeScript shipping quote calculator, add cold_chain service-tier support, and write unit tests."
+keywords = ["code-change", "refactor", "typescript", "shipping-rates"]
+
+[environment]
+skills_dir = "/skills"
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 300
+
+[verifier]
+timeout_sec = 300

@@ -489,3 +489,108 @@ test('renderScorecardHtml escapes untrusted strings to prevent XSS', () => {
   assert.ok(!html.includes('<script>alert("xss")</script>'));
   assert.ok(html.includes('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'));
 });
+
+test('scorecard recording preserves with_judge_code metadata and classifies baseline + judge-code as baseline', (t) => {
+  const repo = tempDir(t, 'scorecard-jc-repo-');
+  mkdirSync(join(repo, 'skills/demo'), { recursive: true });
+  writeFileSync(join(repo, 'skills/demo/SKILL.md'), '# Demo skill\n');
+  mkdirSync(join(repo, 'rubrics'), { recursive: true });
+  writeFileSync(join(repo, 'rubrics/core.json'), JSON.stringify({
+    rubric: 'core-v1',
+    target: 'production_code',
+    questions: {
+      clean_code: { type: 'choice', instructions: 'Clean?', criteria: { pass: 'Yes', fail: 'No' } },
+    },
+  }));
+  mkdirSync(join(repo, 'evals/demo/tasks/refactor-demo/tests'), { recursive: true });
+  writeFileSync(join(repo, 'evals/demo/tasks/refactor-demo/task.toml'), 'version = "1"\n');
+  writeFileSync(join(repo, 'evals/demo/tasks/refactor-demo/tests/judge.json'), JSON.stringify({ extends: ['core'] }));
+
+  const archive = tempDir(t, 'scorecard-jc-archive-');
+  const createBatch = (runFolder: string, skills: string[]) => {
+    const harborDir = join(archive, 'eval-results/harbor', runFolder);
+    mkdirSync(harborDir, { recursive: true });
+    writeFileSync(join(harborDir, 'config.json'), JSON.stringify({
+      agents: [{ name: 'codex', model_name: 'openai/gpt-6.1-terra', skills }],
+    }));
+    writeFileSync(join(harborDir, 'result.json'), JSON.stringify({ finished_at: '2026-11-26T15:00:00Z' }));
+    mkdirSync(join(harborDir, 'refactor-demo__t1'), { recursive: true });
+    writeFileSync(join(harborDir, 'refactor-demo__t1/result.json'), JSON.stringify({
+      started_at: '2026-11-26T14:58:00Z',
+      finished_at: '2026-11-26T14:59:30Z',
+      agent_result: {
+        n_input_tokens: 24_000,
+        n_cache_tokens: 12_000,
+        n_output_tokens: 3_000,
+        cost_usd: 0.18,
+      },
+    }));
+
+    const batchDir = join(archive, 'eval-results/judges', runFolder, 'batch');
+    const trialDir = join(batchDir, 'refactor-demo__t1');
+    mkdirSync(trialDir, { recursive: true });
+    writeFileSync(join(trialDir, 'result.json'), JSON.stringify({
+      status: 'scored',
+      target: 'production_code',
+      scope: 'whole',
+      requested_model: 'liquid/d1.2-ultra',
+      returned_model: 'liquid/d1.2-ultra-snap',
+      rubric: 'core-v1',
+      rubric_groups: { core: ['clean_code'] },
+      deterministic: { reward: 1 },
+      quality: { pass_rate: 1, checks: { clean_code: { choice: 'pass', pass_probability: 0.95, confidence: 0.9 } } },
+    }));
+    writeFileSync(join(batchDir, 'summary.json'), JSON.stringify({
+      source_run: harborDir,
+      model: 'liquid/d1.2-ultra',
+      scope: 'whole',
+      reports: [{ trial: 'refactor-demo__t1', task: 'refactor-demo', target: 'production_code', status: 'scored', result_dir: trialDir }],
+    }));
+    return batchDir;
+  };
+
+  const baselineJudgeCode = createBatch(
+    'run-baseline-with-judge-code-11111111-2222-3333-4444-555555555555',
+    ['/skills/judge-code'],
+  );
+  const skillJudgeCode = createBatch(
+    'run-skill-with-judge-code-11111111-2222-3333-4444-555555555555',
+    ['/skills/demo', '/skills/judge-code'],
+  );
+
+  recordJudgeBatches({ repoRoot: repo, judgeDirs: [baselineJudgeCode, skillJudgeCode], skill: 'demo' });
+  const scorecardPath = join(repo, 'evals/scorecards/demo/refactor-demo.json');
+  const parsed = validateTaskScorecard(JSON.parse(readFileSync(scorecardPath, 'utf8')));
+
+  assert.equal(parsed.entries.baseline?.production_code?.with_judge_code, true);
+  assert.equal(parsed.entries.baseline?.production_code?.hashes.skill_hash, null);
+  assert.equal(parsed.entries.skill?.production_code?.with_judge_code, true);
+  assert.equal(parsed.entries.skill?.production_code?.usage?.n_input_tokens?.mean, 24_000);
+  assert.equal(parsed.entries.skill?.production_code?.usage?.cost_usd?.mean, 0.18);
+  assert.equal(parsed.entries.skill?.production_code?.usage?.duration_sec?.mean, 90);
+
+  const snap = buildScorecardSnapshot(repo);
+  const md = renderScorecardMarkdown(snap);
+  assert.match(md, /\*\*Baseline \+ judge-code\*\*/);
+  assert.match(md, /\*\*Skill \+ judge-code\*\*/);
+  assert.match(md, /mean tokens 24\.0k in \/ 3\.00k out, mean cost \$0\.18, mean duration 1m 30s/);
+
+  const html = renderScorecardHtml(snap);
+  assert.match(html, /\+judge-code/);
+  assert.match(html, /Mean tokens: 24\.0k in \/ 3\.00k out/);
+  assert.match(html, /Mean cost: \$0\.18/);
+  assert.match(html, /Mean duration: 1m 30s/);
+
+  // Invalid usage fields are rejected by schema validation.
+  assert.throws(() => validateTaskScorecard({
+    ...parsed,
+    entries: {
+      skill: {
+        production_code: {
+          ...parsed.entries.skill!.production_code!,
+          usage: { cost_usd: { total: -1, mean: -1, count: 1 } },
+        },
+      },
+    },
+  }), /non-negative/);
+});
