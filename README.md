@@ -25,6 +25,15 @@ Run `pnpm eval check` for offline checks, `pnpm eval canary` for one Codex trial
 for Docker checks, baseline runs, and OpenRouter scoring. `pnpm eval report --latest --open`
 opens an HTML report of saved judge scores and rubric criteria without another API call.
 
+## Rubric Fixture Harness
+
+Verify all authoritative `rubrics/*.json` criteria against curated good/bad multi-file fixtures under `rubrics/fixtures/`:
+
+- `pnpm test:rubrics [--dry-run] [--repeats N] [--fixture ID] [--rubric SLUG] [--rule CHECK_ID] [--modes both|file|module] [--file-model ID] [--module-model ID] [--model ID] [--backend openrouter|codex|claude] [--json]`
+- Production fixtures (`target: "production_code"`) run in **both** `file` mode (per-file scoring aggregated via all-files-pass, default `typesafe/jev-1.14`) and `module` mode (bundled scoring, default `liquid/d1.2-ultra`), narrowed strictly to each fixture's expected check ID(s) and ignoring criterion `scope` filtering in `file` mode so module-scoped checks also report single-file signal.
+- `file`-scoped checks require both `file` and `module` modes to pass across all repeats; `module`-scoped checks require `module` mode and report `file` mode as informational signal; `project_structure` fixtures run in `structure` mode only.
+- Outputs a per-fixture table and a **Scope Signal Matrix** (also emitted as `criteria_matrix` in `--json`) classifying every production criterion as `both` (with a `promote?` hint for `module`-scoped criteria), `module-only`, `file-only`, or `neither`.
+
 ## Local Rubric Scanner & Offline Dashboard
 
 Track code-quality rubric scores across local repositories and `rubrics/fixtures/` health over time without committing private repository data:

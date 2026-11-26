@@ -1,0 +1,60 @@
+{
+  "id": "api-contract-boundary-good",
+  "description": "Typed catalog API client parses JSON into backed DTOs and maps upstream HTTP errors consistently without speculative optional fields or raw Response leaks",
+  "rubric": "integration-readiness",
+  "files": {
+    "catalog-types.ts": [
+      "export interface ProductSummary {",
+      "  readonly id: string;",
+      "  readonly sku: string;",
+      "  readonly title: string;",
+      "  readonly unitPriceCents: number;",
+      "  readonly discontinuedAtIso: string | null;",
+      "}",
+      "",
+      "export interface ProductListResponse {",
+      "  readonly items: readonly ProductSummary[];",
+      "  readonly nextCursor: string | null;",
+      "}"
+    ],
+    "catalog-client.ts": [
+      "import type { ProductListResponse } from './catalog-types';",
+      "",
+      "export class UpstreamApiError extends Error {",
+      "  readonly status: number;",
+      "  constructor(status: number, message: string) {",
+      "    super(message);",
+      "    this.status = status;",
+      "  }",
+      "}",
+      "",
+      "export async function listCatalogProducts(baseUrl: string, authHeader: string): Promise<ProductListResponse> {",
+      "  const response = await fetch(`${baseUrl}/api/catalog/products`, {",
+      "    headers: { Authorization: authHeader, Accept: 'application/json' },",
+      "  });",
+      "  if (!response.ok) {",
+      "    throw new UpstreamApiError(response.status, `Catalog request failed (${response.status})`);",
+      "  }",
+      "  return (await response.json()) as ProductListResponse;",
+      "}"
+    ],
+    "catalog-route.ts": [
+      "import { listCatalogProducts, UpstreamApiError } from './catalog-client';",
+      "",
+      "export async function handleListCatalog(baseUrl: string, authHeader: string) {",
+      "  try {",
+      "    const payload = await listCatalogProducts(baseUrl, authHeader);",
+      "    return { status: 200, body: payload };",
+      "  } catch (error) {",
+      "    if (error instanceof UpstreamApiError) {",
+      "      return { status: error.status, body: { error: error.message } };",
+      "    }",
+      "    return { status: 502, body: { error: 'Upstream unavailable' } };",
+      "  }",
+      "}"
+    ]
+  },
+  "expect": {
+    "clean_api_contract_boundary": "pass"
+  }
+}

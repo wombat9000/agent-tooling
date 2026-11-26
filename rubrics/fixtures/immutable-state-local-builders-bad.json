@@ -1,7 +1,6 @@
 {
   "id": "immutable-state-local-builders-bad",
   "description": "Mutates caller-owned domain objects and arrays in place, leaks internal mutable collections across ownership boundaries, and shares global mutable domain state",
-  "mode": "file",
   "rubric": "domain-modelling",
   "files": {
     "order-tracker.ts": [

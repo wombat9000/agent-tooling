@@ -1,0 +1,55 @@
+{
+  "id": "single-responsibility-good",
+  "description": "Separates usage aggregation, CSV formatting, and report delivery into distinct cohesive modules with one reason to change each",
+  "rubric": "solid",
+  "files": {
+    "usage-metrics.ts": [
+      "export interface UsageSample {",
+      "  readonly tenantId: string;",
+      "  readonly requestCount: number;",
+      "  readonly errorCount: number;",
+      "}",
+      "",
+      "export interface UsageSummary {",
+      "  readonly totalRequests: number;",
+      "  readonly totalErrors: number;",
+      "  readonly errorRate: number;",
+      "}",
+      "",
+      "export function summarizeUsage(samples: readonly UsageSample[]): UsageSummary {",
+      "  const totalRequests = samples.reduce((sum, s) => sum + s.requestCount, 0);",
+      "  const totalErrors = samples.reduce((sum, s) => sum + s.errorCount, 0);",
+      "  const errorRate = totalRequests > 0 ? totalErrors / totalRequests : 0;",
+      "  return { totalRequests, totalErrors, errorRate };",
+      "}"
+    ],
+    "usage-csv.ts": [
+      "import type { UsageSample } from './usage-metrics';",
+      "",
+      "export function formatUsageCsv(samples: readonly UsageSample[]): string {",
+      "  return [",
+      "    'tenant_id,requests,errors',",
+      "    ...samples.map((s) => `${s.tenantId},${s.requestCount},${s.errorCount}`),",
+      "  ].join('\\n');",
+      "}"
+    ],
+    "report-service.ts": [
+      "import { formatUsageCsv } from './usage-csv';",
+      "import { summarizeUsage, type UsageSample } from './usage-metrics';",
+      "",
+      "export interface ReportSink {",
+      "  publish(subject: string, csvBody: string): Promise<void>;",
+      "}",
+      "",
+      "export async function publishDailyUsageReport(sink: ReportSink, samples: readonly UsageSample[]): Promise<void> {",
+      "  const summary = summarizeUsage(samples);",
+      "  const csv = formatUsageCsv(samples);",
+      "  const pct = (summary.errorRate * 100).toFixed(2);",
+      "  await sink.publish(`Daily Usage (${summary.totalRequests} reqs, ${pct}% errors)`, csv);",
+      "}"
+    ]
+  },
+  "expect": {
+    "single_responsibility": "pass"
+  }
+}

@@ -1,7 +1,6 @@
 {
   "id": "solid-module-good",
   "description": "Cohesive multi-file invoice module with clear SRP and dependency inversion through focused repository and clock ports",
-  "mode": "code",
   "rubric": "solid",
   "files": {
     "invoice.ts": [

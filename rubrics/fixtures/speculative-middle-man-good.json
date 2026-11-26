@@ -1,0 +1,56 @@
+{
+  "id": "speculative-middle-man-good",
+  "description": "Focused contact model, repository, and service where each class owns concrete validation or persistence work without pass-through wrappers or unused hooks",
+  "rubric": "fowler-smells",
+  "files": {
+    "contact.ts": [
+      "export interface Contact {",
+      "  readonly id: string;",
+      "  readonly email: string;",
+      "  readonly company: string;",
+      "}",
+      "",
+      "export function normalizeContactEmail(raw: string): string {",
+      "  const cleaned = raw.trim().toLowerCase();",
+      "  if (!cleaned.includes('@')) {",
+      "    throw new Error('Contact email must contain @');",
+      "  }",
+      "  return cleaned;",
+      "}"
+    ],
+    "contact-repository.ts": [
+      "import type { Contact } from './contact';",
+      "",
+      "export interface ContactRepository {",
+      "  findByEmail(email: string): Promise<Contact | null>;",
+      "  save(contact: Contact): Promise<void>;",
+      "}"
+    ],
+    "contact-service.ts": [
+      "import { normalizeContactEmail, type Contact } from './contact';",
+      "import type { ContactRepository } from './contact-repository';",
+      "",
+      "export class ContactService {",
+      "  private readonly repo: ContactRepository;",
+      "",
+      "  constructor(repo: ContactRepository) {",
+      "    this.repo = repo;",
+      "  }",
+      "",
+      "  async registerContact(input: { readonly id: string; readonly email: string; readonly company: string }): Promise<Contact> {",
+      "    const email = normalizeContactEmail(input.email);",
+      "    const existing = await this.repo.findByEmail(email);",
+      "    if (existing) {",
+      "      throw new Error(`Contact already registered: ${email}`);",
+      "    }",
+      "    const contact: Contact = { id: input.id, email, company: input.company.trim() };",
+      "    await this.repo.save(contact);",
+      "    return contact;",
+      "  }",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_speculative_or_middle_man": "pass"
+  }
+}

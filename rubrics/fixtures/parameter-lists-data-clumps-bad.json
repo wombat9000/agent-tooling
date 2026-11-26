@@ -1,7 +1,6 @@
 {
   "id": "parameter-lists-data-clumps-bad",
   "description": "Declares functions with sprawling confusable positional primitive parameters and repeats the same loose address data clump across multiple distinct signatures",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "shipment-pricing.ts": [
@@ -43,6 +42,13 @@
       "  countryCode: string,",
       "): string {",
       "  return `${street}, ${city} ${postalCode}, ${countryCode}`;",
+      "}"
+    ],
+    "carrier-codes.ts": [
+      "export type CarrierCode = 'ground' | 'air' | 'freight';",
+      "",
+      "export function isDomesticCountry(countryCode: string): boolean {",
+      "  return countryCode.toUpperCase() === 'US';",
       "}"
     ]
   },

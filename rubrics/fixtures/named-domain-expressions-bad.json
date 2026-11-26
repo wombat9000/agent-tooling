@@ -1,10 +1,11 @@
 {
   "id": "named-domain-expressions-bad",
   "description": "Embeds dense unnamed multi-clause arithmetic, regex, and state conditions directly inside guards and nested ternaries",
-  "mode": "file",
   "rubric": "readability",
   "files": {
-    "refund-policy.ts": [
+    "types.ts": [
+      "export type RefundDecision = 'approved' | 'manual_review' | 'rejected';",
+      "",
       "export interface RefundRequest {",
       "  readonly status: string;",
       "  readonly daysSinceDelivery: number;",
@@ -13,9 +14,12 @@
       "  readonly openedPackaging: boolean;",
       "  readonly receiptCode: string;",
       "  readonly priorRefundsLast90Days: number;",
-      "}",
+      "}"
+    ],
+    "refund-policy.ts": [
+      "import type { RefundDecision, RefundRequest } from './types';",
       "",
-      "export function decideRefund(r: RefundRequest): 'approved' | 'manual_review' | 'rejected' {",
+      "export function decideRefund(r: RefundRequest): RefundDecision {",
       "  if (",
       "    r.status !== 'delivered' ||",
       "    (r.customerIsMember ? r.daysSinceDelivery > 30 : r.daysSinceDelivery > 14) ||",

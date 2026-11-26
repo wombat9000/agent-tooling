@@ -1,10 +1,9 @@
 {
   "id": "long-function-good",
   "description": "Concise, well-decomposed checkout workflow delegating distinct steps to focused helpers",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
-    "checkout.ts": [
+    "types.ts": [
       "export type Currency = 'USD' | 'EUR';",
       "",
       "export interface Money {",
@@ -22,7 +21,10 @@
       "  readonly subtotalCents: number;",
       "  readonly taxCents: number;",
       "  readonly totalCents: number;",
-      "}",
+      "}"
+    ],
+    "checkout.ts": [
+      "import type { CartItem, CheckoutReceipt } from './types';",
       "",
       "const STANDARD_TAX_RATE = 0.08;",
       "",
@@ -54,6 +56,21 @@
       "    taxCents,",
       "    totalCents: subtotalCents + taxCents,",
       "  };",
+      "}"
+    ],
+    "receipt-formatter.ts": [
+      "import type { CheckoutReceipt } from './types';",
+      "",
+      "function formatDollars(cents: number): string {",
+      "  return `$${(cents / 100).toFixed(2)}`;",
+      "}",
+      "",
+      "export function formatReceiptSummary(receipt: CheckoutReceipt): string {",
+      "  return [",
+      "    `Subtotal: ${formatDollars(receipt.subtotalCents)}`,",
+      "    `Tax: ${formatDollars(receipt.taxCents)}`,",
+      "    `Total: ${formatDollars(receipt.totalCents)}`,",
+      "  ].join('\\n');",
       "}"
     ]
   },

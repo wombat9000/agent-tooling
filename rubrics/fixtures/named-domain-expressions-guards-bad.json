@@ -1,7 +1,6 @@
 {
   "id": "named-domain-expressions-guards-bad",
   "description": "Mixes routine request guards with obscured inline compound eligibility, risk, and threshold rules without local naming",
-  "mode": "file",
   "rubric": "readability",
   "files": {
     "credit-handler.ts": [

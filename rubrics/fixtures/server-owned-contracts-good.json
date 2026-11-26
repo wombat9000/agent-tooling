@@ -1,0 +1,67 @@
+{
+  "id": "server-owned-contracts-good",
+  "description": "Thin BFF proxy verifies auth, URL-encodes opaque template IDs, and forwards payloads cleanly without duplicating backend validation or defaults",
+  "rubric": "api-design",
+  "files": {
+    "template-dto.ts": [
+      "export interface TemplateSummary {",
+      "  readonly id: string;",
+      "  readonly name: string;",
+      "  readonly subject: string;",
+      "  readonly bodyMarkdown: string;",
+      "}"
+    ],
+    "upstream-client.ts": [
+      "export interface UpstreamConfig {",
+      "  readonly baseUrl: string;",
+      "}",
+      "",
+      "export async function forwardJsonRequest(",
+      "  config: UpstreamConfig,",
+      "  path: string,",
+      "  init: { readonly method: string; readonly authHeader: string; readonly body?: string },",
+      "): Promise<{ readonly status: number; readonly body: string }> {",
+      "  const response = await fetch(`${config.baseUrl}${path}`, {",
+      "    method: init.method,",
+      "    headers: {",
+      "      Authorization: init.authHeader,",
+      "      'Content-Type': 'application/json',",
+      "    },",
+      "    body: init.body,",
+      "  });",
+      "  return { status: response.status, body: await response.text() };",
+      "}"
+    ],
+    "bff-template-route.ts": [
+      "import { forwardJsonRequest, type UpstreamConfig } from './upstream-client';",
+      "",
+      "export interface BffRequest {",
+      "  readonly method: string;",
+      "  readonly authHeader: string | null;",
+      "  readonly templateId?: string;",
+      "  readonly rawBody?: string;",
+      "}",
+      "",
+      "export async function handleTemplateProxy(config: UpstreamConfig, request: BffRequest) {",
+      "  if (!request.authHeader) {",
+      "    return { status: 401, body: JSON.stringify({ error: 'Unauthorized' }) };",
+      "  }",
+      "  if (request.method === 'PATCH') {",
+      "    if (!request.templateId?.trim()) {",
+      "      return { status: 400, body: JSON.stringify({ error: 'Missing templateId' }) };",
+      "    }",
+      "    const encodedId = encodeURIComponent(request.templateId);",
+      "    return forwardJsonRequest(config, `/api/templates/${encodedId}`, {",
+      "      method: 'PATCH',",
+      "      authHeader: request.authHeader,",
+      "      body: request.rawBody,",
+      "    });",
+      "  }",
+      "  return { status: 405, body: JSON.stringify({ error: 'Method not allowed' }) };",
+      "}"
+    ]
+  },
+  "expect": {
+    "clean_server_owned_contracts_and_opaque_ids": "pass"
+  }
+}

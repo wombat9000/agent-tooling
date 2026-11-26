@@ -1,10 +1,9 @@
 {
   "id": "speculative-complexity-good",
   "description": "Direct, proportional typed filter function for three fixed ticket statuses without a rule engine or pass-through wrappers",
-  "mode": "file",
   "rubric": "integration-readiness",
   "files": {
-    "ticket-filter.ts": [
+    "types.ts": [
       "export type TicketStatus = 'open' | 'pending' | 'closed';",
       "",
       "export interface SupportTicket {",
@@ -17,7 +16,10 @@
       "export interface TicketFilter {",
       "  readonly status?: TicketStatus;",
       "  readonly unassignedOnly?: boolean;",
-      "}",
+      "}"
+    ],
+    "ticket-filter.ts": [
+      "import type { SupportTicket, TicketFilter } from './types';",
       "",
       "export function filterTickets(",
       "  tickets: readonly SupportTicket[],",

@@ -1,15 +1,24 @@
 {
   "id": "long-function-bad",
   "description": "Monolithic checkout procedure packing parsing, validation, discounts, tax, inventory checks, and receipt formatting inline",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
-    "checkout.ts": [
+    "types.ts": [
       "export interface InventoryRecord {",
       "  sku: string;",
       "  available: number;",
       "  unitPriceCents: number;",
       "}",
+      "",
+      "export interface ProcessedOrderLine {",
+      "  readonly sku: string;",
+      "  readonly qty: number;",
+      "  readonly unitCents: number;",
+      "  readonly lineCents: number;",
+      "}"
+    ],
+    "checkout.ts": [
+      "import type { InventoryRecord, ProcessedOrderLine } from './types';",
       "",
       "export function processRawCheckoutOrder(",
       "  rawPayload: string,",
@@ -35,7 +44,7 @@
       "    throw new Error('At least one line item is required');",
       "  }",
       "",
-      "  const normalizedLines: Array<{ sku: string; qty: number; unitCents: number; lineCents: number }> = [];",
+      "  const normalizedLines: ProcessedOrderLine[] = [];",
       "  let subtotalCents = 0;",
       "  for (const rawLine of record.lines) {",
       "    if (!rawLine || typeof rawLine !== 'object') {",
@@ -114,6 +123,17 @@
       "    grandTotalCents,",
       "    formattedReceipt: summaryLines.join('\\n'),",
       "  };",
+      "}"
+    ],
+    "inventory-lookup.ts": [
+      "import type { InventoryRecord } from './types';",
+      "",
+      "export function totalUnitsInStock(inventory: ReadonlyMap<string, InventoryRecord>): number {",
+      "  let total = 0;",
+      "  for (const record of inventory.values()) {",
+      "    total += record.available;",
+      "  }",
+      "  return total;",
       "}"
     ]
   },

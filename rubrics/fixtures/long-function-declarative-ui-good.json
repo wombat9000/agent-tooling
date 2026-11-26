@@ -1,7 +1,6 @@
 {
   "id": "long-function-declarative-ui-good",
   "description": "Declarative UI component grouping several short independent handlers and clean declarative markup composition",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "profile-settings-panel.tsx": [

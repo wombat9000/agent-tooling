@@ -1,0 +1,66 @@
+{
+  "id": "duplicated-code-good",
+  "description": "Factors shared discount, coupon, and tax-exemption rules into one focused pricing module reused by checkout and quote services",
+  "rubric": "fowler-smells",
+  "files": {
+    "types.ts": [
+      "export interface OrderLine {",
+      "  readonly sku: string;",
+      "  readonly unitPriceCents: number;",
+      "  readonly quantity: number;",
+      "}",
+      "",
+      "export interface PricingInput {",
+      "  readonly lines: readonly OrderLine[];",
+      "  readonly couponCode: string | null;",
+      "  readonly taxExempt: boolean;",
+      "}",
+      "",
+      "export interface PricingBreakdown {",
+      "  readonly subtotalCents: number;",
+      "  readonly discountCents: number;",
+      "  readonly taxCents: number;",
+      "  readonly totalCents: number;",
+      "}"
+    ],
+    "discount-rules.ts": [
+      "import type { PricingBreakdown, PricingInput } from './types';",
+      "",
+      "const TAX_RATE = 0.085;",
+      "",
+      "export function computePricingBreakdown(input: PricingInput): PricingBreakdown {",
+      "  const subtotalCents = input.lines.reduce((sum, line) => sum + line.unitPriceCents * line.quantity, 0);",
+      "  let discountCents = 0;",
+      "  if (input.couponCode === 'SAVE15' && subtotalCents >= 5_000) {",
+      "    discountCents = Math.round(subtotalCents * 0.15);",
+      "  } else if (input.couponCode === 'FLAT1000' && subtotalCents >= 8_000) {",
+      "    discountCents = 1_000;",
+      "  }",
+      "  const discounted = Math.max(0, subtotalCents - discountCents);",
+      "  const taxCents = input.taxExempt ? 0 : Math.round(discounted * TAX_RATE);",
+      "  return { subtotalCents, discountCents, taxCents, totalCents: discounted + taxCents };",
+      "}"
+    ],
+    "pricing-service.ts": [
+      "import { computePricingBreakdown } from './discount-rules';",
+      "import type { PricingBreakdown, PricingInput } from './types';",
+      "",
+      "export interface OrderStore {",
+      "  saveOrder(id: string, breakdown: PricingBreakdown): Promise<void>;",
+      "}",
+      "",
+      "export function previewQuote(input: PricingInput): PricingBreakdown {",
+      "  return computePricingBreakdown(input);",
+      "}",
+      "",
+      "export async function finalizeOrder(store: OrderStore, orderId: string, input: PricingInput): Promise<PricingBreakdown> {",
+      "  const breakdown = computePricingBreakdown(input);",
+      "  await store.saveOrder(orderId, breakdown);",
+      "  return breakdown;",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_duplicated_code": "pass"
+  }
+}

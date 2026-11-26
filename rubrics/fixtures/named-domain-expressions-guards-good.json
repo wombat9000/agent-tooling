@@ -1,7 +1,6 @@
 {
   "id": "named-domain-expressions-guards-good",
   "description": "Keeps routine HTTP/protocol/presence/type guards, named declarative schema field constraints, and expressions named by enclosing functions inline",
-  "mode": "file",
   "rubric": "readability",
   "files": {
     "webhook-handler.ts": [

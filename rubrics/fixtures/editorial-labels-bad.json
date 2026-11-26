@@ -1,7 +1,6 @@
 {
   "id": "editorial-labels-bad",
   "description": "Hardcodes a closed code-owned enum and runtime allow-list for editorial content categories, rejecting custom user-supplied labels",
-  "mode": "file",
   "rubric": "api-design",
   "files": {
     "article-categories.ts": [
@@ -41,6 +40,37 @@
       "    grouped[article.category].push(article);",
       "  }",
       "  return grouped;",
+      "}"
+    ],
+    "article-repository.ts": [
+      "export interface StoredArticle {",
+      "  readonly id: string;",
+      "  readonly title: string;",
+      "  readonly bodyMarkdown: string;",
+      "  readonly category: string;",
+      "}",
+      "",
+      "export interface ArticleRepository {",
+      "  save(article: StoredArticle): Promise<void>;",
+      "  listAll(): Promise<readonly StoredArticle[]>;",
+      "}"
+    ],
+    "article-service.ts": [
+      "import { parseArticleCategory } from './article-categories';",
+      "import type { ArticleRepository, StoredArticle } from './article-repository';",
+      "",
+      "export async function publishArticle(",
+      "  repository: ArticleRepository,",
+      "  input: { readonly id: string; readonly title: string; readonly bodyMarkdown: string; readonly category: string },",
+      "): Promise<StoredArticle> {",
+      "  const article: StoredArticle = {",
+      "    id: input.id,",
+      "    title: input.title.trim(),",
+      "    bodyMarkdown: input.bodyMarkdown,",
+      "    category: parseArticleCategory(input.category),",
+      "  };",
+      "  await repository.save(article);",
+      "  return article;",
       "}"
     ]
   },

@@ -1,7 +1,6 @@
 {
   "id": "immutable-state-local-builders-good",
   "description": "Preserves caller-owned snapshots across domain transitions while using unescaped local accumulators, an async coordination ref, and a scoped infrastructure cache",
-  "mode": "file",
   "rubric": "domain-modelling",
   "files": {
     "catalog-index.ts": [

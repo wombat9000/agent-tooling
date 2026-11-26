@@ -1,10 +1,9 @@
 {
   "id": "editorial-labels-good",
   "description": "Closed unions with human-readable names drive real routing, queue SLA, and matching behavior while editorial folder labels remain open free-text with optional suggestions",
-  "mode": "file",
   "rubric": "api-design",
   "files": {
-    "support-routing.ts": [
+    "types.ts": [
       "export type RoutingQueue = 'urgent-escalation' | 'billing-review' | 'standard-inbox';",
       "export type MatchOperator = 'exact' | 'contains' | 'starts-with';",
       "",
@@ -21,7 +20,10 @@
       "  readonly slaMinutes: number;",
       "  readonly requiresSeniorReviewer: boolean;",
       "  readonly pagerChannel: string | null;",
-      "}",
+      "}"
+    ],
+    "support-routing.ts": [
+      "import type { MatchOperator, QueuePolicy, RoutingQueue } from './types';",
       "",
       "export function policyForQueue(queue: RoutingQueue): QueuePolicy {",
       "  switch (queue) {",
@@ -50,6 +52,24 @@
       "export function normalizeFolderLabel(raw: string | null | undefined): string | null {",
       "  const trimmed = raw?.trim();",
       "  return trimmed ? trimmed : null;",
+      "}"
+    ],
+    "rule-service.ts": [
+      "import { normalizeFolderLabel, policyForQueue } from './support-routing';",
+      "import type { QueuePolicy, TicketRuleRequest } from './types';",
+      "",
+      "export interface StoredTicketRule {",
+      "  readonly queue: TicketRuleRequest['queue'];",
+      "  readonly folderLabel: string | null;",
+      "  readonly policy: QueuePolicy;",
+      "}",
+      "",
+      "export function buildTicketRule(request: TicketRuleRequest): StoredTicketRule {",
+      "  return {",
+      "    queue: request.queue,",
+      "    folderLabel: normalizeFolderLabel(request.folderLabel),",
+      "    policy: policyForQueue(request.queue),",
+      "  };",
       "}"
     ]
   },

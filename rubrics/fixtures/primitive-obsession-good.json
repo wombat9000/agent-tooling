@@ -1,10 +1,9 @@
 {
   "id": "primitive-obsession-good",
   "description": "Dedicated domain unions, Money and DateRange value objects, and named constants while keeping opaque IDs and ISO timestamps as plain strings",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
-    "subscription.ts": [
+    "types.ts": [
       "export type PlanTier = 'free' | 'pro' | 'enterprise';",
       "export type BillingCycle = 'monthly' | 'annual';",
       "export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled';",
@@ -27,7 +26,10 @@
       "  readonly billingCycle: BillingCycle;",
       "  readonly status: SubscriptionStatus;",
       "  readonly period: DateRange;",
-      "}",
+      "}"
+    ],
+    "subscription.ts": [
+      "import type { Money, PlanTier, Subscription } from './types';",
       "",
       "const MONTHLY_PRICE: Record<PlanTier, Money> = {",
       "  free: { amountCents: 0, currency: 'USD' },",

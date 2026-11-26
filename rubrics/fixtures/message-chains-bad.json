@@ -1,17 +1,19 @@
 {
   "id": "message-chains-bad",
   "description": "Repeatedly navigates deep object-graph getter chains across multiple nested domain objects",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
+    "types.ts": [
+      "export interface TaxRule { getRate(): number; getRegionCode(): string; }",
+      "export interface Country { getCode(): string; getTaxRule(): TaxRule; }",
+      "export interface Address { getCountry(): Country; getPostalCode(): string; }",
+      "export interface BillingProfile { getPrimaryAddress(): Address; getCurrencyCode(): string; }",
+      "export interface Account { getBillingProfile(): BillingProfile; }",
+      "export interface Customer { getAccount(): Account; }",
+      "export interface Order { getId(): string; getCustomer(): Customer; getSubtotalCents(): number; }"
+    ],
     "fulfillment.ts": [
-      "interface TaxRule { getRate(): number; getRegionCode(): string; }",
-      "interface Country { getCode(): string; getTaxRule(): TaxRule; }",
-      "interface Address { getCountry(): Country; getPostalCode(): string; }",
-      "interface BillingProfile { getPrimaryAddress(): Address; getCurrencyCode(): string; }",
-      "interface Account { getBillingProfile(): BillingProfile; }",
-      "interface Customer { getAccount(): Account; }",
-      "interface Order { getId(): string; getCustomer(): Customer; getSubtotalCents(): number; }",
+      "import type { Order } from './types';",
       "",
       "export function buildTaxInvoiceSummary(order: Order) {",
       "  const countryCode = order.getCustomer().getAccount().getBillingProfile().getPrimaryAddress().getCountry().getCode();",

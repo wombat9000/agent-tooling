@@ -981,39 +981,44 @@ function buildFixtureSnapshotFromReport(
 
   for (const fx of report.fixtures) {
     for (const c of fx.checks) {
-      const numericProbs = c.pass_probabilities.filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
-      const meanProb = numericProbs.length > 0
-        ? numericProbs.reduce((s, p) => s + p, 0) / numericProbs.length
-        : null;
-      const jitter = c.min_pass_probability !== null && c.max_pass_probability !== null
-        ? Number((c.max_pass_probability - c.min_pass_probability).toFixed(6))
-        : null;
-      let margin: number | null = null;
-      if (c.pass_threshold !== null) {
-        if (c.expected === 'pass' && c.min_pass_probability !== null) {
-          margin = Number((c.min_pass_probability - c.pass_threshold).toFixed(6));
-        } else if (c.expected === 'fail' && c.max_pass_probability !== null) {
-          margin = Number((c.pass_threshold - c.max_pass_probability).toFixed(6));
+      const modeSummaries = [c.file, c.module, c.structure].filter(
+        (m): m is NonNullable<typeof m> => Boolean(m && m.enforced),
+      );
+      for (const m of modeSummaries) {
+        const numericProbs = m.pass_probabilities.filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
+        const meanProb = numericProbs.length > 0
+          ? numericProbs.reduce((s, p) => s + p, 0) / numericProbs.length
+          : null;
+        const jitter = m.min_pass_probability !== null && m.max_pass_probability !== null
+          ? Number((m.max_pass_probability - m.min_pass_probability).toFixed(6))
+          : null;
+        let margin: number | null = null;
+        if (c.pass_threshold !== null) {
+          if (c.expected === 'pass' && m.min_pass_probability !== null) {
+            margin = Number((m.min_pass_probability - c.pass_threshold).toFixed(6));
+          } else if (c.expected === 'fail' && m.max_pass_probability !== null) {
+            margin = Number((c.pass_threshold - m.max_pass_probability).toFixed(6));
+          }
         }
+        if (margin !== null) margins.push(margin);
+        if (jitter !== null) jitters.push(jitter);
+        checks.push({
+          fixture_id: fx.id,
+          mode: m.mode === 'module' ? 'code' : m.mode,
+          rubric: fx.rubric,
+          check_id: c.check_id,
+          expected: c.expected,
+          passed: m.passed,
+          matches: m.matches,
+          repeats: m.repeats,
+          pass_threshold: c.pass_threshold,
+          min_pass_probability: m.min_pass_probability,
+          max_pass_probability: m.max_pass_probability,
+          mean_pass_probability: meanProb,
+          margin,
+          jitter,
+        });
       }
-      if (margin !== null) margins.push(margin);
-      if (jitter !== null) jitters.push(jitter);
-      checks.push({
-        fixture_id: fx.id,
-        mode: fx.mode,
-        rubric: fx.rubric,
-        check_id: c.check_id,
-        expected: c.expected,
-        passed: c.passed,
-        matches: c.matches,
-        repeats: c.repeats,
-        pass_threshold: c.pass_threshold,
-        min_pass_probability: c.min_pass_probability,
-        max_pass_probability: c.max_pass_probability,
-        mean_pass_probability: meanProb,
-        margin,
-        jitter,
-      });
     }
   }
 

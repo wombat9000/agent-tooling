@@ -1,0 +1,34 @@
+{
+  "id": "unnecessary-abstraction-good",
+  "description": "Direct concrete modules for formatting and sending alert emails without single-implementation interfaces, factories, or pass-through facades",
+  "rubric": "module-design",
+  "files": {
+    "alert.ts": [
+      "export type AlertSeverity = 'info' | 'warning' | 'critical';",
+      "",
+      "export interface SystemAlert {",
+      "  readonly id: string;",
+      "  readonly severity: AlertSeverity;",
+      "  readonly summary: string;",
+      "}"
+    ],
+    "alert-formatter.ts": [
+      "import type { SystemAlert } from './alert';",
+      "",
+      "export function formatAlertLine(alert: SystemAlert): string {",
+      "  return `[${alert.severity.toUpperCase()}] ${alert.id}: ${alert.summary}`;",
+      "}"
+    ],
+    "alert-dispatcher.ts": [
+      "import type { SystemAlert } from './alert';",
+      "import { formatAlertLine } from './alert-formatter';",
+      "",
+      "export function buildAlertDigest(alerts: readonly SystemAlert[]): string {",
+      "  return alerts.map(formatAlertLine).join('\\n');",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_unnecessary_abstraction": "pass"
+  }
+}

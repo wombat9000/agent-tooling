@@ -1,7 +1,6 @@
 {
   "id": "long-function-declarative-ui-bad",
   "description": "UI component whose single submit callback packs inline normalization, validation, diffing, retry fetch, cache patching, and audit logging",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "profile-settings-panel.tsx": [

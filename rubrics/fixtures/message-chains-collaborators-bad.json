@@ -1,7 +1,6 @@
 {
   "id": "message-chains-collaborators-bad",
   "description": "Repeatedly reaches through multiple behavior-bearing collaborators to inspect and mutate another owner's internal state instead of asking direct collaborators",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "seat-downgrade.ts": [

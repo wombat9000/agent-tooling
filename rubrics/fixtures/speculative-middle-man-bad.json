@@ -1,0 +1,72 @@
+{
+  "id": "speculative-middle-man-bad",
+  "description": "Wraps ContactRepository in a pure middle-man manager and introduces speculative plugin/strategy abstractions with unused hooks and a single implementation",
+  "rubric": "fowler-smells",
+  "files": {
+    "contact.ts": [
+      "export interface Contact {",
+      "  readonly id: string;",
+      "  readonly email: string;",
+      "}"
+    ],
+    "contact-repository.ts": [
+      "import type { Contact } from './contact';",
+      "",
+      "export class InMemoryContactRepository {",
+      "  private readonly items = new Map<string, Contact>();",
+      "",
+      "  findById(id: string): Contact | null { return this.items.get(id) ?? null; }",
+      "  save(contact: Contact): void { this.items.set(contact.id, contact); }",
+      "  delete(id: string): void { this.items.delete(id); }",
+      "  listAll(): Contact[] { return [...this.items.values()]; }",
+      "}"
+    ],
+    "contact-manager.ts": [
+      "import type { Contact } from './contact';",
+      "import type { InMemoryContactRepository } from './contact-repository';",
+      "",
+      "export class ContactManager {",
+      "  private readonly repo: InMemoryContactRepository;",
+      "",
+      "  constructor(repo: InMemoryContactRepository) {",
+      "    this.repo = repo;",
+      "  }",
+      "",
+      "  findById(id: string): Contact | null { return this.repo.findById(id); }",
+      "  save(contact: Contact): void { this.repo.save(contact); }",
+      "  delete(id: string): void { this.repo.delete(id); }",
+      "  listAll(): Contact[] { return this.repo.listAll(); }",
+      "}"
+    ],
+    "contact-strategy-factory.ts": [
+      "import type { Contact } from './contact';",
+      "",
+      "export interface ContactPipelinePlugin<TContext = Record<string, unknown>> {",
+      "  beforeSave?(contact: Contact, context: TContext): Contact;",
+      "  afterSave?(contact: Contact, context: TContext): void;",
+      "  onFutureSyncHook?(batch: readonly Contact[]): Promise<void>;",
+      "}",
+      "",
+      "export abstract class AbstractContactPersistenceStrategy {",
+      "  abstract persist(contact: Contact): void;",
+      "}",
+      "",
+      "export class DefaultContactPersistenceStrategy extends AbstractContactPersistenceStrategy {",
+      "  private readonly onPersist: (contact: Contact) => void;",
+      "  constructor(onPersist: (contact: Contact) => void) {",
+      "    super();",
+      "    this.onPersist = onPersist;",
+      "  }",
+      "  persist(contact: Contact): void { this.onPersist(contact); }",
+      "}",
+      "",
+      "export function createContactStrategy(kind: 'default', onPersist: (contact: Contact) => void): AbstractContactPersistenceStrategy {",
+      "  if (kind === 'default') return new DefaultContactPersistenceStrategy(onPersist);",
+      "  throw new Error(`Unsupported strategy: ${String(kind)}`);",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_speculative_or_middle_man": "fail"
+  }
+}

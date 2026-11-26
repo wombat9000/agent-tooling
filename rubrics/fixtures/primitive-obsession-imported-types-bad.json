@@ -1,7 +1,6 @@
 {
   "id": "primitive-obsession-imported-types-bad",
   "description": "Visibly unconstrained string/number parameters repeating raw semantic sentinels and unnamed thresholds across multiple functions",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "payout-rules.ts": [
