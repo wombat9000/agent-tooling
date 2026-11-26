@@ -23,6 +23,7 @@ import {
 } from '../skills/judge-code/scripts/decisions.mts';
 import {
   PASS_THRESHOLD,
+  matchesFileApplicability,
   nonempty,
   object,
   resolveRubrics,
@@ -30,6 +31,7 @@ import {
   type ChoiceQuestion,
   type JudgeMode,
   type ResolvedRubric,
+  type RubricApplicability,
   type RubricTarget,
 } from '../skills/judge-code/scripts/rubrics.mts';
 import { readStructureInputs, type StructureManifest } from '../skills/judge-code/scripts/structure.mts';
@@ -547,24 +549,40 @@ export function resolveFixtureRubric(
     }
   }
 
-  // Narrow questions/scopes/thresholds/groups strictly to the fixture's expected check IDs.
+  // Narrow questions/scopes/thresholds/appliesTo/groups strictly to the fixture's expected check IDs.
   const expectedSet = new Set(expectedIds);
   const narrowedQuestions: Record<string, ChoiceQuestion> = {};
   const narrowedScopes: Record<string, CheckScope> = {};
   const narrowedThresholds: Record<string, number> = {};
+  const narrowedAppliesTo: Record<string, RubricApplicability> = {};
+  const fixtureFileEntries = Object.entries(fixture.files);
   for (const checkId of expectedIds) {
     narrowedQuestions[checkId] = fullResolved.questions[checkId];
     narrowedScopes[checkId] = fullResolved.scopes[checkId];
     narrowedThresholds[checkId] = fullResolved.thresholds[checkId];
+    const ruleAppliesTo = fullResolved.appliesTo?.[checkId];
+    if (ruleAppliesTo) {
+      const hasMatchingFile = fixtureFileEntries.some(([filePath, content]) =>
+        matchesFileApplicability(filePath, content, ruleAppliesTo),
+      );
+      if (!hasMatchingFile) {
+        throw new Error(
+          `Fixture ${fixture.id}: expected check "${checkId}" does not match rubric applicability for any file in files/`,
+        );
+      }
+      narrowedAppliesTo[checkId] = ruleAppliesTo;
+    }
   }
 
   const narrowedGroups: Record<string, string[]> = {};
+  const narrowedGroupRubricIds: Record<string, string> = {};
   const activeRubricIds: string[] = [];
   for (const [group, ids] of Object.entries(fullResolved.groups)) {
     const kept = ids.filter((id) => expectedSet.has(id));
     if (kept.length > 0) {
       narrowedGroups[group] = kept;
       const rubricId = group === 'conventions' ? 'repo-conventions' : (slugToId.get(group) ?? group);
+      narrowedGroupRubricIds[group] = rubricId;
       if (!activeRubricIds.includes(rubricId)) activeRubricIds.push(rubricId);
     }
   }
@@ -575,7 +593,9 @@ export function resolveFixtureRubric(
     questions: narrowedQuestions,
     scopes: narrowedScopes,
     thresholds: narrowedThresholds,
+    ...(Object.keys(narrowedAppliesTo).length > 0 ? { appliesTo: narrowedAppliesTo } : {}),
     groups: narrowedGroups,
+    groupRubricIds: narrowedGroupRubricIds,
     excluded: fullResolved.excluded,
     skippedModuleChecks: [],
   };

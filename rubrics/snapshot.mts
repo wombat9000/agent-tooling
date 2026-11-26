@@ -9,9 +9,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PASS_THRESHOLD,
+  parseApplicability,
   parsePassThreshold,
   type CheckScope,
   type JudgeMode,
+  type RubricApplicability,
 } from '../skills/judge-code/scripts/rubrics.mts';
 import type { JudgeBackend } from '../skills/judge-code/scripts/decisions.mts';
 import { AUTHORITATIVE_RUBRICS_DIR, sha256File } from './sync.mts';
@@ -69,7 +71,7 @@ export interface SnapshotModuleTarget {
   ignore?: string[];
 }
 
-export type ModuleSkipReason = 'oversize' | 'empty';
+export type ModuleSkipReason = 'oversize' | 'empty' | 'not_applicable';
 
 export interface SnapshotModuleEntry {
   name: string;
@@ -218,6 +220,7 @@ export interface CatalogRubricInfo {
   slug: string;
   id: string;
   target: string;
+  applies_to?: RubricApplicability;
   sha256: string;
   checks: CatalogCheckInfo[];
 }
@@ -405,6 +408,10 @@ export function loadRubricCatalog(
     const raw = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
     const id = typeof raw.rubric === 'string' ? raw.rubric : slug;
     const target = typeof raw.target === 'string' ? raw.target : 'production_code';
+    const appliesTo = raw.applies_to !== undefined
+      && (target === 'production_code' || target === 'test_code')
+      ? parseApplicability(raw.applies_to, slug, target)
+      : undefined;
     const rawQuestions = raw.questions && typeof raw.questions === 'object' && !Array.isArray(raw.questions)
       ? (raw.questions as Record<string, unknown>)
       : {};
@@ -445,7 +452,7 @@ export function loadRubricCatalog(
       }
     }
 
-    rubrics.push({ slug, id, target, sha256: hash, checks });
+    rubrics.push({ slug, id, target, ...(appliesTo ? { applies_to: appliesTo } : {}), sha256: hash, checks });
   }
 
   return {

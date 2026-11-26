@@ -1,0 +1,8 @@
+{
+  "id": "cohesive-hooks-bad",
+  "description": "Screen-wide god hook bundles unrelated auth polling, search filters, invoice pricing rules, raw fetch retry transport, toast/focus DOM side effects, and navigation",
+  "rubric": "react",
+  "expect": {
+    "cohesive_custom_hooks": "fail"
+  }
+}

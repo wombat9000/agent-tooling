@@ -1,0 +1,8 @@
+{
+  "id": "focused-interfaces-bad",
+  "description": "Combines mutually exclusive boolean mode flags, catch-all onAction callback, kitchen-sink prop bag, and leaked child draft reset/persistence mechanics",
+  "rubric": "react",
+  "expect": {
+    "focused_component_interfaces": "fail"
+  }
+}

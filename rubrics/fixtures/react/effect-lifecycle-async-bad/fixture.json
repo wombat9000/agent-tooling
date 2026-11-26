@@ -1,0 +1,8 @@
+{
+  "id": "effect-lifecycle-async-bad",
+  "description": "Leaks interval and window listener without cleanup, runs unguarded async fetch inside useEffect, and routes click submission through a trigger flag in useEffect",
+  "rubric": "react",
+  "expect": {
+    "effect_lifecycle_and_async_safety": "fail"
+  }
+}

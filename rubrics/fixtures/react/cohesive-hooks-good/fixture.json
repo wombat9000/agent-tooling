@@ -1,0 +1,8 @@
+{
+  "id": "cohesive-hooks-good",
+  "description": "Feature-specific custom hook coordinates one cohesive profile-editing concern returning related draft values and handlers while delegating pure validation to a separate module",
+  "rubric": "react",
+  "expect": {
+    "cohesive_custom_hooks": "pass"
+  }
+}

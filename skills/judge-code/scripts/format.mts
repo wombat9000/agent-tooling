@@ -7,6 +7,7 @@ import {
 } from './decisions.mts';
 import {
   PASS_THRESHOLD,
+  formatApplicability,
   type BundledRubricSummary,
   type CheckScope,
   type ChoiceQuestion,
@@ -222,9 +223,16 @@ export function formatRubricList(
   rubrics: BundledRubricSummary[],
   options: FormatRubricListOptions = {},
 ): string {
+  const formatTags = (rubric: BundledRubricSummary): string => {
+    const tags: string[] = [];
+    if (rubric.target === 'project_structure') tags.push('[structure]');
+    if (rubric.appliesTo) tags.push(`[applies: ${formatApplicability(rubric.appliesTo)}]`);
+    return tags.length > 0 ? ` ${tags.join(' ')}` : '';
+  };
+
   if (!options.verbose) {
     return rubrics.map((rubric) => {
-      const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
+      const tag = formatTags(rubric);
       const checks = rubric.checks.map((id) => {
         const threshold = rubric.thresholds[id];
         const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
@@ -235,7 +243,7 @@ export function formatRubricList(
   }
 
   return rubrics.map((rubric) => {
-    const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
+    const tag = formatTags(rubric);
     const lines = [`${rubric.slug} (${rubric.id})${tag}`];
     for (const id of rubric.checks) {
       const question = rubric.questions[id];
@@ -256,6 +264,7 @@ export function formatRuleExplanations(rules: RuleDefinition[]): string {
     return [
       rule.id,
       `  rubric: ${rubricLabel}`,
+      ...(rule.appliesTo ? [`  applies: ${formatApplicability(rule.appliesTo)}`] : []),
       `  scope: ${rule.scope}`,
       `  threshold: >=${formatThreshold(rule.threshold)}`,
       `  instructions: ${rule.instructions}`,
@@ -286,17 +295,43 @@ export function formatLinterOutput(result: JudgeResult, options: FormatLinterOpt
       }
       return id;
     });
-    const scopeLabel = result.module_results
-      ? `${pluralize(result.module_results.length, 'module')} (${pluralize(result.file_count, 'file')})`
-      : pluralize(result.file_count, 'file');
+    const skippedFiles = result.file_results?.filter((f) => f.status === 'skipped') ?? [];
+    const activeFiles = result.file_results?.filter((f) => f.status !== 'skipped') ?? [];
+    const skippedModules = result.module_results?.filter((m) => m.status === 'skipped') ?? [];
+    const activeModules = result.module_results?.filter((m) => m.status !== 'skipped') ?? [];
+
+    let scopeLabel: string;
+    if (result.module_results) {
+      scopeLabel = skippedModules.length > 0
+        ? `${activeModules.length} applicable of ${pluralize(result.module_results.length, 'module')} (${skippedModules.length} skipped: not applicable; ${pluralize(result.file_count, 'file')})`
+        : `${pluralize(result.module_results.length, 'module')} (${pluralize(result.file_count, 'file')})`;
+    } else if (skippedFiles.length > 0) {
+      scopeLabel = `${activeFiles.length} applicable of ${pluralize(result.file_count, 'file')} (${skippedFiles.length} skipped: not applicable)`;
+    } else {
+      scopeLabel = pluralize(result.file_count, 'file');
+    }
     lines.push(`DRY RUN (${modeTag}): ${scopeLabel}, ${pluralize(checks.length, 'check')} [${result.backend}: ${modelLabel}]`);
-    lines.push(`Checks (${checks.length}): ${checkLabels.join(', ')}`);
+    lines.push(`Checks (${checks.length}): ${checkLabels.length > 0 ? checkLabels.join(', ') : '(none applicable)'}`);
     if (result.file_results && result.file_results.length > 0) {
-      const preview = result.file_results.slice(0, 20).map((f) => f.file).join(', ');
-      const suffix = result.file_results.length > 20 ? `, ... (+${result.file_results.length - 20} more)` : '';
-      lines.push(`Files (${result.file_results.length}): ${preview}${suffix}`);
+      if (activeFiles.length > 0) {
+        const preview = activeFiles.slice(0, 20).map((f) =>
+          f.applicable_checks ? `${f.file} (${f.applicable_checks.length}/${checks.length})` : f.file,
+        ).join(', ');
+        const suffix = activeFiles.length > 20 ? `, ... (+${activeFiles.length - 20} more)` : '';
+        lines.push(`Files (${activeFiles.length}): ${preview}${suffix}`);
+      }
+      if (skippedFiles.length > 0) {
+        const preview = skippedFiles.slice(0, 20).map((f) => f.file).join(', ');
+        const suffix = skippedFiles.length > 20 ? `, ... (+${skippedFiles.length - 20} more)` : '';
+        lines.push(`Skipped files (not applicable, ${skippedFiles.length}): ${preview}${suffix}`);
+      }
     } else if (result.module_results && result.module_results.length > 0) {
-      lines.push(`Modules (${result.module_results.length}): ${result.module_results.map((m) => m.module).join(', ')}`);
+      if (activeModules.length > 0) {
+        lines.push(`Modules (${activeModules.length}): ${activeModules.map((m) => m.module).join(', ')}`);
+      }
+      if (skippedModules.length > 0) {
+        lines.push(`Skipped modules (not applicable, ${skippedModules.length}): ${skippedModules.map((m) => m.module).join(', ')}`);
+      }
     } else if (result.target) {
       lines.push(`Target: ${result.target}`);
     }
@@ -305,6 +340,9 @@ export function formatLinterOutput(result: JudgeResult, options: FormatLinterOpt
     }
     if (result.skipped_module_checks?.length) {
       lines.push(`Skipped module checks (${result.skipped_module_checks.length}): ${result.skipped_module_checks.join(', ')}`);
+    }
+    if (result.skipped_not_applicable_checks?.length) {
+      lines.push(`Skipped non-applicable checks (${result.skipped_not_applicable_checks.length}): ${result.skipped_not_applicable_checks.join(', ')}`);
     }
     if (result.ignored_patterns?.length) {
       lines.push(`Ignored patterns (${result.ignored_patterns.length}): ${result.ignored_patterns.join(', ')}`);
@@ -414,17 +452,41 @@ export function formatLinterOutput(result: JudgeResult, options: FormatLinterOpt
     ? pluralize(visibleErrors, 'error')
     : `${pluralize(visibleErrors, 'error')}, ${pluralize(visibleWarnings, 'warning')}`;
 
+  const skippedFileCount = result.file_results?.filter((e) => e.status === 'skipped').length ?? 0;
+  const skippedModuleCount = result.module_results?.filter((e) => e.status === 'skipped').length ?? 0;
+  const isSingleModuleNotApplicable = !result.file_results
+    && !result.module_results
+    && result.mode === 'code'
+    && Object.keys(result.rubric_groups).length === 0
+    && (result.skipped_not_applicable_checks?.length ?? 0) > 0;
+
   let scopeText: string;
   if (targetNoun === 'file') {
-    scopeText = hasVisibleFindings
-      ? `${blocks.length} of ${pluralize(totalTargets, 'file')}`
-      : pluralize(totalTargets, 'file');
+    const scoredTargets = totalTargets - skippedFileCount;
+    if (skippedFileCount > 0) {
+      scopeText = hasVisibleFindings
+        ? `${blocks.length} of ${pluralize(scoredTargets, 'applicable file')} (${skippedFileCount} skipped)`
+        : `${pluralize(scoredTargets, 'applicable file')} (${skippedFileCount} skipped: not applicable)`;
+    } else {
+      scopeText = hasVisibleFindings
+        ? `${blocks.length} of ${pluralize(totalTargets, 'file')}`
+        : pluralize(totalTargets, 'file');
+    }
   } else if (targetNoun === 'module' && result.module_results) {
-    scopeText = hasVisibleFindings
-      ? `${blocks.length} of ${pluralize(totalTargets, 'module')}`
-      : pluralize(totalTargets, 'module');
+    const scoredModules = totalTargets - skippedModuleCount;
+    if (skippedModuleCount > 0) {
+      scopeText = hasVisibleFindings
+        ? `${blocks.length} of ${pluralize(scoredModules, 'applicable module')} (${skippedModuleCount} skipped)`
+        : `${pluralize(scoredModules, 'applicable module')} (${skippedModuleCount} skipped: not applicable)`;
+    } else {
+      scopeText = hasVisibleFindings
+        ? `${blocks.length} of ${pluralize(totalTargets, 'module')}`
+        : pluralize(totalTargets, 'module');
+    }
   } else if (targetNoun === 'structure') {
     scopeText = `structure (${pluralize(result.file_count, 'file')})`;
+  } else if (isSingleModuleNotApplicable) {
+    scopeText = `0 applicable modules (1 skipped: not applicable; ${pluralize(result.file_count, 'file')})`;
   } else {
     scopeText = `1 module (${pluralize(result.file_count, 'file')})`;
   }
