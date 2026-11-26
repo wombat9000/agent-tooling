@@ -6,40 +6,40 @@
       "type": "choice",
       "instructions": "Does the project structure avoid flat junk-drawer directories that dump many loosely related files or multiple distinct concerns into one folder?",
       "criteria": {
-        "pass": "Directories stay focused and navigable—each folder holds a cohesive set of closely related files or well-organized subfolders rather than a sprawling flat list of unrelated responsibilities.",
-        "fail": "One or more directories flatten a large collection of loosely related files or multiple distinct concerns/sub-features into a single crowded folder instead of grouping them into navigable subfolders."
+        "pass": "Directories stay focused and navigable—each folder holds a cohesive set of closely related files or cleanly decomposed feature subfolders rather than a sprawling flat list of unrelated responsibilities. Breaking a complex feature into focused modules or subdirectories is encouraged and does not fail.",
+        "fail": "Concrete evidence in the manifest shows one or more directories flattening a large collection of unrelated clusters or distinct sub-features into a single crowded folder with ambiguous ownership instead of grouping them into navigable subfolders."
       }
     },
     "cohesive_subfeature_grouping": {
       "type": "choice",
       "instructions": "Are tightly related file clusters (sharing a domain prefix or importing mostly from each other) grouped into dedicated subfolders instead of sitting flat alongside unrelated peers?",
       "criteria": {
-        "pass": "Multi-file sub-features, widget families, or tightly coupled helper clusters live together in dedicated subfolders (or stay flat only when the entire parent folder is already small and single-purpose).",
-        "fail": "A clear multi-file cluster (such as several files sharing a sub-feature prefix or forming a tight local-import subgraph) is dumped flat into a larger directory alongside unrelated sibling files."
+        "pass": "Multi-file sub-features, component families, or tightly coupled module clusters live together in dedicated subfolders—or stay flat when the entire parent folder is already small and single-purpose. Cleanly decomposing a complex feature into cohesive sub-modules within its own folder passes.",
+        "fail": "Concrete evidence in the manifest shows a multi-file cluster (such as several files sharing a sub-feature prefix or forming a tight local-import subgraph) dumped flat into a larger directory alongside unrelated sibling clusters, obscuring ownership."
       }
     },
     "clear_concern_separation": {
       "type": "choice",
-      "instructions": "Are distinct architectural concerns (such as persistence, external API/AI transport, domain models/rules, UI components, orchestration, and test utilities) cleanly separated rather than mixed flat together?",
+      "instructions": "Are distinct architectural concerns (such as persistence, external API/transport clients, domain models/rules, UI/presentation, orchestration, and test utilities) cleanly separated rather than mixed flat together?",
       "criteria": {
-        "pass": "Distinct layers or concerns (such as storage/persistence, external clients/inference, core domain logic, UI components, and test utilities) are clearly separated by directory or naming boundary, without test-only helpers masquerading as production files.",
-        "fail": "Multiple distinct architectural concerns (such as persistence, external transport/API clients, domain logic, and orchestration) are mixed flat in the same directory without clear boundaries, OR un-suffixed test utility files sit alongside production source files."
+        "pass": "Distinct architectural concerns (such as storage/persistence, external clients/transport, core domain logic, UI/presentation, orchestration, and test utilities) are clearly separated by directory or explicit role/naming boundaries—whether organized by architectural layer or within cohesive feature folders—without test-only helpers masquerading as production modules.",
+        "fail": "Concrete evidence shows multiple unrelated architectural concerns mixed flat in a crowded directory with ambiguous ownership, OR production-named modules without test scoping/suffixes actually serve only as test utilities alongside production source files."
       }
     },
     "consistent_organization_depth": {
       "type": "choice",
-      "instructions": "Do sibling sub-features use a consistent level of folder organization rather than partially extracting one sub-feature while leaving comparable peer clusters flat?",
+      "instructions": "Do similarly sized sibling sub-features within the same parent directory follow a consistent grouping convention, without penalizing modular decomposition of genuinely complex features?",
       "criteria": {
-        "pass": "Comparable sub-features or clusters within a directory follow a consistent grouping convention (either peers are similarly grouped into subfolders or the directory is small enough that flat layout is uniform).",
-        "fail": "A directory extracts one sub-feature into a dedicated subfolder while leaving equally large or larger multi-file peer clusters flat in the parent directory."
+        "pass": "Comparable, similarly sized sibling clusters within the same parent directory follow a consistent folder organization. Giving a genuinely complex multi-file feature its own subfolder (or nested sub-modules) while smaller one- or two-file siblings remain flat passes cleanly.",
+        "fail": "Within the same parent directory, concrete evidence shows one sub-feature extracted into a dedicated subfolder while one or more similarly sized or larger multi-file sibling clusters are left flat in that same parent directory, creating inconsistent navigation."
       }
     },
     "descriptive_file_roles": {
       "type": "choice",
-      "instructions": "Do file and folder names clearly convey ownership without vague catch-all names or confusingly ambiguous generic filenames?",
+      "instructions": "Do file paths and folder names clearly convey ownership without vague catch-all dumping grounds or genuinely ambiguous ownership?",
       "criteria": {
-        "pass": "Files and folders have specific, domain-meaningful names that make ownership obvious, without grab-bag files (such as utils, helpers, common, misc) or ambiguous generic names repeated across related folders.",
-        "fail": "The structure relies on vague catch-all filenames (such as utils, helpers, common, misc, or un-scoped test-support), or repeats ambiguous generic names (such as model, service, decisions, languages, validation) across sibling or parent/child folders in ways that obscure what belongs where."
+        "pass": "File paths and folder names make ownership clear. Standard role-named files (such as `service`, `store`, `types`, `model`, `decisions`, `repository`, `validation`, or `routes`) pass when their enclosing directory path cleanly scopes what feature or domain they belong to, even when multiple feature directories use the same role names.",
+        "fail": "Concrete evidence shows vague catch-all files (such as `utils`, `helpers`, `common`, `misc`, or un-scoped grab-bag modules) aggregating unrelated responsibilities, or repeated generic names whose enclosing paths fail to distinguish ownership (such as duplicating the same ambiguous file role across overlapping parent and child folders with unclear boundaries)."
       }
     }
   }

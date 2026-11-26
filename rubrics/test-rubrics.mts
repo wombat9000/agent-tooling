@@ -3,9 +3,9 @@
  * Fast rubric unit-test harness (`pnpm test:rubrics`).
  * Evaluates curated fixtures under rubrics/fixtures/ using judge-code's own scoring logic.
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scripts/cli-backend.mts';
@@ -23,7 +23,9 @@ import {
   object,
   resolveRubrics,
   type ResolvedRubric,
+  type RubricTarget,
 } from '../skills/judge-code/scripts/rubrics.mts';
+import { readStructureInputs, type StructureManifest } from '../skills/judge-code/scripts/structure.mts';
 
 export const AUTHORITATIVE_RUBRICS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const DEFAULT_FIXTURES_DIR = fileURLToPath(new URL('./fixtures', import.meta.url));
@@ -39,14 +41,14 @@ Run curated good/bad code fixtures under rubrics/fixtures/ against authoritative
   --fixture ID         Run only matching fixture ID(s) (repeatable)
   --rubric SLUG        Run only fixtures testing this rubric slug (repeatable)
   --backend BACKEND    Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
-  --model ID           OpenRouter model override (default: ${DEFAULT_FILE_MODE_DECISION_MODEL} for file, ${DEFAULT_DECISION_MODEL} for code)
+  --model ID           OpenRouter model override (default: ${DEFAULT_FILE_MODE_DECISION_MODEL} for file, ${DEFAULT_DECISION_MODEL} for code/structure)
   --concurrency N      Max concurrent judge runs (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
   --dry-run            Validate all fixtures, rubric resolution, and request payloads offline (no API calls)
   --json               Print structured JSON report instead of a human-readable table
   --help, -h           Show this help
 `;
 
-export type FixtureMode = 'file' | 'code';
+export type FixtureMode = 'file' | 'code' | 'structure';
 export type ExpectedChoice = 'pass' | 'fail';
 
 export interface LoadedFixture {
@@ -54,6 +56,7 @@ export interface LoadedFixture {
   file: string;
   description: string;
   mode: FixtureMode;
+  rootName?: string;
   rubrics: string[];
   allRubrics: boolean;
   exclude: string[];
@@ -173,8 +176,13 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
 
     const description = nonempty(raw.description, `${label}.description`);
     const mode = raw.mode;
-    if (mode !== 'file' && mode !== 'code') {
-      throw new Error(`${label}: mode must be "file" or "code" (got ${String(mode)})`);
+    if (mode !== 'file' && mode !== 'code' && mode !== 'structure') {
+      throw new Error(`${label}: mode must be "file", "code", or "structure" (got ${String(mode)})`);
+    }
+
+    const rootName = raw.root_name !== undefined ? nonempty(raw.root_name, `${label}.root_name`) : undefined;
+    if (rootName !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(rootName)) {
+      throw new Error(`${label}: root_name "${rootName}" must be a single safe directory name`);
     }
 
     const { rubrics, allRubrics } = parseFixtureRubricSpec(raw, label);
@@ -194,6 +202,17 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
     const normalizedFiles: Record<string, string> = {};
     for (const [fileName, content] of fileEntries) {
       const cleanName = nonempty(fileName, `${label}.files key`);
+      if (mode === 'structure') {
+        const segments = cleanName.split('/');
+        if (
+          cleanName.startsWith('/')
+          || cleanName.includes('\\')
+          || cleanName.includes('\0')
+          || segments.some((seg) => seg === '' || seg === '.' || seg === '..')
+        ) {
+          throw new Error(`${label}.files key "${cleanName}" must be a safe relative POSIX path in structure mode`);
+        }
+      }
       normalizedFiles[cleanName] = normalizeTextBlock(content, `${label}.files[${cleanName}]`);
     }
 
@@ -222,6 +241,7 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
       file,
       description,
       mode,
+      ...(rootName !== undefined ? { rootName } : {}),
       rubrics,
       allRubrics,
       exclude,
@@ -235,14 +255,15 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
   return fixtures;
 }
 
-function listAuthoritativeProductionRubrics(rubricsDir: string): string[] {
+function listAuthoritativeRubricsForTarget(rubricsDir: string, target: RubricTarget): string[] {
   return readdirSync(rubricsDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b))
     .filter((file) => {
       const parsed = JSON.parse(readFileSync(join(rubricsDir, file), 'utf8')) as Record<string, unknown>;
-      return parsed.target === undefined || parsed.target === 'production_code';
+      const fileTarget = parsed.target === undefined ? 'production_code' : parsed.target;
+      return fileTarget === target;
     })
     .map((file) => file.slice(0, -'.json'.length));
 }
@@ -252,8 +273,9 @@ export function resolveFixtureRubric(
   rubricsDir: string = AUTHORITATIVE_RUBRICS_DIR,
 ): ResolvedRubric {
   const slugs = new Set<string>();
+  const expectedTarget: RubricTarget = fixture.mode === 'structure' ? 'project_structure' : 'production_code';
   if (fixture.allRubrics) {
-    for (const slug of listAuthoritativeProductionRubrics(rubricsDir)) slugs.add(slug);
+    for (const slug of listAuthoritativeRubricsForTarget(rubricsDir, expectedTarget)) slugs.add(slug);
   }
   for (const slug of fixture.rubrics) slugs.add(slug);
 
@@ -318,6 +340,21 @@ export interface RunHarnessOptions {
   concurrency?: number;
   dryRun?: boolean;
   transport?: typeof fetch;
+}
+
+function buildStructureManifestForFixture(
+  fixture: LoadedFixture,
+  sourceContainerDir: string,
+  outDir: string,
+): StructureManifest {
+  const rootDir = join(sourceContainerDir, fixture.rootName ?? fixture.id);
+  mkdirSync(rootDir, { recursive: true });
+  for (const [relPath, content] of Object.entries(fixture.files)) {
+    const absPath = join(rootDir, ...relPath.split('/'));
+    mkdirSync(dirname(absPath), { recursive: true });
+    writeFileSync(absPath, content, 'utf8');
+  }
+  return readStructureInputs({ source: rootDir, out: outDir }).manifest;
 }
 
 export async function runRubricHarness(options: RunHarnessOptions = {}): Promise<RubricHarnessReport> {
@@ -403,18 +440,25 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   try {
     outcomes = await runWithConcurrency(units, concurrency, async (unit): Promise<UnitOutcome> => {
       const unitStart = performance.now();
-      const outDir = join(scratchRoot, `${unit.fixture.id}--r${unit.repeatIndex + 1}`);
-      const runOptions = {
-        mode: unit.fixture.mode,
-        files: unit.fixture.files,
-        requirements: unit.fixture.requirements,
-        conventions: unit.fixture.conventions,
-        rubric: unit.resolved,
-        model: backend === 'openrouter' ? unit.model : undefined,
-        out: outDir,
-        dryRun,
-      };
+      const outDir = join(scratchRoot, 'out', `${unit.fixture.id}--r${unit.repeatIndex + 1}`);
       try {
+        const structure = unit.fixture.mode === 'structure'
+          ? buildStructureManifestForFixture(
+            unit.fixture,
+            join(scratchRoot, 'sources', `${unit.fixture.id}--r${unit.repeatIndex + 1}`),
+            outDir,
+          )
+          : undefined;
+        const runOptions = {
+          mode: unit.fixture.mode,
+          ...(structure !== undefined ? { structure } : { files: unit.fixture.files }),
+          requirements: unit.fixture.requirements,
+          conventions: unit.fixture.conventions,
+          rubric: unit.resolved,
+          model: backend === 'openrouter' ? unit.model : undefined,
+          out: outDir,
+          dryRun,
+        };
         const result = backend === 'openrouter'
           ? await runDecisionJudge(runOptions, options.transport)
           : await runCliJudge(runOptions, backend);

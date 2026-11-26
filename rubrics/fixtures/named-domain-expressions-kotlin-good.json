@@ -1,0 +1,38 @@
+{
+  "id": "named-domain-expressions-kotlin-good",
+  "description": "Kotlin policy using enclosing properties and helper functions to supply domain names alongside simple inline presence/status guards",
+  "mode": "file",
+  "rubric": "readability",
+  "files": {
+    "RenewalPolicy.kt": [
+      "package com.acme.billing",
+      "",
+      "enum class SubscriptionState { ACTIVE, PAST_DUE, CANCELLED }",
+      "",
+      "data class RenewalCandidate(",
+      "    val accountId: String,",
+      "    val state: SubscriptionState,",
+      "    val daysUntilExpiry: Int,",
+      "    val unpaidBalanceCents: Long,",
+      "    val hasPaymentMethod: Boolean,",
+      ") {",
+      "    val isWithinRenewalWindow: Boolean",
+      "        get() = daysUntilExpiry in 0..7",
+      "",
+      "    val isInGoodStanding: Boolean",
+      "        get() = state == SubscriptionState.ACTIVE && unpaidBalanceCents == 0L",
+      "}",
+      "",
+      "fun isEligibleForAutoRenewal(candidate: RenewalCandidate?): Boolean {",
+      "    if (candidate == null || candidate.accountId.isBlank()) {",
+      "        return false",
+      "    }",
+      "    return candidate.isInGoodStanding && candidate.isWithinRenewalWindow && candidate.hasPaymentMethod",
+      "}"
+    ]
+  },
+  "expect": {
+    "direct_readability": "pass",
+    "named_domain_expressions": "pass"
+  }
+}

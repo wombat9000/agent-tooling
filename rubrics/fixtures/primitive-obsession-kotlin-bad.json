@@ -1,0 +1,40 @@
+{
+  "id": "primitive-obsession-kotlin-bad",
+  "description": "Kotlin service branching on visibly unconstrained raw status/tier strings, untyped Triple tuples, and coupled boolean flags",
+  "mode": "file",
+  "rubric": "fowler-smells",
+  "files": {
+    "BookingPricing.kt": [
+      "package com.acme.booking.service",
+      "",
+      "fun quoteRoomRate(",
+      "    bookingInfo: Triple<String, Int, Boolean>,",
+      "    memberTier: String,",
+      "    bookingStatus: String,",
+      "    isWeekend: Boolean,",
+      "    isPeakSeason: Boolean,",
+      "    isLateCheckout: Boolean,",
+      "): Pair<Int, String> {",
+      "    val (roomCode, nights, includeBreakfast) = bookingInfo",
+      "    var nightly = when (roomCode) {",
+      "        \"STD_Q\" -> 12900",
+      "        \"DLX_K\" -> 18900",
+      "        \"STE_P\" -> 31500",
+      "        else -> 14900",
+      "    }",
+      "    if (isWeekend) nightly += 2500",
+      "    if (isPeakSeason) nightly += 4200",
+      "    if (includeBreakfast) nightly += 1800",
+      "    if (isLateCheckout) nightly += 3500",
+      "    var total = nightly * nights",
+      "    if (memberTier == \"diamond_vip\") total = (total * 80) / 100",
+      "    else if (memberTier == \"silver_club\") total = (total * 92) / 100",
+      "    val tag = if (bookingStatus == \"hold_pending\" || bookingStatus == \"manual_review\") \"LOCKED\" else \"OPEN\"",
+      "    return Pair(total, tag)",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_primitive_obsession": "fail"
+  }
+}

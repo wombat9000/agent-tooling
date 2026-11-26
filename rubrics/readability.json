@@ -15,10 +15,10 @@
       "type": "choice",
       "scope": "file",
       "pass_threshold": 0.6,
-      "instructions": "Does the supplied production code give non-obvious conditionals, compound checks, and inline boundary or rule expressions clear domain names instead of forcing readers to decipher them inline?",
+      "instructions": "Does the supplied production code make non-obvious business, workflow, eligibility, and boundary decisions understandable from their local context instead of forcing readers to decipher opaque inline expressions?",
       "criteria": {
-        "pass": "Non-obvious validation checks, multi-clause compound boolean conditions, and inline conditional expressions encoding non-trivial domain or boundary rules are given intention-revealing names via local variables/constants, properties, or small domain functions. Simple, self-explanatory checks—such as null/emptiness checks, `value > 0`, comparisons against named constants, straightforward boundary type/presence guards (like checking required payload fields), and simple single-condition ternaries for field mapping or defaults—may remain inline.",
-        "fail": "Non-obvious compound boolean conditions (such as multi-part eligibility, range, state, or regex/arithmetic checks) or dense inline conditional expressions encoding business or boundary rules are embedded directly inside guards, branch expressions, or callers without a domain name, forcing the reader to decipher the mechanics to understand the rule."
+        "pass": "Non-obvious business, workflow, eligibility, or boundary decisions are clear at their point of use—whether via a named variable, constant, property, helper function, enclosing function or schema field name, or a clear nearby explanation; extraction into a separate helper is not mandatory when local context already names the rule. Standard protocol, HTTP/method/status, type, null/presence, emptiness, and input-shape guards, named declarative schema field constraints, and simple mappings or defaults may remain inline.",
+        "fail": "One or more concrete non-obvious business, workflow, eligibility, range, pattern, or boundary decisions remain obscured inside an inline condition, guard, or nested conditional without local naming or clear context, forcing readers to reverse-engineer the rule from raw mechanics. Clause count alone is insufficient to fail when the condition is a routine protocol, type, presence, status, or input guard, or is already named by its enclosing function, property, or schema field."
       }
     }
   }

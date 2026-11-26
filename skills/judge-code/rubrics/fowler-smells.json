@@ -14,10 +14,10 @@
     "no_long_functions": {
       "type": "choice",
       "scope": "file",
-      "instructions": "Is the supplied production code free of the Long Function smell?",
+      "instructions": "Is the supplied production code free of the Long Function smell, judging each function, method, or callback by its own executable responsibilities?",
       "criteria": {
-        "pass": "Functions and methods remain concise and focused on one cohesive level of abstraction, delegating distinct sub-steps to well-named domain methods or helpers where appropriate.",
-        "fail": "One or more functions are overly long, monolithic procedures that pack multiple sequential concerns (such as parsing, validation, policy checks, state updates, and persistence or response building) inline without decomposition."
+        "pass": "Each executable function, method, or callback stays focused on a cohesive level of abstraction, delegating substantial mechanics to well-named helpers or domain methods where appropriate. Cohesive boundary, transaction, streaming, and orchestration functions pass when substantial mechanics are delegated and the step ordering remains easy to follow. Do not fail solely for overall file or class size, declarative UI or markup composition, formatting or static literals, or an enclosing container that defines multiple short, independently triggered handlers or lifecycle callbacks.",
+        "fail": "One or more individual executable functions, methods, or callbacks embed multiple substantial inline phases or distinct sequential concerns (such as parsing, validation, policy calculation, state mutation, and persistence or output formatting) directly in one body where named abstractions are warranted to clarify intent and reduce nesting."
       }
     },
     "no_long_parameter_lists_or_data_clumps": {
@@ -53,8 +53,8 @@
       "pass_threshold": 0.65,
       "instructions": "Is the supplied production code free of the Primitive Obsession smell?",
       "criteria": {
-        "pass": "Core domain concepts with constrained state sets, multi-field structure, or distinct domain behavior/units (such as statuses, tiers, directions, date ranges, or validated value objects) use dedicated domain types, unions/enums, or named constants rather than magic strings, magic numbers, untyped tuples, or clusters of raw boolean flags. Plain primitives remain acceptable where wrapper types would add no domain behavior or invariant—such as opaque IDs, timestamps/ISO strings, content hashes, tokens, revision/version counters, plain text/email/URL fields validated at boundaries, simple numeric counts, and storage or DTO field carriers.",
-        "fail": "Core domain or service logic branches on raw magic strings or unnamed magic numbers for domain states, tiers, rates, or categories; passes untyped pairs/tuples instead of structured types; or uses clusters of raw boolean control flags or loose primitive clusters where a cohesive domain type, union/enum, or named constant belongs."
+        "pass": "Constrained domain concepts, structured value groups, and shared semantic thresholds use dedicated types, unions/enums, or named constants rather than visibly unconstrained primitives, untyped tuples, or coupled boolean flag clusters. Comparisons against values typed by a local or imported union, enum, constant collection, or validation schema are NOT untyped magic-string defects—do not assume an imported type is an unconstrained primitive when its declaration lives outside the supplied file. Standard protocol, HTTP, markup/DOM, and parser literals, independent UI flags, ordinary arithmetic and counts, timestamps/ISO strings, opaque IDs, tokens/hashes, and boundary/storage DTO fields remain acceptable as plain primitives unless an unmodeled domain invariant requires wrapping.",
+        "fail": "The supplied code visibly models a constrained domain concept, state set, unit, or multi-field structure with unconstrained raw primitives, untyped pairs/tuples, or coupled boolean control flags, OR repeats raw magic strings or semantic thresholds/sentinels in ways that risk inconsistency that a shared named constant, union/enum, or value type would prevent."
       }
     },
     "no_repeated_switches": {

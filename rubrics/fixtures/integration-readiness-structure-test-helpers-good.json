@@ -1,0 +1,61 @@
+{
+  "id": "integration-readiness-structure-test-helpers-good",
+  "description": "Production routes wire only real API/storage clients while clearly test-only colocated helpers and fixtures are imported exclusively by tests",
+  "mode": "structure",
+  "root_name": "app",
+  "rubric": "integration-readiness-structure",
+  "files": {
+    "lib/http-client.ts": [
+      "export async function fetchJson<T>(url: string): Promise<T> {",
+      "  const res = await fetch(url);",
+      "  return (await res.json()) as T;",
+      "}"
+    ],
+    "features/profile/types.ts": [
+      "export interface Profile { readonly id: string; readonly displayName: string; }"
+    ],
+    "features/profile/api-client.ts": [
+      "import { fetchJson } from '../../lib/http-client';",
+      "import type { Profile } from './types';",
+      "export function fetchProfile(id: string): Promise<Profile> {",
+      "  return fetchJson<Profile>(`/api/profiles/${id}`);",
+      "}"
+    ],
+    "features/profile/service.ts": [
+      "import { fetchProfile } from './api-client';",
+      "import type { Profile } from './types';",
+      "export function loadProfile(id: string): Promise<Profile> {",
+      "  return fetchProfile(id);",
+      "}"
+    ],
+    "routes/profile.ts": [
+      "import { loadProfile } from '../features/profile/service';",
+      "export function loader(id: string) {",
+      "  return loadProfile(id);",
+      "}"
+    ],
+    "features/profile/profile-test-fixtures.ts": [
+      "import type { Profile } from './types';",
+      "export function makeTestProfile(overrides: Partial<Profile> = {}): Profile {",
+      "  return { id: 'test-user-1', displayName: 'Test User', ...overrides };",
+      "}"
+    ],
+    "features/profile/__tests__/mock-profile-transport.ts": [
+      "import type { Profile } from '../types';",
+      "export function createMockProfileTransport(profile: Profile) {",
+      "  return async () => profile;",
+      "}"
+    ],
+    "features/profile/service.test.ts": [
+      "import { loadProfile } from './service';",
+      "import { makeTestProfile } from './profile-test-fixtures';",
+      "import { createMockProfileTransport } from './__tests__/mock-profile-transport';",
+      "export const testFixture = createMockProfileTransport(makeTestProfile());",
+      "export const subject = loadProfile;"
+    ]
+  },
+  "expect": {
+    "no_bundled_stub_or_demo_modules": "pass",
+    "no_parallel_shadow_directories": "pass"
+  }
+}
