@@ -1,7 +1,6 @@
 {
   "id": "message-chains-kotlin-good",
   "description": "Kotlin code reads nested fields on passive data-class projections and configuration trees with a standard collection pipeline",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "OrderExportMapper.kt": [

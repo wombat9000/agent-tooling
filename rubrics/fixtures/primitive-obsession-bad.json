@@ -1,7 +1,6 @@
 {
   "id": "primitive-obsession-bad",
   "description": "Branches on raw magic strings, magic numbers, untyped tuples, and clusters of raw boolean flags",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "shipping.ts": [
@@ -36,6 +35,16 @@
       "",
       "  const label = speed === 'overnight_air' ? 'EXP' : speed === 'two_day' ? 'PRI' : 'STD';",
       "  return [base, label, isColdChain || (isFragile && requiresSignature)];",
+      "}"
+    ],
+    "tracking.ts": [
+      "export interface TrackingReference {",
+      "  readonly shipmentId: string;",
+      "  readonly createdAtIso: string;",
+      "}",
+      "",
+      "export function formatTrackingReference(ref: TrackingReference): string {",
+      "  return `${ref.shipmentId} (${ref.createdAtIso})`;",
       "}"
     ]
   },

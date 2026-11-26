@@ -1,0 +1,45 @@
+{
+  "id": "api-contract-boundary-bad",
+  "description": "Pollutes live catalog types with speculative unbuilt Phase-2 optional fields and demo markers while the API client returns raw unparsed fetch Response objects",
+  "rubric": "integration-readiness",
+  "files": {
+    "catalog-types.ts": [
+      "// Pre-declaring Phase 2 bundle and AI ranking fields keeps the contract forward-compatible.",
+      "export interface UnbuiltBundleRulePlaceholder {",
+      "  readonly bundleCode?: string;",
+      "  readonly discountTier?: string;",
+      "}",
+      "",
+      "export interface ProductSummary {",
+      "  readonly id: string;",
+      "  readonly sku: string;",
+      "  readonly title: string;",
+      "  readonly unitPriceCents: number;",
+      "  readonly futureBundlePricing?: UnbuiltBundleRulePlaceholder;",
+      "  readonly upcomingAiRecommendationScore?: number;",
+      "  readonly isDemo?: boolean;",
+      "}"
+    ],
+    "catalog-client.ts": [
+      "export function fetchRawCatalogResponse(baseUrl: string, authHeader: string): Promise<Response> {",
+      "  return fetch(`${baseUrl}/api/catalog/products`, {",
+      "    headers: { Authorization: authHeader, Accept: 'application/json' },",
+      "  });",
+      "}"
+    ],
+    "catalog-route.ts": [
+      "import { fetchRawCatalogResponse } from './catalog-client';",
+      "import type { ProductSummary } from './catalog-types';",
+      "",
+      "export async function handleListCatalog(baseUrl: string, authHeader: string) {",
+      "  const rawResponse = await fetchRawCatalogResponse(baseUrl, authHeader);",
+      "  const parsed = (await rawResponse.json()) as { items?: ProductSummary[] };",
+      "  const items = (parsed.items ?? []).filter((item) => !item.isDemo);",
+      "  return { status: rawResponse.status, body: { items } };",
+      "}"
+    ]
+  },
+  "expect": {
+    "clean_api_contract_boundary": "fail"
+  }
+}

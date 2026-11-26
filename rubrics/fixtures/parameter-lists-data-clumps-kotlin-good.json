@@ -1,7 +1,6 @@
 {
   "id": "parameter-lists-data-clumps-kotlin-good",
   "description": "Kotlin function accepts a single cohesive data class input (destructured locally) and calls an imported wide legacy bridge from a concise 2-parameter caller",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "InvoiceDraftService.kt": [

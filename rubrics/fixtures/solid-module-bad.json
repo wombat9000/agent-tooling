@@ -1,7 +1,6 @@
 {
   "id": "solid-module-bad",
   "description": "God-module bundling invoice domain rules, CSV export, email HTML rendering, filesystem I/O, process.env, system clock, and fetch calls",
-  "mode": "code",
   "rubric": "solid",
   "files": {
     "invoice-manager.ts": [

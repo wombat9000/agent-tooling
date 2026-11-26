@@ -1,7 +1,6 @@
 {
   "id": "message-chains-passive-dto-good",
   "description": "Reads deeply nested fields on passive DTO projections and configuration trees alongside a standard collection pipeline without violating Law of Demeter",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "invoice-projection.ts": [

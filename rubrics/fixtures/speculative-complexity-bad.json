@@ -1,16 +1,20 @@
 {
   "id": "speculative-complexity-bad",
   "description": "Overengineered untyped string-key rule-engine DSL and pass-through wrapper just to filter three fixed ticket statuses",
-  "mode": "file",
   "rubric": "integration-readiness",
   "files": {
-    "ticket-filter-engine.ts": [
+    "types.ts": [
+      "export type TicketStatus = 'open' | 'pending' | 'closed';",
+      "",
       "export interface SupportTicket {",
       "  readonly id: string;",
       "  readonly title: string;",
-      "  readonly status: 'open' | 'pending' | 'closed';",
+      "  readonly status: TicketStatus;",
       "  readonly assigneeId: string | null;",
-      "}",
+      "}"
+    ],
+    "ticket-filter-engine.ts": [
+      "import type { SupportTicket } from './types';",
       "",
       "type OperatorFn = (actual: unknown, expected: unknown) => boolean;",
       "",

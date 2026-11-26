@@ -1,7 +1,6 @@
 {
   "id": "primitive-obsession-kotlin-good",
   "description": "Kotlin file branching on imported domain enums alongside standard HTTP header/status literals, opaque IDs, and ordinary counts",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "BookingHttpAdapter.kt": [

@@ -1,0 +1,71 @@
+{
+  "id": "shadow-screen-forks-good",
+  "description": "Keeps one authoritative orders table, column builder, and filter helper that toggles a phased fulfillment column cleanly in place",
+  "rubric": "integration-readiness",
+  "files": {
+    "orders-columns.ts": [
+      "export interface TableColumn {",
+      "  readonly key: string;",
+      "  readonly label: string;",
+      "}",
+      "",
+      "export function buildOrderColumns(options: { readonly showFulfillmentStatus: boolean }): TableColumn[] {",
+      "  const columns: TableColumn[] = [",
+      "    { key: 'orderNumber', label: 'Order' },",
+      "    { key: 'customer', label: 'Customer' },",
+      "    { key: 'total', label: 'Total' },",
+      "  ];",
+      "  if (options.showFulfillmentStatus) {",
+      "    columns.push({ key: 'fulfillmentStatus', label: 'Fulfillment' });",
+      "  }",
+      "  return columns;",
+      "}"
+    ],
+    "orders-filters.ts": [
+      "export interface OrderRow {",
+      "  readonly orderNumber: string;",
+      "  readonly customer: string;",
+      "  readonly totalCents: number;",
+      "  readonly fulfillmentStatus?: 'queued' | 'shipped';",
+      "}",
+      "",
+      "export function filterOrders(",
+      "  rows: readonly OrderRow[],",
+      "  query: string,",
+      "  fulfillmentStatus?: 'queued' | 'shipped',",
+      "): OrderRow[] {",
+      "  const term = query.trim().toLowerCase();",
+      "  return rows.filter((row) => {",
+      "    if (term && !row.customer.toLowerCase().includes(term) && !row.orderNumber.toLowerCase().includes(term)) {",
+      "      return false;",
+      "    }",
+      "    if (fulfillmentStatus && row.fulfillmentStatus !== fulfillmentStatus) return false;",
+      "    return true;",
+      "  });",
+      "}"
+    ],
+    "orders-screen.ts": [
+      "import { buildOrderColumns } from './orders-columns';",
+      "import { filterOrders, type OrderRow } from './orders-filters';",
+      "",
+      "export function buildOrdersViewModel(params: {",
+      "  readonly rows: readonly OrderRow[];",
+      "  readonly query: string;",
+      "  readonly showFulfillmentStatus: boolean;",
+      "  readonly fulfillmentFilter?: 'queued' | 'shipped';",
+      "}) {",
+      "  return {",
+      "    columns: buildOrderColumns({ showFulfillmentStatus: params.showFulfillmentStatus }),",
+      "    rows: filterOrders(",
+      "      params.rows,",
+      "      params.query,",
+      "      params.showFulfillmentStatus ? params.fulfillmentFilter : undefined,",
+      "    ),",
+      "  };",
+      "}"
+    ]
+  },
+  "expect": {
+    "no_shadow_screen_forks": "pass"
+  }
+}

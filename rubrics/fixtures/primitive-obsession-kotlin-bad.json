@@ -1,7 +1,6 @@
 {
   "id": "primitive-obsession-kotlin-bad",
   "description": "Kotlin service branching on visibly unconstrained raw status/tier strings, untyped Triple tuples, and coupled boolean flags",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "BookingPricing.kt": [

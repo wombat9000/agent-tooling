@@ -1,11 +1,11 @@
 {
   "id": "named-domain-expressions-good",
   "description": "Extracts compound eligibility and grace-window rules into clear domain-named predicates and constants",
-  "mode": "file",
   "rubric": "readability",
   "files": {
-    "refund-policy.ts": [
+    "types.ts": [
       "export type OrderStatus = 'delivered' | 'cancelled' | 'refunded';",
+      "export type RefundDecision = 'approved' | 'manual_review' | 'rejected';",
       "",
       "export interface RefundRequest {",
       "  readonly status: OrderStatus;",
@@ -13,7 +13,10 @@
       "  readonly amountCents: number;",
       "  readonly customerIsMember: boolean;",
       "  readonly openedPackaging: boolean;",
-      "}",
+      "}"
+    ],
+    "refund-policy.ts": [
+      "import type { RefundDecision, RefundRequest } from './types';",
       "",
       "const STANDARD_RETURN_WINDOW_DAYS = 14;",
       "const MEMBER_RETURN_WINDOW_DAYS = 30;",
@@ -30,7 +33,7 @@
       "  return !request.openedPackaging && request.amountCents <= AUTO_APPROVE_LIMIT_CENTS;",
       "}",
       "",
-      "export function decideRefund(request: RefundRequest): 'approved' | 'manual_review' | 'rejected' {",
+      "export function decideRefund(request: RefundRequest): RefundDecision {",
       "  const isDeliveredOrder = request.status === 'delivered';",
       "  if (!isDeliveredOrder || !isWithinReturnWindow(request)) {",
       "    return 'rejected';",
@@ -40,7 +43,6 @@
     ]
   },
   "expect": {
-    "direct_readability": "pass",
     "named_domain_expressions": "pass"
   }
 }

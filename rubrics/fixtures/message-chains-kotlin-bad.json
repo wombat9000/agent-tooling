@@ -1,7 +1,6 @@
 {
   "id": "message-chains-kotlin-bad",
   "description": "Kotlin service reaches through multiple behavior-bearing collaborators to inspect and mutate internal state across unrelated owners",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "TenantEvictionService.kt": [

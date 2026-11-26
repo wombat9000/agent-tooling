@@ -1,7 +1,6 @@
 {
   "id": "named-domain-expressions-kotlin-bad",
   "description": "Kotlin policy embedding unnamed multi-clause eligibility, arithmetic, and pattern rules inline inside branches",
-  "mode": "file",
   "rubric": "readability",
   "files": {
     "RenewalPolicy.kt": [

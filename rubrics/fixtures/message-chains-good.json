@@ -1,10 +1,9 @@
 {
   "id": "message-chains-good",
   "description": "Asks direct collaborators via intention-revealing domain methods and uses a standard collection pipeline",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
-    "fulfillment.ts": [
+    "types.ts": [
       "export interface FulfillmentOrder {",
       "  readonly id: string;",
       "  shippingCountryCode(): string;",
@@ -16,7 +15,10 @@
       "  readonly orderId: string;",
       "  readonly destinationCountry: string;",
       "  readonly carrierLane: 'express' | 'standard';",
-      "}",
+      "}"
+    ],
+    "fulfillment.ts": [
+      "import type { DispatchPlan, FulfillmentOrder } from './types';",
       "",
       "const MAX_EXPRESS_WEIGHT_GRAMS = 10_000;",
       "",

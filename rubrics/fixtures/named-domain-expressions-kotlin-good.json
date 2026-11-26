@@ -1,7 +1,6 @@
 {
   "id": "named-domain-expressions-kotlin-good",
   "description": "Kotlin policy using enclosing properties and helper functions to supply domain names alongside simple inline presence/status guards",
-  "mode": "file",
   "rubric": "readability",
   "files": {
     "RenewalPolicy.kt": [

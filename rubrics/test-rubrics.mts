@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 /**
- * Fast rubric unit-test harness (`pnpm test:rubrics`).
- * Evaluates curated fixtures under rubrics/fixtures/ using judge-code's own scoring logic.
+ * Unified dual-mode rubric test harness (`pnpm test:rubrics`).
+ * Evaluates curated fixtures under rubrics/fixtures/ using judge-code's own scoring logic:
+ * - production_code fixtures run in both `file` (per-file aggregated) and `module` (bundled) modes,
+ *   narrowed to the fixture's expected check ID(s) and ignoring `scope` filtering in `file` mode so
+ *   module-scoped checks report single-file signal alongside enforced module results.
+ * - project_structure fixtures run in `structure` mode only.
  */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +26,9 @@ import {
   nonempty,
   object,
   resolveRubrics,
+  type CheckScope,
+  type ChoiceQuestion,
+  type JudgeMode,
   type ResolvedRubric,
   type RubricTarget,
 } from '../skills/judge-code/scripts/rubrics.mts';
@@ -32,30 +39,39 @@ export const DEFAULT_FIXTURES_DIR = fileURLToPath(new URL('./fixtures', import.m
 export const DEFAULT_REPEATS = 2;
 const DEFAULT_OPENROUTER_CONCURRENCY = 8;
 const DEFAULT_CLI_CONCURRENCY = 2;
+const OPENROUTER_MODEL_RE = /^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i;
 
 const USAGE = `Usage: node rubrics/test-rubrics.mts [options]
 
 Run curated good/bad code fixtures under rubrics/fixtures/ against authoritative rubrics/*.json.
+Production fixtures run in both \`file\` (per-file) and \`module\` (bundled) modes; structure fixtures run in \`structure\` mode.
 
-  --repeats N          Number of live repeats per fixture (default: ${DEFAULT_REPEATS}; every repeat must pass)
+  --repeats N          Number of live repeats per mode/fixture (default: ${DEFAULT_REPEATS}; every repeat must pass)
   --fixture ID         Run only matching fixture ID(s) (repeatable)
   --rubric SLUG        Run only fixtures testing this rubric slug (repeatable)
+  --rule CHECK_ID      Run only fixtures asserting this check ID (repeatable)
+  --modes MODE         Production modes to run: both (default), file, or module
   --backend BACKEND    Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
-  --model ID           OpenRouter model override (default: ${DEFAULT_FILE_MODE_DECISION_MODEL} for file, ${DEFAULT_DECISION_MODEL} for module/structure)
+  --file-model ID      OpenRouter model override for file mode (default: ${DEFAULT_FILE_MODE_DECISION_MODEL})
+  --module-model ID    OpenRouter model override for module/structure mode (default: ${DEFAULT_DECISION_MODEL})
+  --model ID           OpenRouter model override for all modes (cannot combine with --file-model or --module-model)
   --concurrency N      Max concurrent judge runs (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
   --dry-run            Validate all fixtures, rubric resolution, and request payloads offline (no API calls)
-  --json               Print structured JSON report instead of a human-readable table
+  --json               Print structured JSON report instead of human-readable tables
   --help, -h           Show this help
 `;
 
-export type FixtureMode = 'file' | 'code' | 'structure';
+export type FixtureTarget = RubricTarget;
+export type HarnessExecutionMode = 'file' | 'module' | 'structure';
+export type HarnessModesOption = 'both' | 'file' | 'module';
 export type ExpectedChoice = 'pass' | 'fail';
+export type ScopeSignalClassification = 'both' | 'module-only' | 'file-only' | 'neither' | 'incomplete';
 
 export interface LoadedFixture {
   id: string;
   file: string;
   description: string;
-  mode: FixtureMode;
+  mode?: 'structure';
   rootName?: string;
   rubrics: string[];
   allRubrics: boolean;
@@ -66,9 +82,10 @@ export interface LoadedFixture {
   expect: Record<string, ExpectedChoice>;
 }
 
-export interface CheckEvaluationSummary {
-  check_id: string;
-  expected: ExpectedChoice;
+export interface ModeEvaluationSummary {
+  mode: HarnessExecutionMode;
+  model: string;
+  enforced: boolean;
   passed: boolean;
   matches: number;
   repeats: number;
@@ -76,24 +93,65 @@ export interface CheckEvaluationSummary {
   pass_probabilities: Array<number | null>;
   min_pass_probability: number | null;
   max_pass_probability: number | null;
+  errors: string[];
+}
+
+export interface CheckEvaluationSummary {
+  check_id: string;
+  rubric_slug: string;
+  declared_scope: CheckScope;
+  expected: ExpectedChoice;
+  passed: boolean;
   pass_threshold: number | null;
+  file?: ModeEvaluationSummary;
+  module?: ModeEvaluationSummary;
+  structure?: ModeEvaluationSummary;
 }
 
 export interface FixtureEvaluationSummary {
   id: string;
   description: string;
-  mode: FixtureMode;
-  model: string;
+  target: FixtureTarget;
+  file_count: number;
   rubric: string;
   status: 'passed' | 'failed' | 'dry_run' | 'error';
   elapsed_ms: number;
+  models: Partial<Record<HarnessExecutionMode, string>>;
   checks: CheckEvaluationSummary[];
   errors: string[];
+}
+
+export interface ModeSignalStats {
+  signal: boolean | null;
+  pass_fixtures_total: number;
+  pass_fixtures_passed: number;
+  fail_fixtures_total: number;
+  fail_fixtures_passed: number;
+  good_min_p: number | null;
+  good_max_p: number | null;
+  bad_min_p: number | null;
+  bad_max_p: number | null;
+}
+
+export interface CriterionSignalSummary {
+  check_id: string;
+  rubric_slug: string;
+  declared_scope: 'file' | 'module';
+  pass_threshold: number | null;
+  file: ModeSignalStats;
+  module: ModeSignalStats;
+  classification: ScopeSignalClassification;
+  promote_hint: boolean;
 }
 
 export interface RubricHarnessReport {
   status: 'passed' | 'failed' | 'dry_run';
   backend: JudgeBackend;
+  modes: HarnessModesOption;
+  models: {
+    file: string;
+    module: string;
+  };
   repeats: number;
   dry_run: boolean;
   elapsed_ms: number;
@@ -102,6 +160,7 @@ export interface RubricHarnessReport {
   checks_total: number;
   checks_passed: number;
   fixtures: FixtureEvaluationSummary[];
+  criteria_matrix: CriterionSignalSummary[];
 }
 
 function normalizeTextBlock(value: unknown, label: string): string {
@@ -115,6 +174,18 @@ function normalizeTextBlock(value: unknown, label: string): string {
     return joined;
   }
   throw new Error(`${label} must be a nonempty string or array of lines`);
+}
+
+function assertSafeRelativePosixPath(fileName: string, label: string): void {
+  const segments = fileName.split('/');
+  if (
+    fileName.startsWith('/')
+    || fileName.includes('\\')
+    || fileName.includes('\0')
+    || segments.some((seg) => seg === '' || seg === '.' || seg === '..')
+  ) {
+    throw new Error(`${label}.files key "${fileName}" must be a safe relative POSIX path in structure mode`);
+  }
 }
 
 function parseFixtureRubricSpec(raw: Record<string, unknown>, label: string): { rubrics: string[]; allRubrics: boolean } {
@@ -175,9 +246,18 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
     seenIds.add(id);
 
     const description = nonempty(raw.description, `${label}.description`);
-    const mode = raw.mode;
-    if (mode !== 'file' && mode !== 'code' && mode !== 'structure') {
-      throw new Error(`${label}: mode must be "file", "code", or "structure" (got ${String(mode)})`);
+
+    let mode: 'structure' | undefined;
+    if (raw.mode !== undefined) {
+      if (raw.mode === 'structure') {
+        mode = 'structure';
+      } else if (raw.mode === 'file' || raw.mode === 'code') {
+        throw new Error(
+          `${label}: "mode": "${raw.mode}" is obsolete; omit "mode" for production_code fixtures (they run in both file and module modes)`,
+        );
+      } else {
+        throw new Error(`${label}: mode must be omitted (for production_code) or "structure" (got ${String(raw.mode)})`);
+      }
     }
 
     const rootName = raw.root_name !== undefined ? nonempty(raw.root_name, `${label}.root_name`) : undefined;
@@ -203,15 +283,7 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
     for (const [fileName, content] of fileEntries) {
       const cleanName = nonempty(fileName, `${label}.files key`);
       if (mode === 'structure') {
-        const segments = cleanName.split('/');
-        if (
-          cleanName.startsWith('/')
-          || cleanName.includes('\\')
-          || cleanName.includes('\0')
-          || segments.some((seg) => seg === '' || seg === '.' || seg === '..')
-        ) {
-          throw new Error(`${label}.files key "${cleanName}" must be a safe relative POSIX path in structure mode`);
-        }
+        assertSafeRelativePosixPath(cleanName, label);
       }
       normalizedFiles[cleanName] = normalizeTextBlock(content, `${label}.files[${cleanName}]`);
     }
@@ -240,7 +312,7 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
       id,
       file,
       description,
-      mode,
+      ...(mode !== undefined ? { mode } : {}),
       ...(rootName !== undefined ? { rootName } : {}),
       rubrics,
       allRubrics,
@@ -253,6 +325,19 @@ export function loadFixtures(fixturesDir: string = DEFAULT_FIXTURES_DIR): Loaded
   }
 
   return fixtures;
+}
+
+function readAuthoritativeRubricMeta(rubricsDir: string, slug: string, fixtureId: string): { path: string; target: RubricTarget; id: string } {
+  const fullPath = join(rubricsDir, `${slug}.json`);
+  if (!statSync(fullPath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`Fixture ${fixtureId}: unknown authoritative rubric "${slug}" (${fullPath})`);
+  }
+  const parsed = object(JSON.parse(readFileSync(fullPath, 'utf8')), `Rubric ${slug}`);
+  const rawTarget = parsed.target === undefined ? 'production_code' : parsed.target;
+  if (rawTarget !== 'production_code' && rawTarget !== 'project_structure') {
+    throw new Error(`Fixture ${fixtureId}: rubric "${slug}" targets unsupported "${String(rawTarget)}"`);
+  }
+  return { path: fullPath, target: rawTarget, id: nonempty(parsed.rubric, `${slug}.rubric`) };
 }
 
 function listAuthoritativeRubricsForTarget(rubricsDir: string, target: RubricTarget): string[] {
@@ -268,51 +353,176 @@ function listAuthoritativeRubricsForTarget(rubricsDir: string, target: RubricTar
     .map((file) => file.slice(0, -'.json'.length));
 }
 
+function listAllAuthoritativeCheckIds(rubricsDir: string): Set<string> {
+  const ids = new Set<string>();
+  const files = readdirSync(rubricsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name);
+  for (const file of files) {
+    const parsed = JSON.parse(readFileSync(join(rubricsDir, file), 'utf8')) as Record<string, unknown>;
+    const rawTarget = parsed.target === undefined ? 'production_code' : parsed.target;
+    if (rawTarget !== 'production_code' && rawTarget !== 'project_structure') continue;
+    const questions = parsed.questions;
+    if (questions && typeof questions === 'object' && !Array.isArray(questions)) {
+      for (const checkId of Object.keys(questions as Record<string, unknown>)) {
+        ids.add(checkId);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * Resolve and narrow a fixture's authoritative rubric(s) to ONLY the check IDs listed in `fixture.expect`.
+ * Uses `mode: 'code'` for `production_code` rubrics so `module`-scoped checks are NOT stripped, allowing
+ * the harness to evaluate them in both `file` and `module` modes while preserving their declared `scopes`.
+ */
 export function resolveFixtureRubric(
   fixture: LoadedFixture,
   rubricsDir: string = AUTHORITATIVE_RUBRICS_DIR,
 ): ResolvedRubric {
+  const explicitMeta = fixture.rubrics.map((slug) => ({
+    slug,
+    ...readAuthoritativeRubricMeta(rubricsDir, slug, fixture.id),
+  }));
+
+  let inferredTarget: RubricTarget;
+  if (explicitMeta.length > 0) {
+    inferredTarget = explicitMeta[0].target;
+    for (const meta of explicitMeta) {
+      if (meta.target !== inferredTarget) {
+        throw new Error(`Fixture ${fixture.id}: cannot mix production_code and project_structure rubrics`);
+      }
+    }
+    if (fixture.mode === 'structure' && inferredTarget !== 'project_structure') {
+      throw new Error(
+        `Fixture ${fixture.id}: mode "structure" is incompatible with ${inferredTarget} rubric "${explicitMeta[0].slug}"`,
+      );
+    }
+  } else {
+    inferredTarget = fixture.mode === 'structure' ? 'project_structure' : 'production_code';
+  }
+
+  if (inferredTarget === 'project_structure') {
+    for (const fileName of Object.keys(fixture.files)) {
+      assertSafeRelativePosixPath(fileName, `fixture ${fixture.file}`);
+    }
+  }
+
   const slugs = new Set<string>();
-  const expectedTarget: RubricTarget = fixture.mode === 'structure' ? 'project_structure' : 'production_code';
   if (fixture.allRubrics) {
-    for (const slug of listAuthoritativeRubricsForTarget(rubricsDir, expectedTarget)) slugs.add(slug);
+    for (const slug of listAuthoritativeRubricsForTarget(rubricsDir, inferredTarget)) slugs.add(slug);
   }
   for (const slug of fixture.rubrics) slugs.add(slug);
 
-  const rubricPaths = [...slugs].sort((a, b) => a.localeCompare(b)).map((slug) => {
-    const fullPath = join(rubricsDir, `${slug}.json`);
-    if (!statSync(fullPath, { throwIfNoEntry: false })?.isFile()) {
-      throw new Error(`Fixture ${fixture.id}: unknown authoritative rubric "${slug}" (${fullPath})`);
-    }
-    return fullPath;
+  const sortedSlugs = [...slugs].sort((a, b) => a.localeCompare(b));
+  const slugToId = new Map<string, string>();
+  const rubricPaths = sortedSlugs.map((slug) => {
+    const meta = readAuthoritativeRubricMeta(rubricsDir, slug, fixture.id);
+    slugToId.set(slug, meta.id);
+    return meta.path;
   });
 
-  const resolved = resolveRubrics({
-    mode: fixture.mode,
+  // Resolve in 'code' mode for production_code so module-scoped checks stay active for dual-mode testing.
+  const fullResolved = resolveRubrics({
+    mode: inferredTarget === 'project_structure' ? 'structure' : 'code',
     rubrics: rubricPaths,
     exclude: fixture.exclude,
     hasRequirements: fixture.requirements !== undefined,
     hasConventions: fixture.conventions !== undefined,
   });
 
-  for (const checkId of Object.keys(fixture.expect)) {
-    if (!(checkId in resolved.questions)) {
-      const skippedNote = resolved.skippedModuleChecks.includes(checkId)
-        ? ' (it is module-scoped and skipped in mode "file"; use mode "code")'
-        : '';
+  const expectedIds = Object.keys(fixture.expect);
+  for (const checkId of expectedIds) {
+    if (!(checkId in fullResolved.questions)) {
       throw new Error(
-        `Fixture ${fixture.id}: expected check "${checkId}" is not active in resolved rubric "${resolved.rubric}"${skippedNote}`,
+        `Fixture ${fixture.id}: expected check "${checkId}" is not active in resolved rubric "${fullResolved.rubric}"`,
       );
     }
   }
 
-  return resolved;
+  // Narrow questions/scopes/thresholds/groups strictly to the fixture's expected check IDs.
+  const expectedSet = new Set(expectedIds);
+  const narrowedQuestions: Record<string, ChoiceQuestion> = {};
+  const narrowedScopes: Record<string, CheckScope> = {};
+  const narrowedThresholds: Record<string, number> = {};
+  for (const checkId of expectedIds) {
+    narrowedQuestions[checkId] = fullResolved.questions[checkId];
+    narrowedScopes[checkId] = fullResolved.scopes[checkId];
+    narrowedThresholds[checkId] = fullResolved.thresholds[checkId];
+  }
+
+  const narrowedGroups: Record<string, string[]> = {};
+  const activeRubricIds: string[] = [];
+  for (const [group, ids] of Object.entries(fullResolved.groups)) {
+    const kept = ids.filter((id) => expectedSet.has(id));
+    if (kept.length > 0) {
+      narrowedGroups[group] = kept;
+      const rubricId = group === 'conventions' ? 'repo-conventions' : (slugToId.get(group) ?? group);
+      if (!activeRubricIds.includes(rubricId)) activeRubricIds.push(rubricId);
+    }
+  }
+
+  return {
+    rubric: activeRubricIds.length > 0 ? activeRubricIds.join('+') : fullResolved.rubric,
+    target: fullResolved.target,
+    questions: narrowedQuestions,
+    scopes: narrowedScopes,
+    thresholds: narrowedThresholds,
+    groups: narrowedGroups,
+    excluded: fullResolved.excluded,
+    skippedModuleChecks: [],
+  };
 }
 
-function defaultModelFor(backend: JudgeBackend, mode: FixtureMode, override?: string): string {
-  if (backend === 'codex') return CODEX_MODEL;
-  if (backend === 'claude') return CLAUDE_MODEL;
-  return override ?? (mode === 'file' ? DEFAULT_FILE_MODE_DECISION_MODEL : DEFAULT_DECISION_MODEL);
+function findRubricSlugForCheck(resolved: ResolvedRubric, checkId: string): string {
+  for (const [group, ids] of Object.entries(resolved.groups)) {
+    if (ids.includes(checkId)) return group;
+  }
+  return resolved.rubric;
+}
+
+function resolveModels(
+  backend: JudgeBackend,
+  options: { model?: string; fileModel?: string; moduleModel?: string },
+): { file: string; module: string } {
+  const hasAnyOverride = options.model !== undefined
+    || options.fileModel !== undefined
+    || options.moduleModel !== undefined;
+
+  if (backend !== 'openrouter') {
+    if (hasAnyOverride) {
+      throw new Error(
+        `--model / --file-model / --module-model are only supported with --backend openrouter `
+        + `(codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`,
+      );
+    }
+    const cliModel = backend === 'codex' ? CODEX_MODEL : CLAUDE_MODEL;
+    return { file: cliModel, module: cliModel };
+  }
+
+  if (options.model !== undefined && (options.fileModel !== undefined || options.moduleModel !== undefined)) {
+    throw new Error('Cannot combine --model with --file-model or --module-model');
+  }
+
+  for (const [flag, val] of [
+    ['--model', options.model],
+    ['--file-model', options.fileModel],
+    ['--module-model', options.moduleModel],
+  ] as const) {
+    if (val !== undefined && !OPENROUTER_MODEL_RE.test(val)) {
+      throw new Error(`Use a full OpenRouter model ID for ${flag} (for example ${DEFAULT_DECISION_MODEL})`);
+    }
+  }
+
+  if (options.model !== undefined) {
+    return { file: options.model, module: options.model };
+  }
+
+  return {
+    file: options.fileModel ?? DEFAULT_FILE_MODE_DECISION_MODEL,
+    module: options.moduleModel ?? DEFAULT_DECISION_MODEL,
+  };
 }
 
 function parsePositiveInt(value: string, flag: string): number {
@@ -329,14 +539,30 @@ function parseBackend(value: string | undefined): JudgeBackend {
   throw new Error(`Invalid --backend: ${value}. Choose openrouter, codex, or claude.`);
 }
 
+function parseModes(value: string | undefined): HarnessModesOption {
+  if (value === undefined || value === 'both') return 'both';
+  if (value === 'file' || value === 'module') return value;
+  throw new Error(`Invalid --modes: ${value}. Choose both, file, or module.`);
+}
+
+function isModeEnforced(declaredScope: CheckScope, execMode: HarnessExecutionMode): boolean {
+  if (declaredScope === 'structure') return execMode === 'structure';
+  if (declaredScope === 'file') return execMode === 'file' || execMode === 'module';
+  return execMode === 'module';
+}
+
 export interface RunHarnessOptions {
   fixturesDir?: string;
   rubricsDir?: string;
   fixtureFilter?: string[];
   rubricFilter?: string[];
+  ruleFilter?: string[];
+  modes?: HarnessModesOption;
   repeats?: number;
   backend?: JudgeBackend;
   model?: string;
+  fileModel?: string;
+  moduleModel?: string;
   concurrency?: number;
   dryRun?: boolean;
   transport?: typeof fetch;
@@ -356,21 +582,138 @@ function buildStructureManifestForFixture(
   return readStructureInputs({ source: rootDir }).manifest;
 }
 
+function computeModeSignalStats(
+  entries: ReadonlyArray<{ expected: ExpectedChoice; summary?: ModeEvaluationSummary }>,
+  dryRun: boolean,
+): ModeSignalStats {
+  const passEntries = entries.filter((e) => e.expected === 'pass');
+  const failEntries = entries.filter((e) => e.expected === 'fail');
+
+  const collectProbs = (list: ReadonlyArray<{ summary?: ModeEvaluationSummary }>) => {
+    const nums: number[] = [];
+    for (const item of list) {
+      for (const p of item.summary?.pass_probabilities ?? []) {
+        if (typeof p === 'number' && Number.isFinite(p)) nums.push(p);
+      }
+    }
+    return {
+      min: nums.length > 0 ? Math.min(...nums) : null,
+      max: nums.length > 0 ? Math.max(...nums) : null,
+    };
+  };
+
+  const passPassed = passEntries.filter((e) => e.summary?.passed === true).length;
+  const failPassed = failEntries.filter((e) => e.summary?.passed === true).length;
+  const goodProbs = collectProbs(passEntries);
+  const badProbs = collectProbs(failEntries);
+
+  const allEvaluated = entries.length > 0 && entries.every((e) => e.summary !== undefined);
+  const canClassify = !dryRun && allEvaluated && passEntries.length > 0 && failEntries.length > 0;
+  const signal = canClassify
+    ? (passPassed === passEntries.length && failPassed === failEntries.length)
+    : null;
+
+  return {
+    signal,
+    pass_fixtures_total: passEntries.length,
+    pass_fixtures_passed: dryRun ? 0 : passPassed,
+    fail_fixtures_total: failEntries.length,
+    fail_fixtures_passed: dryRun ? 0 : failPassed,
+    good_min_p: goodProbs.min,
+    good_max_p: goodProbs.max,
+    bad_min_p: badProbs.min,
+    bad_max_p: badProbs.max,
+  };
+}
+
+export function buildScopeSignalMatrix(
+  fixtures: readonly FixtureEvaluationSummary[],
+  dryRun: boolean,
+): CriterionSignalSummary[] {
+  const byCheck = new Map<string, {
+    rubric_slug: string;
+    declared_scope: 'file' | 'module';
+    pass_threshold: number | null;
+    entries: Array<{ expected: ExpectedChoice; file?: ModeEvaluationSummary; module?: ModeEvaluationSummary }>;
+  }>();
+
+  for (const fixture of fixtures) {
+    if (fixture.target !== 'production_code') continue;
+    for (const check of fixture.checks) {
+      if (check.declared_scope !== 'file' && check.declared_scope !== 'module') continue;
+      let bucket = byCheck.get(check.check_id);
+      if (!bucket) {
+        bucket = {
+          rubric_slug: check.rubric_slug,
+          declared_scope: check.declared_scope,
+          pass_threshold: check.pass_threshold,
+          entries: [],
+        };
+        byCheck.set(check.check_id, bucket);
+      }
+      bucket.entries.push({
+        expected: check.expected,
+        file: check.file,
+        module: check.module,
+      });
+    }
+  }
+
+  const rows: CriterionSignalSummary[] = [];
+  for (const [checkId, bucket] of byCheck.entries()) {
+    const fileStats = computeModeSignalStats(
+      bucket.entries.map((e) => ({ expected: e.expected, summary: e.file })),
+      dryRun,
+    );
+    const moduleStats = computeModeSignalStats(
+      bucket.entries.map((e) => ({ expected: e.expected, summary: e.module })),
+      dryRun,
+    );
+
+    let classification: ScopeSignalClassification;
+    if (fileStats.signal === null || moduleStats.signal === null) {
+      classification = 'incomplete';
+    } else if (fileStats.signal && moduleStats.signal) {
+      classification = 'both';
+    } else if (!fileStats.signal && moduleStats.signal) {
+      classification = 'module-only';
+    } else if (fileStats.signal && !moduleStats.signal) {
+      classification = 'file-only';
+    } else {
+      classification = 'neither';
+    }
+
+    rows.push({
+      check_id: checkId,
+      rubric_slug: bucket.rubric_slug,
+      declared_scope: bucket.declared_scope,
+      pass_threshold: bucket.pass_threshold,
+      file: fileStats,
+      module: moduleStats,
+      classification,
+      promote_hint: bucket.declared_scope === 'module' && classification === 'both',
+    });
+  }
+
+  rows.sort((a, b) => a.rubric_slug.localeCompare(b.rubric_slug) || a.check_id.localeCompare(b.check_id));
+  return rows;
+}
+
 export async function runRubricHarness(options: RunHarnessOptions = {}): Promise<RubricHarnessReport> {
   const startMs = performance.now();
   const fixturesDir = options.fixturesDir ?? DEFAULT_FIXTURES_DIR;
   const rubricsDir = options.rubricsDir ?? AUTHORITATIVE_RUBRICS_DIR;
   const backend = options.backend ?? 'openrouter';
+  const modes = parseModes(options.modes);
   const dryRun = options.dryRun ?? false;
   const repeats = options.repeats ?? DEFAULT_REPEATS;
   const concurrency = options.concurrency ?? (backend === 'openrouter' ? DEFAULT_OPENROUTER_CONCURRENCY : DEFAULT_CLI_CONCURRENCY);
 
-  if (backend !== 'openrouter' && options.model !== undefined) {
-    throw new Error(`--model is only supported with --backend openrouter (codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`);
-  }
-  if (options.model !== undefined && !/^[a-z0-9_.-]+\/[a-z0-9_.:-]+$/i.test(options.model)) {
-    throw new Error('Use a full OpenRouter model ID for --model (for example liquid/d1.2-ultra)');
-  }
+  const models = resolveModels(backend, {
+    model: options.model,
+    fileModel: options.fileModel,
+    moduleModel: options.moduleModel,
+  });
 
   const allFixtures = loadFixtures(fixturesDir);
   const allFixtureIds = new Set(allFixtures.map((f) => f.id));
@@ -388,17 +731,32 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     }
   }
 
+  const ruleFilter = options.ruleFilter ?? [];
+  if (ruleFilter.length > 0) {
+    const knownChecks = listAllAuthoritativeCheckIds(rubricsDir);
+    for (const ruleId of ruleFilter) {
+      if (!knownChecks.has(ruleId)) {
+        throw new Error(`Unknown --rule "${ruleId}" in ${rubricsDir}`);
+      }
+    }
+  }
+
   const resolvedPairs = allFixtures.map((fixture) => ({
     fixture,
     resolved: resolveFixtureRubric(fixture, rubricsDir),
   }));
 
   const selected = resolvedPairs.filter(({ fixture, resolved }) => {
+    if (modes !== 'both' && resolved.target !== 'production_code') return false;
     if (fixtureFilter.length > 0 && !fixtureFilter.includes(fixture.id)) return false;
     if (rubricFilter.length > 0) {
       const activeGroups = new Set(Object.keys(resolved.groups));
       const matchesRubric = rubricFilter.some((slug) => activeGroups.has(slug) || fixture.rubrics.includes(slug));
       if (!matchesRubric) return false;
+    }
+    if (ruleFilter.length > 0) {
+      const expectedKeys = Object.keys(fixture.expect);
+      if (!ruleFilter.some((ruleId) => expectedKeys.includes(ruleId))) return false;
     }
     return true;
   });
@@ -412,23 +770,34 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
 
   interface RunUnit {
     fixtureIndex: number;
+    execMode: HarnessExecutionMode;
     repeatIndex: number;
     fixture: LoadedFixture;
     resolved: ResolvedRubric;
     model: string;
   }
 
+  const modesForFixture = (target: RubricTarget): HarnessExecutionMode[] => {
+    if (target === 'project_structure') return ['structure'];
+    if (modes === 'file') return ['file'];
+    if (modes === 'module') return ['module'];
+    return ['file', 'module'];
+  };
+
   const units: RunUnit[] = [];
   for (let fixtureIndex = 0; fixtureIndex < selected.length; fixtureIndex += 1) {
     const { fixture, resolved } = selected[fixtureIndex];
-    const model = defaultModelFor(backend, fixture.mode, options.model);
-    for (let repeatIndex = 0; repeatIndex < effectiveRepeats; repeatIndex += 1) {
-      units.push({ fixtureIndex, repeatIndex, fixture, resolved, model });
+    for (const execMode of modesForFixture(resolved.target)) {
+      const model = execMode === 'file' ? models.file : models.module;
+      for (let repeatIndex = 0; repeatIndex < effectiveRepeats; repeatIndex += 1) {
+        units.push({ fixtureIndex, execMode, repeatIndex, fixture, resolved, model });
+      }
     }
   }
 
   interface UnitOutcome {
     fixtureIndex: number;
+    execMode: HarnessExecutionMode;
     repeatIndex: number;
     elapsedMs: number;
     result?: JudgeResult;
@@ -440,19 +809,21 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     outcomes = await runWithConcurrency(units, concurrency, async (unit): Promise<UnitOutcome> => {
       const unitStart = performance.now();
       try {
-        const structure = unit.fixture.mode === 'structure'
+        const judgeMode: JudgeMode = unit.execMode === 'module' ? 'code' : unit.execMode;
+        const structure = judgeMode === 'structure'
           ? buildStructureManifestForFixture(
             unit.fixture,
             join(scratchRoot, 'sources', `${unit.fixture.id}--r${unit.repeatIndex + 1}`),
           )
           : undefined;
         const runOptions = {
-          mode: unit.fixture.mode,
+          mode: judgeMode,
           ...(structure !== undefined ? { structure } : { files: unit.fixture.files }),
           requirements: unit.fixture.requirements,
           conventions: unit.fixture.conventions,
           rubric: unit.resolved,
           model: backend === 'openrouter' ? unit.model : undefined,
+          concurrency,
           dryRun,
         };
         const result = backend === 'openrouter'
@@ -460,6 +831,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
           : await runCliJudge(runOptions, backend);
         return {
           fixtureIndex: unit.fixtureIndex,
+          execMode: unit.execMode,
           repeatIndex: unit.repeatIndex,
           elapsedMs: Math.round(performance.now() - unitStart),
           result,
@@ -467,6 +839,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
       } catch (error) {
         return {
           fixtureIndex: unit.fixtureIndex,
+          execMode: unit.execMode,
           repeatIndex: unit.repeatIndex,
           elapsedMs: Math.round(performance.now() - unitStart),
           error: error instanceof Error ? error.message : String(error),
@@ -478,73 +851,121 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   }
 
   const fixtureSummaries: FixtureEvaluationSummary[] = selected.map(({ fixture, resolved }, fixtureIndex) => {
-    const model = defaultModelFor(backend, fixture.mode, options.model);
-    const fixtureOutcomes = outcomes
-      .filter((o) => o.fixtureIndex === fixtureIndex)
-      .sort((a, b) => a.repeatIndex - b.repeatIndex);
-
+    const execModes = modesForFixture(resolved.target);
+    const fixtureOutcomes = outcomes.filter((o) => o.fixtureIndex === fixtureIndex);
     const elapsedMs = fixtureOutcomes.reduce((max, o) => Math.max(max, o.elapsedMs), 0);
-    const errors: string[] = [];
-    for (const outcome of fixtureOutcomes) {
-      if (outcome.error) {
-        errors.push(`repeat ${outcome.repeatIndex + 1}: ${outcome.error}`);
-      } else if (outcome.result?.status === 'error') {
-        errors.push(`repeat ${outcome.repeatIndex + 1}: ${outcome.result.error ?? 'judge error'}`);
+
+    const fixtureModels: Partial<Record<HarnessExecutionMode, string>> = {};
+    const errorsByMode = new Map<HarnessExecutionMode, string[]>();
+    const allErrors: string[] = [];
+
+    for (const execMode of execModes) {
+      fixtureModels[execMode] = execMode === 'file' ? models.file : models.module;
+      const modeOutcomes = fixtureOutcomes
+        .filter((o) => o.execMode === execMode)
+        .sort((a, b) => a.repeatIndex - b.repeatIndex);
+      const modeErrors: string[] = [];
+      for (const outcome of modeOutcomes) {
+        if (outcome.error) {
+          modeErrors.push(`repeat ${outcome.repeatIndex + 1}: ${outcome.error}`);
+        } else if (outcome.result?.status === 'error') {
+          modeErrors.push(`repeat ${outcome.repeatIndex + 1}: ${outcome.result.error ?? 'judge error'}`);
+        }
+      }
+      errorsByMode.set(execMode, modeErrors);
+      for (const err of modeErrors) {
+        allErrors.push(`[${execMode}] ${err}`);
       }
     }
 
     const checks: CheckEvaluationSummary[] = Object.entries(fixture.expect).map(([checkId, expected]) => {
+      const declaredScope = resolved.scopes[checkId];
+      const rubricSlug = findRubricSlugForCheck(resolved, checkId);
       const threshold = backend === 'openrouter' ? (resolved.thresholds[checkId] ?? PASS_THRESHOLD) : null;
-      if (dryRun) {
-        return {
-          check_id: checkId,
-          expected,
-          passed: errors.length === 0,
-          matches: 0,
-          repeats: 0,
-          choices: [],
-          pass_probabilities: [],
-          min_pass_probability: null,
-          max_pass_probability: null,
-          pass_threshold: threshold,
+
+      const modeSummaries: Partial<Record<HarnessExecutionMode, ModeEvaluationSummary>> = {};
+
+      for (const execMode of execModes) {
+        const modeModel = execMode === 'file' ? models.file : models.module;
+        const enforced = isModeEnforced(declaredScope, execMode);
+        const modeErrors = errorsByMode.get(execMode) ?? [];
+        const modeOutcomes = fixtureOutcomes
+          .filter((o) => o.execMode === execMode)
+          .sort((a, b) => a.repeatIndex - b.repeatIndex);
+
+        if (dryRun) {
+          modeSummaries[execMode] = {
+            mode: execMode,
+            model: modeModel,
+            enforced,
+            passed: modeErrors.length === 0,
+            matches: 0,
+            repeats: 0,
+            choices: [],
+            pass_probabilities: [],
+            min_pass_probability: null,
+            max_pass_probability: null,
+            errors: modeErrors,
+          };
+          continue;
+        }
+
+        const choices: Array<ExpectedChoice | 'error'> = [];
+        const probs: Array<number | null> = [];
+        let matches = 0;
+
+        for (const outcome of modeOutcomes) {
+          const judgment = outcome.result?.status === 'scored' ? outcome.result.quality?.checks[checkId] : undefined;
+          if (!judgment) {
+            choices.push('error');
+            probs.push(null);
+            continue;
+          }
+          choices.push(judgment.choice);
+          // In per-file mode, aggregatePerFile gates pass/fail on the weakest file (min_pass_probability).
+          const prob = typeof judgment.min_pass_probability === 'number'
+            ? judgment.min_pass_probability
+            : judgment.pass_probability;
+          probs.push(prob);
+          if (judgment.choice === expected) matches += 1;
+        }
+
+        const numericProbs = probs.filter((p): p is number => typeof p === 'number');
+        const minProb = numericProbs.length > 0 ? Math.min(...numericProbs) : null;
+        const maxProb = numericProbs.length > 0 ? Math.max(...numericProbs) : null;
+
+        modeSummaries[execMode] = {
+          mode: execMode,
+          model: modeModel,
+          enforced,
+          passed: modeErrors.length === 0 && matches === effectiveRepeats,
+          matches,
+          repeats: effectiveRepeats,
+          choices,
+          pass_probabilities: probs,
+          min_pass_probability: minProb,
+          max_pass_probability: maxProb,
+          errors: modeErrors,
         };
       }
 
-      const choices: Array<ExpectedChoice | 'error'> = [];
-      const probs: Array<number | null> = [];
-      let matches = 0;
-
-      for (const outcome of fixtureOutcomes) {
-        const judgment = outcome.result?.status === 'scored' ? outcome.result.quality?.checks[checkId] : undefined;
-        if (!judgment) {
-          choices.push('error');
-          probs.push(null);
-          continue;
-        }
-        choices.push(judgment.choice);
-        probs.push(judgment.pass_probability);
-        if (judgment.choice === expected) matches += 1;
-      }
-
-      const numericProbs = probs.filter((p): p is number => typeof p === 'number');
-      const minProb = numericProbs.length > 0 ? Math.min(...numericProbs) : null;
-      const maxProb = numericProbs.length > 0 ? Math.max(...numericProbs) : null;
+      const enforcedModes = Object.values(modeSummaries).filter((m): m is ModeEvaluationSummary => Boolean(m && m.enforced));
+      const checkPassed = allErrors.length === 0 && enforcedModes.every((m) => m.passed);
 
       return {
         check_id: checkId,
+        rubric_slug: rubricSlug,
+        declared_scope: declaredScope,
         expected,
-        passed: errors.length === 0 && matches === effectiveRepeats,
-        matches,
-        repeats: effectiveRepeats,
-        choices,
-        pass_probabilities: probs,
-        min_pass_probability: minProb,
-        max_pass_probability: maxProb,
+        passed: checkPassed,
         pass_threshold: threshold,
+        ...(modeSummaries.file ? { file: modeSummaries.file } : {}),
+        ...(modeSummaries.module ? { module: modeSummaries.module } : {}),
+        ...(modeSummaries.structure ? { structure: modeSummaries.structure } : {}),
       };
     });
 
-    const status: FixtureEvaluationSummary['status'] = errors.length > 0
+    const status: FixtureEvaluationSummary['status'] = allErrors.length > 0
       ? 'error'
       : dryRun
         ? 'dry_run'
@@ -555,13 +976,14 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     return {
       id: fixture.id,
       description: fixture.description,
-      mode: fixture.mode,
-      model,
+      target: resolved.target,
+      file_count: Object.keys(fixture.files).length,
       rubric: resolved.rubric,
       status,
       elapsed_ms: elapsedMs,
+      models: fixtureModels,
       checks,
-      errors,
+      errors: allErrors,
     };
   });
 
@@ -569,10 +991,13 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   const allChecks = fixtureSummaries.flatMap((f) => f.checks);
   const checksPassed = allChecks.filter((c) => c.passed).length;
   const anyFailure = fixtureSummaries.some((f) => f.status === 'failed' || f.status === 'error');
+  const criteriaMatrix = buildScopeSignalMatrix(fixtureSummaries, dryRun);
 
   return {
     status: dryRun ? (anyFailure ? 'failed' : 'dry_run') : anyFailure ? 'failed' : 'passed',
     backend,
+    modes,
+    models,
     repeats: effectiveRepeats,
     dry_run: dryRun,
     elapsed_ms: Math.round(performance.now() - startMs),
@@ -581,53 +1006,129 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     checks_total: allChecks.length,
     checks_passed: checksPassed,
     fixtures: fixtureSummaries,
+    criteria_matrix: criteriaMatrix,
   };
 }
 
-function formatProbRange(check: CheckEvaluationSummary): string {
-  if (check.min_pass_probability === null || check.max_pass_probability === null) return '-';
-  const min = check.min_pass_probability.toFixed(2);
-  const max = check.max_pass_probability.toFixed(2);
-  return min === max ? min : `${min}..${max}`;
+function formatProbBounds(min: number | null, max: number | null): string {
+  if (min === null || max === null) return '-';
+  const lo = min.toFixed(2);
+  const hi = max.toFixed(2);
+  return lo === hi ? lo : `${lo}..${hi}`;
+}
+
+function formatModeCell(summary: ModeEvaluationSummary | undefined, dryRun: boolean): string {
+  if (!summary) return '-';
+  if (dryRun) return summary.errors.length === 0 ? 'ok' : 'err';
+  const verdict = summary.passed ? 'ok' : `${summary.matches}/${summary.repeats}`;
+  const prob = formatProbBounds(summary.min_pass_probability, summary.max_pass_probability);
+  const suffix = summary.enforced ? '' : ' (info)';
+  return `${verdict} ${prob}${suffix}`;
+}
+
+function formatSignalCell(stats: ModeSignalStats, dryRun: boolean): string {
+  if (dryRun) return `dry-run (G:${stats.pass_fixtures_total} B:${stats.fail_fixtures_total})`;
+  if (stats.signal === null) return `incomplete (G:${stats.pass_fixtures_total} B:${stats.fail_fixtures_total})`;
+  const label = stats.signal ? 'yes' : 'no';
+  const gRange = formatProbBounds(stats.good_min_p, stats.good_max_p);
+  const bRange = formatProbBounds(stats.bad_min_p, stats.bad_max_p);
+  if (gRange === '-' && bRange === '-') return label;
+  return `${label} (G:${gRange} B:${bRange})`;
+}
+
+function formatTable(headers: string[], rows: string[][]): string[] {
+  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
+  const formatRow = (cols: string[]) => cols.map((c, i) => c.padEnd(widths[i])).join('  ');
+  return [
+    formatRow(headers),
+    widths.map((w) => '-'.repeat(w)).join('  '),
+    ...rows.map(formatRow),
+  ];
 }
 
 export function formatReportTable(report: RubricHarnessReport): string {
   const lines: string[] = [];
-  const modeLabel = report.dry_run ? 'DRY RUN' : `${report.backend} (repeats=${report.repeats})`;
+  const modeLabel = report.dry_run
+    ? `DRY RUN, modes=${report.modes}`
+    : `${report.backend} (modes=${report.modes}, repeats=${report.repeats}, file=${report.models.file}, module=${report.models.module})`;
   lines.push(`Rubric fixture tests [${modeLabel}]`);
-  lines.push('');
 
-  const headers = ['Fixture', 'Mode', 'Check', 'Expect', 'Result', 'Pass Prob', 'Thr', 'Status'];
-  const rows: string[][] = [];
+  const prodFixtures = report.fixtures.filter((f) => f.target === 'production_code');
+  const structFixtures = report.fixtures.filter((f) => f.target === 'project_structure');
 
-  for (const fixture of report.fixtures) {
-    for (const check of fixture.checks) {
-      const actual = report.dry_run
-        ? 'validated'
-        : `${check.matches}/${check.repeats} ${check.expected}`;
-      const thr = check.pass_threshold !== null ? `>=${check.pass_threshold.toFixed(2)}` : '-';
-      const status = report.dry_run
-        ? (fixture.status === 'dry_run' ? 'OK' : 'ERROR')
-        : (check.passed ? 'PASS' : 'FAIL');
-      rows.push([
-        fixture.id,
-        fixture.mode,
-        check.check_id,
-        check.expected,
-        actual,
-        formatProbRange(check),
-        thr,
-        status,
-      ]);
+  if (prodFixtures.length > 0) {
+    lines.push('');
+    const headers = ['Fixture', 'Files', 'Scope', 'Check', 'Expect', 'File (P)', 'Module (P)', 'Thr', 'Status'];
+    const rows: string[][] = [];
+    for (const fixture of prodFixtures) {
+      for (const check of fixture.checks) {
+        const thr = check.pass_threshold !== null ? `>=${check.pass_threshold.toFixed(2)}` : '-';
+        const status = report.dry_run
+          ? (fixture.status === 'dry_run' ? 'OK' : 'ERROR')
+          : fixture.status === 'error'
+            ? 'ERROR'
+            : check.passed
+              ? 'PASS'
+              : 'FAIL';
+        rows.push([
+          fixture.id,
+          String(fixture.file_count),
+          check.declared_scope,
+          check.check_id,
+          check.expected,
+          formatModeCell(check.file, report.dry_run),
+          formatModeCell(check.module, report.dry_run),
+          thr,
+          status,
+        ]);
+      }
     }
+    lines.push(...formatTable(headers, rows));
   }
 
-  const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
-  const formatRow = (cols: string[]) => cols.map((c, i) => c.padEnd(widths[i])).join('  ');
+  if (structFixtures.length > 0) {
+    lines.push('');
+    lines.push('Project Structure Fixtures:');
+    const headers = ['Fixture', 'Files', 'Check', 'Expect', 'Structure (P)', 'Thr', 'Status'];
+    const rows: string[][] = [];
+    for (const fixture of structFixtures) {
+      for (const check of fixture.checks) {
+        const thr = check.pass_threshold !== null ? `>=${check.pass_threshold.toFixed(2)}` : '-';
+        const status = report.dry_run
+          ? (fixture.status === 'dry_run' ? 'OK' : 'ERROR')
+          : fixture.status === 'error'
+            ? 'ERROR'
+            : check.passed
+              ? 'PASS'
+              : 'FAIL';
+        rows.push([
+          fixture.id,
+          String(fixture.file_count),
+          check.check_id,
+          check.expected,
+          formatModeCell(check.structure, report.dry_run),
+          thr,
+          status,
+        ]);
+      }
+    }
+    lines.push(...formatTable(headers, rows));
+  }
 
-  lines.push(formatRow(headers));
-  lines.push(widths.map((w) => '-'.repeat(w)).join('  '));
-  for (const row of rows) lines.push(formatRow(row));
+  if (report.criteria_matrix.length > 0) {
+    lines.push('');
+    lines.push('Scope Signal Matrix:');
+    const headers = ['Criterion', 'Rubric', 'Declared', 'File Signal', 'Module Signal', 'Classification'];
+    const rows = report.criteria_matrix.map((row) => [
+      row.check_id,
+      row.rubric_slug,
+      row.declared_scope,
+      formatSignalCell(row.file, report.dry_run),
+      formatSignalCell(row.module, report.dry_run),
+      row.promote_hint ? `${row.classification} (promote?)` : row.classification,
+    ]);
+    lines.push(...formatTable(headers, rows));
+  }
 
   const errored = report.fixtures.filter((f) => f.errors.length > 0);
   if (errored.length > 0) {
@@ -647,18 +1148,26 @@ export function formatReportTable(report: RubricHarnessReport): string {
     lines.push('');
     lines.push('Mismatches:');
     for (const { fixture, check } of failedChecks) {
-      const perRepeat = check.choices.map((ch, idx) => {
-        const p = check.pass_probabilities[idx];
-        return p !== null ? `${ch}(${p.toFixed(3)})` : ch;
-      }).join(', ');
-      lines.push(`  - ${fixture.id} :: ${check.check_id}: expected ${check.expected}, got [${perRepeat}]`);
+      const modeList = [check.file, check.module, check.structure].filter(
+        (m): m is ModeEvaluationSummary => Boolean(m && m.enforced && !m.passed),
+      );
+      for (const m of modeList) {
+        const perRepeat = m.choices.map((ch, idx) => {
+          const p = m.pass_probabilities[idx];
+          return p !== null ? `${ch}(${p.toFixed(3)})` : ch;
+        }).join(', ');
+        lines.push(`  - ${fixture.id} [${m.mode}] :: ${check.check_id}: expected ${check.expected}, got [${perRepeat}]`);
+      }
     }
   }
 
   lines.push('');
   const secs = (report.elapsed_ms / 1000).toFixed(1);
   if (report.dry_run) {
-    lines.push(`Dry-run validated ${report.fixtures_passed}/${report.fixtures_total} fixtures (${report.checks_total} expected checks) in ${secs}s.`);
+    lines.push(
+      `Dry-run validated ${report.fixtures_passed}/${report.fixtures_total} fixtures `
+      + `(${report.checks_total} expected checks, ${report.criteria_matrix.length} production criteria) in ${secs}s.`,
+    );
   } else {
     lines.push(
       `Summary: ${report.fixtures_passed}/${report.fixtures_total} fixtures passed `
@@ -675,8 +1184,12 @@ async function main(): Promise<void> {
       repeats: { type: 'string' },
       fixture: { type: 'string', multiple: true },
       rubric: { type: 'string', multiple: true },
+      rule: { type: 'string', multiple: true },
+      modes: { type: 'string' },
       backend: { type: 'string' },
       model: { type: 'string' },
+      'file-model': { type: 'string' },
+      'module-model': { type: 'string' },
       concurrency: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
@@ -694,13 +1207,18 @@ async function main(): Promise<void> {
     ? parsePositiveInt(values.concurrency, '--concurrency')
     : undefined;
   const backend = parseBackend(values.backend);
+  const modes = parseModes(values.modes);
 
   const report = await runRubricHarness({
     repeats,
     fixtureFilter: values.fixture,
     rubricFilter: values.rubric,
+    ruleFilter: values.rule,
+    modes,
     backend,
     model: values.model,
+    fileModel: values['file-model'],
+    moduleModel: values['module-model'],
     concurrency,
     dryRun: values['dry-run'],
   });

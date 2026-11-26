@@ -1,7 +1,6 @@
 {
   "id": "parameter-lists-data-clumps-kotlin-bad",
   "description": "Kotlin methods declare 8+ confusable positional primitive parameters and repeat the same loose maintenance-window clump across multiple distinct signatures",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "MaintenancePlanner.kt": [

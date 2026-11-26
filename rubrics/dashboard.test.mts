@@ -652,7 +652,6 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   writeFileSync(fixturePath, JSON.stringify({
     id: 'sample-good',
     description: 'Clean helper',
-    mode: 'file',
     rubric: 'readability',
     files: { 'clean.ts': 'export const isPositive = (n: number) => n > 0;\n' },
     expect: { direct_readability: 'pass' },
@@ -676,7 +675,8 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   let callIdx = 0;
   const mock = makeMockOpenRouterTransport(() => {
     callIdx += 1;
-    return { direct_readability: { choice: 'pass', pass: callIdx === 1 ? 0.90 : 0.96 } };
+    const p = callIdx % 2 === 1 ? 0.90 : 0.96;
+    return { direct_readability: { choice: 'pass', pass: p } };
   });
   const config = loadScannerConfig(configPath);
   const first = await runScanner({
@@ -687,7 +687,7 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   });
   assert.equal(first.fixture_outcome.status, 'scanned');
   assert.equal(first.fixture_outcome.fixtures_passed, 1);
-  assert.equal(mock.calls, 2);
+  assert.equal(mock.calls, 4);
 
   // Verify saved fixture snapshot margin (0.90 - 0.80 = 0.10) and jitter (0.96 - 0.90 = 0.06)
   const fxSnap = JSON.parse(readFileSync(first.fixture_outcome.snapshot_file!, 'utf8')) as RubricFixturesSnapshot;
@@ -721,7 +721,6 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   writeFileSync(fixturePath, JSON.stringify({
     id: 'sample-good',
     description: 'Clean helper updated',
-    mode: 'file',
     rubric: 'readability',
     files: { 'clean.ts': 'export const isPositive = (n: number) => n > 0;\n' },
     expect: { direct_readability: 'pass' },
@@ -734,7 +733,7 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
     transport: mock3.transport,
   });
   assert.equal(third.fixture_outcome.status, 'scanned');
-  assert.equal(mock3.calls, 2);
+  assert.equal(mock3.calls, 4);
 });
 
 test('rubrics:scan supports optional per-repo ignore globs in file and structure modes and invalidates cache when ignore changes', async (t) => {

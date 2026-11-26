@@ -1,12 +1,9 @@
 {
   "id": "parameter-lists-data-clumps-good",
   "description": "Accepts a single cohesive destructured options/props record (1 formal parameter) and calls an imported wide legacy function from a concise declared caller",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
-    "billing-summary.ts": [
-      "import { dispatchLegacyAuditEvent } from './legacy-audit-client';",
-      "",
+    "types.ts": [
       "export interface BillingSummaryProps {",
       "  readonly customerName: string;",
       "  readonly planName: string;",
@@ -17,7 +14,11 @@
       "  readonly nextRenewalDate: string;",
       "  readonly taxExempt: boolean;",
       "  readonly onRequestUpgrade: () => void;",
-      "}",
+      "}"
+    ],
+    "billing-summary.ts": [
+      "import { dispatchLegacyAuditEvent } from './legacy-audit-client';",
+      "import type { BillingSummaryProps } from './types';",
       "",
       "export function formatBillingBanner({",
       "  customerName,",

@@ -1,7 +1,6 @@
 {
   "id": "long-function-cohesive-parser-good",
   "description": "A single cohesive bounded RFC-style delimited line parser with brief normalization and one unified state-machine loop",
-  "mode": "file",
   "rubric": "fowler-smells",
   "files": {
     "csv-line-parser.ts": [

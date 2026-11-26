@@ -1,7 +1,6 @@
 {
   "id": "editorial-labels-kotlin-good",
   "description": "Kotlin closed enums with human-readable names select real routing policies and grade calculations while editorial collection labels remain open strings with non-restrictive suggestions",
-  "mode": "file",
   "rubric": "api-design",
   "files": {
     "DispatchPolicy.kt": [

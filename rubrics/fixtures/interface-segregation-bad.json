@@ -1,0 +1,53 @@
+{
+  "id": "interface-segregation-bad",
+  "description": "Bundles printing, scanning, faxing, OCR, PDF signing, and archiving into one catch-all DocumentWorker interface, forcing ThermalLabelPrinter to stub five unused methods",
+  "rubric": "solid",
+  "files": {
+    "document-worker.ts": [
+      "export interface DocumentPayload {",
+      "  readonly id: string;",
+      "  readonly content: string;",
+      "}",
+      "",
+      "export interface DocumentWorker {",
+      "  print(doc: DocumentPayload): Promise<void>;",
+      "  scan(trayIndex: number): Promise<DocumentPayload>;",
+      "  fax(doc: DocumentPayload, dialNumber: string): Promise<void>;",
+      "  runOcr(doc: DocumentPayload): Promise<string>;",
+      "  signPdf(doc: DocumentPayload, certPem: string): Promise<Uint8Array>;",
+      "  archive(documentId: string): Promise<string>;",
+      "}"
+    ],
+    "thermal-printer.ts": [
+      "import type { DocumentPayload, DocumentWorker } from './document-worker';",
+      "",
+      "export class ThermalLabelPrinter implements DocumentWorker {",
+      "  readonly printedIds: string[] = [];",
+      "",
+      "  async print(doc: DocumentPayload): Promise<void> {",
+      "    this.printedIds.push(doc.id);",
+      "  }",
+      "",
+      "  async scan(): Promise<DocumentPayload> { throw new Error('Scanning not supported'); }",
+      "  async fax(): Promise<void> { throw new Error('Fax not supported'); }",
+      "  async runOcr(): Promise<string> { throw new Error('OCR not supported'); }",
+      "  async signPdf(): Promise<Uint8Array> { throw new Error('Signing not supported'); }",
+      "  async archive(): Promise<string> { throw new Error('Archiving not supported'); }",
+      "}"
+    ],
+    "archiver-service.ts": [
+      "import type { DocumentWorker } from './document-worker';",
+      "",
+      "export async function archiveBatch(worker: DocumentWorker, ids: readonly string[]): Promise<string[]> {",
+      "  const keys: string[] = [];",
+      "  for (const id of ids) {",
+      "    keys.push(await worker.archive(id));",
+      "  }",
+      "  return keys;",
+      "}"
+    ]
+  },
+  "expect": {
+    "interface_segregation": "fail"
+  }
+}
