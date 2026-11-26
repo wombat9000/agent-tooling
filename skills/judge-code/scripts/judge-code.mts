@@ -21,16 +21,16 @@ import {
   type JudgeRunOptions,
   type ModuleInput,
 } from './decisions.mts';
-import { formatLinterOutput, formatThreshold } from './format.mts';
+import { formatLinterOutput, formatRubricList, formatRuleExplanations } from './format.mts';
 import { readInputs, readPerFileInputs, resolveOutputOutsideSource } from './inputs.mts';
-import { PASS_THRESHOLD, bundledRubrics, resolveRubrics, type JudgeMode } from './rubrics.mts';
+import { bundledRubrics, explainRules, resolveRubrics, type JudgeMode } from './rubrics.mts';
 import { readStructureInputs } from './structure.mts';
 
 export const EXIT_OK = 0;
 export const EXIT_FINDINGS = 1;
 export const EXIT_ERROR = 2;
 
-export type Subcommand = 'file' | 'module' | 'structure' | 'list';
+export type Subcommand = 'file' | 'module' | 'structure' | 'list' | 'explain';
 
 export interface ExitCodeOptions {
   failOnWarning?: boolean;
@@ -42,13 +42,15 @@ const USAGE = `Usage:
   judge-code --changed [base-ref] [options]   Lint git-modified/untracked files (default base: main or HEAD)
   judge-code module <path...> [options]       Lint module bundle(s) with file + module checks (deep model)
   judge-code structure <path> [options]       Lint directory layout via structural manifest (deep model)
-  judge-code list                             List bundled rubrics, check IDs, scopes, and thresholds
+  judge-code list [--verbose]                 List bundled rubrics, check IDs, scopes, and thresholds
+  judge-code explain <check-id...> [options]  Show full criteria (instructions, pass, fail) for check ID(s)
 
 Options:
   --deep                Use ${DEFAULT_DECISION_MODEL} instead of ${DEFAULT_FILE_MODE_DECISION_MODEL} (openrouter only)
   --model ID            Explicit OpenRouter Decisions model ID (openrouter only)
   --backend BACKEND     Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
   --quiet, -q           Show errors only; hide borderline warnings
+  --verbose, -v         Include full rule instructions and pass/fail criteria in \`judge-code list\`
   --json                Emit structured JSON result to stdout instead of formatted linter output
   --out NEW_DIRECTORY   Optional private directory for request.json, response.txt, and result.json artifacts
   --rubric NAME_OR_PATH Narrow to bundled rubric name/ID or load local .json rubric (repeatable)
@@ -159,7 +161,12 @@ function extractSubcommandAndChanged(rawArgs: string[], cwd: string): {
 } {
   let subcommand: Subcommand = 'file';
   let startIdx = 0;
-  if (rawArgs[0] === 'list' || rawArgs[0] === 'module' || rawArgs[0] === 'structure') {
+  if (
+    rawArgs[0] === 'list'
+    || rawArgs[0] === 'explain'
+    || rawArgs[0] === 'module'
+    || rawArgs[0] === 'structure'
+  ) {
     subcommand = rawArgs[0];
     startIdx = 1;
   }
@@ -206,18 +213,6 @@ function extractSubcommandAndChanged(rawArgs: string[], cwd: string): {
   return { subcommand, restArgs, changed, changedBase };
 }
 
-function printRubricList(): void {
-  for (const rubric of bundledRubrics()) {
-    const tag = rubric.target === 'project_structure' ? ' [structure]' : '';
-    const checks = rubric.checks.map((id) => {
-      const threshold = rubric.thresholds[id];
-      const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
-      return `${id} [${rubric.scopes[id]}${thresholdNote}]`;
-    }).join(', ');
-    console.log(`${rubric.slug} (${rubric.id})${tag}: ${checks}`);
-  }
-}
-
 function displayTargetPath(absPath: string, cwd: string): string {
   const canonicalCwd = (() => {
     try {
@@ -253,6 +248,7 @@ async function main(): Promise<void> {
       model: { type: 'string' },
       backend: { type: 'string' },
       quiet: { type: 'boolean', short: 'q', default: false },
+      verbose: { type: 'boolean', short: 'v', default: false },
       json: { type: 'boolean', default: false },
       out: { type: 'string' },
       rubric: { type: 'string', multiple: true },
@@ -276,16 +272,20 @@ async function main(): Promise<void> {
     console.log(USAGE);
     return;
   }
+  if (changed && subcommand !== 'file') {
+    throw new Error(`--changed is only supported for file linting (not \`judge-code ${subcommand}\`)`);
+  }
   if (subcommand === 'list' || values['list-rubrics']) {
     if (subcommand === 'list' && positionals.length > 0) {
       throw new Error(`Unexpected arguments for \`judge-code list\`: ${positionals.join(' ')}`);
     }
-    printRubricList();
+    console.log(formatRubricList(bundledRubrics(), { verbose: values.verbose }));
     return;
   }
-
-  if (changed && subcommand !== 'file') {
-    throw new Error(`--changed is only supported for file linting (not \`judge-code ${subcommand}\`)`);
+  if (subcommand === 'explain') {
+    const rules = explainRules(positionals, values.rubric ?? []);
+    console.log(formatRuleExplanations(rules));
+    return;
   }
 
   const backend = parseBackend(values.backend);
@@ -489,6 +489,7 @@ async function main(): Promise<void> {
       quiet: values.quiet,
       outDir: runOptions.out,
       conventionsLabel,
+      rubric,
     }));
   }
 

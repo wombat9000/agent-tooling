@@ -5,12 +5,14 @@ description: Lint production Kotlin or TypeScript files, module bundles, or dire
 
 # Judge production code
 
+The bundled `$SKILL_DIR/rubrics/*.json` files are an **open, readable style guide**, not a hidden grading key. Read their criteria whenever you want to understand what a rule expects—either from the `Rule criteria:` legend printed below findings, via `judge-code explain <check-id...>`, via `judge-code list --verbose`, or by reading `$SKILL_DIR/rubrics/*.json` directly.
+
 1. Pick the right scope:
    - **File linting (default):** `judge-code <path...>` or `judge-code --changed [base-ref]` runs all `file`-scoped checks across bundled rubrics using the fast model (`typesafe/jev-1.14`; add `--deep` for `liquid/d1.2-ultra`).
    - **Module architecture:** `judge-code module <path...>` evaluates whole module/feature directory bundle(s) against all `file` + `module` checks using `liquid/d1.2-ultra`.
    - **Directory layout:** `judge-code structure <path>` evaluates folder layout, concern separation, and integration hygiene from a compact structural manifest using `liquid/d1.2-ultra`.
 2. When scanning a new repository or scope for the first time, preview with `--dry-run` (optionally `--out /path/to/new-private-dir` to inspect `request.json`) to verify the resolved files, rules, conventions, ignores, and credential checks, and confirm nothing unrelated or secret is included. For routine single-file or `--changed` lints in an already familiar repo, you can run directly.
-3. Run live and inspect each `error` (raw model `FAIL`, `P(pass) < 0.50`) and `warning` (threshold borderline, raw `PASS` with `P(pass) < pass_threshold`) directly in the source files to verify whether it reflects a real issue before reporting or editing.
+3. Run live, read the `Rule criteria:` legend printed below findings (or run `judge-code explain <check-id...>` / inspect `$SKILL_DIR/rubrics/*.json`) **before** reporting or refactoring so you evaluate what the rubric actually checks instead of guessing from a rule name, and inspect each `error` (raw model `FAIL`, `P(pass) < 0.50`) and `warning` (threshold borderline, raw `PASS` with `P(pass) < pass_threshold`) directly in the source files.
 4. If authorized to edit, make small behavior-preserving refactors for verified findings, run the project's tests and checks, and re-run `judge-code` with the same scope, rubrics, exclusions, and model to compare results.
 
 ## Run the CLI
@@ -18,8 +20,12 @@ description: Lint production Kotlin or TypeScript files, module bundles, or dire
 Use Node.js 22.18 or newer. Replace `$SKILL_DIR` with the installed skill directory.
 
 ```bash
-# List bundled rubrics, check IDs, scopes, and non-default thresholds
+# List bundled rubrics, check IDs, scopes, and non-default thresholds (add --verbose for full criteria)
 node "$SKILL_DIR/scripts/judge-code.mts" list
+node "$SKILL_DIR/scripts/judge-code.mts" list --verbose
+
+# Explain the full criteria (instructions, pass, fail) for specific rule IDs (supports --rubric for local JSON)
+node "$SKILL_DIR/scripts/judge-code.mts" explain domain_invariants no_long_functions
 
 # Default: fast per-file linter across 1+ files or directories (all file-scoped checks)
 node "$SKILL_DIR/scripts/judge-code.mts" src/features/billing
@@ -44,6 +50,7 @@ node "$SKILL_DIR/scripts/judge-code.mts" module src/features/billing --out /path
 - `--deep` — switch OpenRouter model to `liquid/d1.2-ultra` (default for `module` and `structure`; default for file linting is `typesafe/jev-1.14`).
 - `--model ID` — explicit OpenRouter Decisions model ID (openrouter backend only).
 - `--quiet`, `-q` — print `error`s only and hide borderline `warning`s and warning-only files.
+- `--verbose`, `-v` — include full rule `instructions`, `pass`, and `fail` criteria in `judge-code list`.
 - `--json` — emit the full structured `JudgeResult` JSON to stdout instead of formatted linter output.
 - `--out NEW_DIRECTORY` — optional private output directory (`0700` dir, `0600` files) for `request.json`, `response.txt` (redacting any echoed key), and `result.json` (plus `files/<slug>/` or `modules/<slug>/`). Must be outside any selected source directory. When omitted, nothing is written to disk.
 - `--rubric NAME_OR_PATH` — narrow to specific bundled rubric slug(s)/version IDs (e.g. `readability`, `fowler-smells`, `module-design-v2`) or load a repo-local `.json` rubric (repeatable). Omitting `--rubric` runs all bundled rubrics for the active command.
@@ -60,7 +67,7 @@ node "$SKILL_DIR/scripts/judge-code.mts" module src/features/billing --out /path
 
 ### Output, severity, and exit codes
 
-Default stdout prints an ESLint-style punch list showing only targets with findings (sorted worst-first by error count, warning count, then lowest `P(pass)`), a compact rule breakdown, and a final summary line:
+Default stdout prints an ESLint-style punch list showing only targets with findings (sorted worst-first by error count, warning count, then lowest `P(pass)`), a compact rule breakdown, a `Rule criteria:` legend listing each distinct triggered rule once with its `pass`/`fail` definitions (omitted on clean runs and filtered by `--quiet`), and a final summary line:
 
 ```text
 src/features/billing/workflow.ts
@@ -70,6 +77,14 @@ src/features/billing/workflow.ts
 Rules:
   no_long_functions            1 error
   named_domain_expressions     1 warning
+
+Rule criteria:
+  no_long_functions (fowler-smells, file, >=0.80)
+    pass: ...
+    fail: ...
+  named_domain_expressions (readability, file, >=0.60)
+    pass: ...
+    fail: ...
 
 ✖ 1 error, 1 warning across 1 of 4 files (typesafe/jev-1.14, 4.1s)
 ```
