@@ -8,7 +8,8 @@ import {
   type SkillCoverageInfo,
   type TaskTargetRow,
 } from './scorecard_discovery.mts';
-import { compareCodepoint, type ScorecardCheckStats } from './scorecard_schema.mts';
+import { compareCodepoint, type ScorecardCheckStats, type ScorecardUsage } from './scorecard_schema.mts';
+import { formatCostUsd, formatDurationSec, formatTokenCount } from './trial_metrics.mts';
 
 function pct(value: number | null | undefined, decimals = 1): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
@@ -146,6 +147,20 @@ function formatCheckCell(stats: ScorecardCheckStats | undefined): string {
   return `${stats.passed}/${stats.total} (${pct(stats.pass_rate, 0)} · P=${pct(stats.mean_pass_probability)})`;
 }
 
+function formatUsageProvenance(usage: ScorecardUsage | undefined): string {
+  if (!usage) return '';
+  const parts: string[] = [];
+  if (usage.n_input_tokens || usage.n_output_tokens) {
+    const inStr = usage.n_input_tokens ? `${formatTokenCount(usage.n_input_tokens.mean)} in` : null;
+    const outStr = usage.n_output_tokens ? `${formatTokenCount(usage.n_output_tokens.mean)} out` : null;
+    parts.push(`mean tokens ${[inStr, outStr].filter(Boolean).join(' / ')}`);
+  }
+  if (usage.cost_usd) parts.push(`mean cost ${formatCostUsd(usage.cost_usd.mean)}`);
+  const dur = usage.duration_sec ?? usage.agent_duration_sec;
+  if (dur) parts.push(`mean duration ${formatDurationSec(dur.mean)}`);
+  return parts.length ? `, ${parts.join(', ')}` : '';
+}
+
 function renderTaskDetailsSection(row: TaskTargetRow): string {
   const lines: string[] = [];
   const skillSummary = row.skillEntry ? `Skill ${pct(row.skillEntry.entry.quality.pass_rate)}` : null;
@@ -168,10 +183,12 @@ function renderTaskDetailsSection(row: TaskTargetRow): string {
       `task=\`${e.hashes.task_hash}\``,
       `rubric=\`${e.hashes.rubric_hash}\``,
     ].filter(Boolean).join(', ');
+    const condLabel = e.with_judge_code ? `${label} + judge-code` : label;
+    const usagePart = formatUsageProvenance(e.usage);
     lines.push(
-      `- **${label}** (${formatStalenessLabel(view)}): `
+      `- **${condLabel}** (${formatStalenessLabel(view)}): `
       + `${pct(e.quality.pass_rate)} pass rate, P(pass)=${pct(e.quality.mean_pass_probability)}, `
-      + `reward ${det}, n=${e.trials.scored}/${e.trials.total}, `
+      + `reward ${det}, n=${e.trials.scored}/${e.trials.total}${usagePart}, `
       + `agent \`${e.agent_model}\`, judge \`${e.judge_model}\` (${e.scope}), `
       + `rubric \`${e.rubric}\`, date ${e.recorded_at}${refPart} (${hashParts})`,
     );

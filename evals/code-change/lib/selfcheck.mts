@@ -9,6 +9,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { grade, type ExpectedReview } from './grade_review.mts';
 import { parseRubric, parseSharedRubric, parseTestRubric, taskSourceRoot, taskTestRoot } from './judge_review.mts';
+import { JUDGE_CODE_EXTRA_INSTRUCTION, JUDGE_CODE_INSTRUCTION_MARKER } from './run_condition.mts';
 
 const LIB = fileURLToPath(new URL('.', import.meta.url));
 const TASKS = join(LIB, '../tasks');
@@ -164,4 +165,66 @@ test('CLI writes reward.json and stdout for present and missing reports; bad arg
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
+});
+
+test('refactoring tasks declare standard TypeScript production and unit-test rubrics', () => {
+  for (const [taskName, srcFile, testFile] of [
+    ['refactor-shipping-rates', 'shipping.ts', 'shipping.test.ts'],
+    ['refactor-leave-accrual', 'leave.ts', 'leave.test.ts'],
+  ] as const) {
+    const dir = join(TASKS, taskName);
+    assert.ok(existsSync(join(dir, 'task.toml')), `${taskName}: missing task.toml`);
+    assert.ok(existsSync(join(dir, 'environment/Dockerfile')), `${taskName}: missing Dockerfile`);
+    assert.ok(existsSync(join(dir, 'environment/base/src', srcFile)), `${taskName}: missing base src`);
+    assert.ok(existsSync(join(dir, 'environment/base/tests', testFile)), `${taskName}: missing base test`);
+    assert.ok(existsSync(join(dir, 'tests/contract.test.ts')), `${taskName}: missing contract.test.ts`);
+    assert.ok(existsSync(join(dir, 'solution/reference/src', srcFile)), `${taskName}: missing reference src`);
+    assert.equal(taskSourceRoot(dir), 'src', taskName);
+    assert.equal(taskTestRoot(dir), 'tests', taskName);
+
+    const prodRubric = parseRubric(dir, '');
+    assert.equal(prodRubric.target, 'production_code', taskName);
+    assert.deepEqual(
+      Object.keys(prodRubric.groups ?? {}),
+      ['domain-modelling', 'readability', 'module-design', 'solid', 'fowler-smells'],
+      taskName,
+    );
+
+    const testRubric = parseTestRubric(dir, '');
+    assert.equal(testRubric.target, 'test_code', taskName);
+    assert.deepEqual(Object.keys(testRubric.groups ?? {}), ['testing-core', 'testing-unit'], taskName);
+  }
+});
+
+test('AmpAgent Python unit tests pass offline and match Codex judge-code quality gate instruction', () => {
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, new RegExp(`^## ${JUDGE_CODE_INSTRUCTION_MARKER}\\b`));
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, /judge-code\.mts" <src-path>`/);
+  assert.doesNotMatch(JUDGE_CODE_EXTRA_INSTRUCTION, /judge-code\.mts" <src-path> --fail-on-warning/);
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, /module <src-path> --fail-on-warning/);
+  assert.match(JUDGE_CODE_EXTRA_INSTRUCTION, /up to 3 fix-and-recheck passes/);
+  assert.doesNotMatch(JUDGE_CODE_EXTRA_INSTRUCTION, /Optional self-check/);
+
+  const parity = spawnSync(
+    'python3',
+    [
+      '-c',
+      'import ast, pathlib, sys; tree = ast.parse(pathlib.Path(sys.argv[1]).read_text("utf-8")); '
+      + 'vals = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id in {"JUDGE_CODE_INSTRUCTION_MARKER", "JUDGE_CODE_EXTRA_INSTRUCTION"}}; '
+      + 'import json; print(json.dumps(vals))',
+      join(LIB, 'amp_agent.py'),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.ifError(parity.error);
+  assert.equal(parity.status, 0, parity.stderr);
+  const parsed = JSON.parse(parity.stdout) as {
+    JUDGE_CODE_INSTRUCTION_MARKER: string;
+    JUDGE_CODE_EXTRA_INSTRUCTION: string;
+  };
+  assert.equal(parsed.JUDGE_CODE_INSTRUCTION_MARKER, JUDGE_CODE_INSTRUCTION_MARKER);
+  assert.equal(parsed.JUDGE_CODE_EXTRA_INSTRUCTION, JUDGE_CODE_EXTRA_INSTRUCTION);
+
+  const result = spawnSync('python3', [join(LIB, 'amp_agent_test.py')], { encoding: 'utf8' });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });

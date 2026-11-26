@@ -50,6 +50,54 @@ test('HTML includes the historical rubric, choices, probabilities, and original 
   assert.ok(html.includes('id="state-filter"'));
   assert.ok(!html.includes('<script src='));
   assert.ok(!html.includes('<link rel="stylesheet"'));
+  assert.ok(!html.includes('Trial usage and timing'), 'usage strip is omitted when no trial has usage or timing metrics');
+});
+
+test('HTML renders per-trial and aggregate tokens, cost, and duration when present and handles partial/null fallback', (t) => {
+  const f = fixture(t);
+  const first = putTrial(f.directory, 'trial-one', ['pass', 'pass']);
+  const second = putTrial(f.directory, 'trial-two', ['pass', 'fail']);
+  writeFileSync(join(f.directory, 'summary.json'), JSON.stringify({
+    source_run: '/saved/source',
+    model: 'test/judge',
+    reports: [
+      {
+        ...first,
+        usage: {
+          n_input_tokens: 40_000,
+          n_cache_tokens: 25_000,
+          n_output_tokens: 5_000,
+          cost_usd: 0.25,
+          duration_sec: 90,
+          agent_duration_sec: 75,
+        },
+      },
+      {
+        ...second,
+        usage: {
+          n_input_tokens: 20_000,
+          n_cache_tokens: 15_000,
+          n_output_tokens: 3_000,
+          cost_usd: 0.15,
+          duration_sec: 30,
+          agent_duration_sec: 25,
+        },
+      },
+    ],
+  }));
+  const html = readFileSync(writeHtmlReport(f.directory), 'utf8');
+  assert.ok(html.includes('Trial usage and timing'));
+  assert.ok(html.includes('60.0k'));
+  assert.ok(html.includes('8.00k'));
+  assert.ok(html.includes('40.0k cache'));
+  assert.ok(html.includes('$0.40'));
+  assert.ok(html.includes('mean $0.20 / trial (2/2)'));
+  assert.ok(html.includes('1m 00s'));
+  assert.ok(html.includes('Mean tokens'));
+  assert.ok(html.includes('Mean cost'));
+  assert.ok(html.includes('Mean duration'));
+  assert.ok(html.includes('40.0k in (25.0k cache) / 5.00k out'));
+  assert.ok(html.includes('agent 1m 15s'));
 });
 
 test('mean trial scores give equal weight to trials, while task check counts remain separate', (t) => {

@@ -1,0 +1,17 @@
+schema_version = "1.4"
+artifacts = ["/workspace/src", "/workspace/tests"]
+
+[task]
+name = "agent-tooling/code-change-refactor-leave-accrual"
+description = "Refactor a legacy TypeScript monthly leave-accrual calculator, add sabbatical employment-type support, and write unit tests."
+keywords = ["code-change", "refactor", "typescript", "leave-accrual"]
+
+[environment]
+skills_dir = "/skills"
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 300
+
+[verifier]
+timeout_sec = 300

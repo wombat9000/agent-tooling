@@ -797,3 +797,172 @@ test('scorecard CLI supports HTML dashboard, dry-run, help, and rejects bad subc
     assert.equal(res.status, 1, JSON.stringify(badArgs));
   }
 });
+
+test('--with-judge-code forwards OPENROUTER_API_KEY and skills/judge-code only when opted in, and fails fast without a key', (t) => {
+  const f = fixture(t);
+
+  // Default run keeps OPENROUTER_API_KEY strictly host-side and omits judge-code skill/args.
+  const defaultRun = f.run(['run', '--task', 'refactor-shipping-rates']);
+  assert.equal(defaultRun.status, 0, defaultRun.stderr);
+  const [defaultCall] = f.calls();
+  assert.equal(defaultCall.openrouterPresent, false);
+  assert.ok(!defaultCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.ok(!defaultCall.args.includes('--ae'));
+  assert.ok(!defaultCall.args.includes('--extra-instruction'));
+  assert.ok(defaultCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(defaultCall.args.includes(join(ROOT, 'evals/code-change/tasks/refactor-shipping-rates')));
+
+  // Missing OPENROUTER_API_KEY fails fast before launching Harbor.
+  for (const args of [
+    ['run', '--task', 'refactor-shipping-rates', '--with-judge-code'],
+    ['run', '--task', 'refactor-shipping-rates', '--baseline', '--with-judge-code'],
+    ['canary', '--with-judge-code'],
+  ]) {
+    const missingKey = f.run(args, { OPENROUTER_API_KEY: '' });
+    assert.equal(missingKey.status, 1, JSON.stringify(args));
+    assert.match(missingKey.stderr, /OPENROUTER_API_KEY/);
+  }
+  assert.equal(f.calls().length, 1, 'missing OPENROUTER_API_KEY must fail before launching Harbor');
+
+  // Opt-in skill + judge-code mounts both skills, templates OPENROUTER_API_KEY via --ae, and appends instruction note.
+  const skillWithJudge = f.run(['run', '--task', 'refactor-shipping-rates', '--with-judge-code']);
+  assert.equal(skillWithJudge.status, 0, skillWithJudge.stderr);
+  const skillCall = f.calls()[1];
+  assert.equal(skillCall.openrouterPresent, true);
+  assert.ok(skillCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(skillCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.ok(skillCall.args.includes('OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'));
+  assert.ok(!skillCall.args.some((arg) => arg.includes('fake-judge-key')), 'raw key must never appear in Harbor argv');
+  const jobName = skillCall.args[skillCall.args.indexOf('--job-name') + 1];
+  assert.match(jobName, /^run-skill-with-judge-code-/);
+  const extraInstruction = skillCall.args[skillCall.args.indexOf('--extra-instruction') + 1];
+  assert.match(extraInstruction, /## Required quality gate: judge-code/);
+  assert.match(extraInstruction, /judge-code\.mts" <src-path>`/);
+  assert.doesNotMatch(extraInstruction, /judge-code\.mts" <src-path> --fail-on-warning/);
+  assert.match(extraInstruction, /module <src-path> --fail-on-warning/);
+  assert.match(extraInstruction, /up to 3 fix-and-recheck passes/);
+  assert.doesNotMatch(extraInstruction, /Optional self-check/);
+
+  // Opt-in --baseline --with-judge-code mounts ONLY skills/judge-code (omits skills/code-change).
+  const baselineWithJudge = f.run(['run', '--task', 'refactor-shipping-rates', '--baseline', '--with-judge-code']);
+  assert.equal(baselineWithJudge.status, 0, baselineWithJudge.stderr);
+  const baselineCall = f.calls()[2];
+  assert.equal(baselineCall.openrouterPresent, true);
+  assert.ok(!baselineCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(baselineCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.ok(baselineCall.args.includes('OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'));
+  assert.match(baselineCall.args[baselineCall.args.indexOf('--job-name') + 1], /^run-baseline-with-judge-code-/);
+
+  // Canary supports --with-judge-code too, and --dry-run never leaks OPENROUTER_API_KEY.
+  const canaryWithJudge = f.run(['canary', '--with-judge-code']);
+  assert.equal(canaryWithJudge.status, 0, canaryWithJudge.stderr);
+  const canaryCall = f.calls()[3];
+  assert.equal(canaryCall.openrouterPresent, true);
+  assert.ok(canaryCall.args.includes(join(ROOT, 'skills/code-change')));
+  assert.ok(canaryCall.args.includes(join(ROOT, 'skills/judge-code')));
+  assert.match(canaryCall.args[canaryCall.args.indexOf('--job-name') + 1], /^canary-skill-with-judge-code-/);
+
+  const dryRun = f.run(['run', '--task', 'refactor-shipping-rates', '--with-judge-code', '--dry-run'], { OPENROUTER_API_KEY: 'super-secret-value' });
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  assert.ok(!dryRun.stdout.includes('super-secret-value'));
+  const parsedDry = JSON.parse(dryRun.stdout);
+  assert.ok(parsedDry.args.includes('OPENROUTER_API_KEY=${OPENROUTER_API_KEY}'));
+
+  const help = f.run(['--help']);
+  assert.match(help.stdout, /--with-judge-code/);
+});
+
+test('judge summary and HTML report record with_judge_code condition metadata for both skill and baseline runs', (t) => {
+  const f = fixture(t);
+  for (const [jobName, skills, expectedCondition, expectedBadge] of [
+    ['run-skill-with-judge-code-11111111-2222-3333-4444-555555555555', ['/skills/code-change', '/skills/judge-code'], 'skill', 'Skill + judge-code'],
+    ['run-baseline-with-judge-code-11111111-2222-3333-4444-555555555555', ['/skills/judge-code'], 'baseline', 'Baseline + judge-code'],
+  ] as const) {
+    const job = join(f.root, jobName);
+    mkdirSync(job);
+    writeFileSync(join(job, 'config.json'), JSON.stringify({
+      agents: [{ name: 'codex', model_name: 'openai/gpt-6.1-terra', skills }],
+    }));
+    writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-01-01T00:00:00', n_total_trials: 1 }));
+    const trialSrc = join(job, 'refactor-shipping-rates__one/artifacts/workspace/src');
+    mkdirSync(trialSrc, { recursive: true });
+    writeFileSync(join(trialSrc, 'shipping.ts'), 'export function calculateShippingQuotes() { return []; }\n');
+
+    const out = join(f.root, `judge-${expectedCondition}`);
+    const judged = f.run(['judge', '--run', job, '--out', out, '--dry-run'], { OPENROUTER_API_KEY: '' });
+    assert.equal(judged.status, 0, judged.stderr);
+    const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+    assert.equal(summary.condition, expectedCondition);
+    assert.equal(summary.with_judge_code, true);
+    const html = readFileSync(join(out, 'report.html'), 'utf8');
+    assert.ok(html.includes(expectedBadge), `Expected HTML report badge "${expectedBadge}"`);
+  }
+});
+
+test('judge and report surface Harbor trial tokens, cost, and duration with graceful null fallback', (t) => {
+  const f = fixture(t);
+  const job = join(f.root, 'run-skill-11111111-2222-3333-4444-555555555555');
+  mkdirSync(job);
+  writeFileSync(join(job, 'config.json'), JSON.stringify({
+    agents: [{ name: 'codex', model_name: 'openai/gpt-6.1-terra', skills: ['/skills/code-change'] }],
+  }));
+  writeFileSync(join(job, 'result.json'), JSON.stringify({ finished_at: '2026-11-26T12:05:00Z', n_total_trials: 2 }));
+
+  // Trial 1 has full token, cost, and timing fields; Trial 2 has none (simulating oracle/nop fallback).
+  const t1Src = join(job, 'refactor-shipping-rates__t1/artifacts/workspace/src');
+  mkdirSync(t1Src, { recursive: true });
+  writeFileSync(join(t1Src, 'shipping.ts'), 'export function calculateShippingQuotes() { return []; }\n');
+  writeFileSync(join(job, 'refactor-shipping-rates__t1/result.json'), JSON.stringify({
+    started_at: '2026-11-26T12:00:00Z',
+    finished_at: '2026-11-26T12:01:30Z',
+    agent_execution: { started_at: '2026-11-26T12:00:10Z', finished_at: '2026-11-26T12:01:10Z' },
+    agent_result: {
+      n_input_tokens: 50_000,
+      n_cache_tokens: 30_000,
+      n_output_tokens: 4_000,
+      cost_usd: 0.32,
+    },
+  }));
+
+  const t2Src = join(job, 'refactor-shipping-rates__t2/artifacts/workspace/src');
+  mkdirSync(t2Src, { recursive: true });
+  writeFileSync(join(t2Src, 'shipping.ts'), 'export function calculateShippingQuotes() { return []; }\n');
+  writeFileSync(join(job, 'refactor-shipping-rates__t2/result.json'), JSON.stringify({
+    agent_result: null,
+  }));
+
+  const out = join(f.root, 'judge-usage');
+  const judged = f.run(['judge', '--run', job, '--out', out, '--dry-run'], { OPENROUTER_API_KEY: '' });
+  assert.equal(judged.status, 0, judged.stderr);
+  assert.match(judged.stdout, /Usage: tokens 50\.0k in \(30\.0k cache\) \/ 4\.00k out.*cost \$0\.32.*duration 1m 30s/);
+
+  const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+  assert.deepEqual(summary.reports[0].usage, {
+    n_input_tokens: 50_000,
+    n_cache_tokens: 30_000,
+    n_output_tokens: 4_000,
+    cost_usd: 0.32,
+    duration_sec: 90,
+    agent_duration_sec: 60,
+  });
+  assert.deepEqual(summary.reports[1].usage, {
+    n_input_tokens: null,
+    n_cache_tokens: null,
+    n_output_tokens: null,
+    cost_usd: null,
+    duration_sec: null,
+    agent_duration_sec: null,
+  });
+  assert.equal(summary.usage.n_input_tokens.total, 50_000);
+  assert.equal(summary.usage.n_input_tokens.count, 1);
+  assert.equal(summary.usage.cost_usd.mean, 0.32);
+  assert.equal(summary.usage.duration_sec.mean, 90);
+
+  const rebuilt = f.run(['report', out], { OPENROUTER_API_KEY: '' });
+  assert.equal(rebuilt.status, 0, rebuilt.stderr);
+  assert.match(rebuilt.stdout, /Usage: tokens 50\.0k in/);
+  const html = readFileSync(join(out, 'report.html'), 'utf8');
+  assert.ok(html.includes('Trial usage and timing'));
+  assert.ok(html.includes('$0.32'));
+  assert.ok(html.includes('1m 30s'));
+});
