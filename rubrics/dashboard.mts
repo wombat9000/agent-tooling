@@ -864,6 +864,15 @@ export function computeNiceAxisTicks(maxVal: number): { max: number; ticks: numb
   return { max: top, ticks };
 }
 
+export function computeNiceRateAxis(minVal: number): { min: number; max: number; ticks: number[] } {
+  const safeMin = Number.isFinite(minVal) ? Math.max(0, Math.min(1, minVal)) : 0;
+  if (safeMin >= 0.8) return { min: 0.8, max: 1, ticks: [0.8, 0.85, 0.9, 0.95, 1] };
+  if (safeMin >= 0.6) return { min: 0.6, max: 1, ticks: [0.6, 0.7, 0.8, 0.9, 1] };
+  if (safeMin >= 0.4) return { min: 0.4, max: 1, ticks: [0.4, 0.55, 0.7, 0.85, 1] };
+  if (safeMin >= 0.25) return { min: 0.25, max: 1, ticks: [0.25, 0.5, 0.75, 1] };
+  return { min: 0, max: 1, ticks: [0, 0.25, 0.5, 0.75, 1] };
+}
+
 export function formatVersionDeltaLabel(prevVersion: string | null, currVersion: string): string {
   const shorten = (v: string): string => {
     const clean = v.replace(/-\d+-g[0-9a-f]+$/i, '');
@@ -933,7 +942,7 @@ const STYLE = `
 :root{color-scheme:light;--ink:#142136;--muted:#5b677a;--line:#dce3ed;--bg:#f4f6fa;--surface:#ffffff;--surface-alt:#f8fafd;--blue:#2563eb;--blue-soft:#eff6ff;--teal:#0d9488;--purple:#7c3aed;--green:#15803d;--green-bg:#dcfce7;--amber:#9a3412;--amber-bg:#ffedd5;--red:#b91c1c;--red-bg:#fee2e2}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-main{max-width:1440px;margin:0 auto;padding:20px 24px 56px;min-width:0}
+main{max-width:1440px;margin:0 auto;padding:20px 24px 160px;min-width:0}
 header{border-top:3px solid var(--blue);padding:12px 0 16px}
 .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 h1{font-size:1.55rem;line-height:1.2;letter-spacing:-.03em;margin:0}
@@ -965,7 +974,8 @@ code{font:500 .83em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;bac
 .tone-bad{color:var(--red)}
 .panel{padding:18px 20px;margin-bottom:18px}
 .panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
-.panel-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;flex-wrap:wrap}
+.panel-summary{display:flex;align-items:center;justify-content:flex-start;gap:10px;cursor:pointer;list-style:none;flex-wrap:wrap}
+.panel-summary>:last-child:not(:first-child){margin-left:auto}
 .panel-summary::-webkit-details-marker{display:none}
 .panel-summary::before{content:'+ ';color:var(--blue);font-weight:700}
 details[open]>.panel-summary::before{content:'− '}
@@ -1021,15 +1031,35 @@ label.toggle{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;colo
 .single-run-note,.quiet-note{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 13px;border-radius:8px;background:var(--surface-alt);border:1px solid var(--line);color:var(--muted);font-size:.82rem;margin-bottom:14px}
 .quiet-note{margin-top:14px;margin-bottom:0}
 .chart-box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-alt);margin-bottom:14px}
+.history-panel-box{margin-bottom:0}
+.history-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.history-legend{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:10px}
+.history-legend-btn{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit;font-size:.78rem;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s}
+.history-legend-btn:hover{border-color:#94a3b8;background:#f8fafc}
+.history-legend-btn.selected{border-color:var(--blue);background:var(--blue-soft);box-shadow:0 0 0 1px rgba(37,99,235,.22)}
+.history-legend-dot{width:9px;height:9px;border-radius:999px;flex-shrink:0}
+.history-legend-name{font-weight:600}
+.history-legend-val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.75rem}
+.history-legend-delta{font-variant-numeric:tabular-nums;font-size:.73rem;font-weight:600}
+.chart-stage{position:relative;width:100%}
+.chart-tooltip{position:absolute;z-index:40;pointer-events:none;min-width:210px;max-width:290px;padding:9px 11px;border-radius:9px;background:rgba(20,33,54,.96);color:#f8fafc;box-shadow:0 10px 24px rgba(15,23,42,.24);font-size:.76rem;line-height:1.45}
+.chart-tooltip-head{display:flex;align-items:center;gap:6px;font-weight:700;margin-bottom:4px;font-size:.8rem}
+.chart-tooltip-meta{color:#cbd5e1;font-size:.72rem;margin-bottom:5px;font-variant-numeric:tabular-nums}
+.chart-tooltip-row{display:flex;justify-content:space-between;gap:12px;font-variant-numeric:tabular-nums}
+.chart-tooltip-note{margin-top:5px;padding-top:5px;border-top:1px solid rgba(148,163,184,.3);color:#fde68a;font-size:.71rem}
+.chart-tooltip-hint{margin-top:4px;color:#94a3b8;font-size:.69rem}
 .chart-legend{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:.78rem;color:var(--muted);margin-bottom:8px}
 .legend-item{display:inline-flex;align-items:center;gap:6px}
 .legend-swatch{display:inline-block;width:16px;height:3px;border-radius:2px}
 .legend-swatch.dashed{background:repeating-linear-gradient(90deg,var(--teal) 0 5px,transparent 5px 8px)}
 .legend-swatch.dashed-slate{background:repeating-linear-gradient(90deg,#64748b 0 5px,transparent 5px 8px)}
+.legend-swatch.dashed-amber{background:repeating-linear-gradient(90deg,#d97706 0 4px,transparent 4px 7px)}
 .legend-swatch.dotted{background:repeating-linear-gradient(90deg,var(--purple) 0 2px,transparent 2px 5px)}
 .svg-wrap{width:100%;overflow-x:auto}
 svg.trend-svg{display:block;width:100%;max-width:100%;height:auto}
-.chart-point{cursor:pointer}
+.chart-point,.history-series-hit{cursor:pointer}
+#repo-detail-panel{min-height:clamp(500px,62vh,760px)}
+.hist-run-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:7px 12px;border-radius:8px;background:#f8fafc;border:1px solid var(--line);color:var(--ink);font-size:.8rem;margin-bottom:12px}
 .split-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px;align-items:start}
 .sub-card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--surface-alt);min-width:0}
 .arch-card{border:1px solid #c7d2fe;border-radius:10px;padding:14px 16px;background:#fafbff;margin-bottom:14px;min-width:0}
@@ -1144,6 +1174,42 @@ const CLIENT_SCRIPT = `
     for (let v = 0; v <= top; v += step) ticks.push(v);
     return { max: top, ticks };
   }
+  function computeNiceRateAxis(minVal) {
+    const safeMin = Number.isFinite(minVal) ? Math.max(0, Math.min(1, minVal)) : 0;
+    if (safeMin >= 0.8) return { min: 0.8, max: 1, ticks: [0.8, 0.85, 0.9, 0.95, 1] };
+    if (safeMin >= 0.6) return { min: 0.6, max: 1, ticks: [0.6, 0.7, 0.8, 0.9, 1] };
+    if (safeMin >= 0.4) return { min: 0.4, max: 1, ticks: [0.4, 0.55, 0.7, 0.85, 1] };
+    if (safeMin >= 0.25) return { min: 0.25, max: 1, ticks: [0.25, 0.5, 0.75, 1] };
+    return { min: 0, max: 1, ticks: [0, 0.25, 0.5, 0.75, 1] };
+  }
+  const REPO_PALETTE = [
+    '#2563eb',
+    '#0d9488',
+    '#d97706',
+    '#7c3aed',
+    '#dc2626',
+    '#059669',
+    '#db2777',
+    '#475569',
+  ];
+  function repoColor(name) {
+    const idx = (DATA.repos || []).findIndex((r) => r.name === name);
+    return REPO_PALETTE[(idx >= 0 ? idx : 0) % REPO_PALETTE.length];
+  }
+  function preserveViewportAnchor(anchorSelector, fn) {
+    const beforeEl = anchorSelector ? document.querySelector(anchorSelector) : null;
+    const beforeTop = beforeEl ? beforeEl.getBoundingClientRect().top : null;
+    fn();
+    if (beforeTop !== null && anchorSelector) {
+      const afterEl = document.querySelector(anchorSelector);
+      if (afterEl) {
+        const delta = afterEl.getBoundingClientRect().top - beforeTop;
+        if (Math.abs(delta) > 0.5) {
+          window.scrollBy(0, delta);
+        }
+      }
+    }
+  }
   function formatVersionLabel(prevVersion, currVersion) {
     const shorten = (v) => {
       const clean = String(v || '').replace(/-\\d+-g[0-9a-f]+$/i, '');
@@ -1209,10 +1275,18 @@ const CLIENT_SCRIPT = `
       + '<div class="tip-fail"><strong>Fail:</strong> ' + esc(cat.criteria.fail) + '</div></div></span>';
   }
 
+  function defaultHistoryMode() {
+    const modes = DATA.modes_present || [];
+    const repos = DATA.repos || [];
+    const withTrend = modes.find((m) => repos.some((r) => r.by_mode && r.by_mode[m] && r.by_mode[m].points.length >= 2));
+    return withTrend || modes[0] || 'file';
+  }
+
   let selectedRepo = DATA.repos && DATA.repos.length > 0 ? DATA.repos[0].name : null;
   let selectedMode = null;
   let selectedRunIdx = null;
-  let trendMetric = 'errors';
+  let historyMode = defaultHistoryMode();
+  let historyMetric = 'errors';
   let heatmapMode = DATA.modes_present && DATA.modes_present.length > 0 ? DATA.modes_present[0] : 'file';
   let activeRule = '';
   let fileSearch = '';
@@ -1223,7 +1297,6 @@ const CLIENT_SCRIPT = `
   let moduleFailingOnly = false;
   let heatSearch = '';
   let heatGroup = '';
-  let lastWrittenHash = null;
 
   function ensureSelection() {
     if (!DATA.repos || DATA.repos.length === 0) return null;
@@ -1249,14 +1322,11 @@ const CLIENT_SCRIPT = `
     return s ? '#' + s : '';
   }
 
-  function syncUrlHash(push) {
+  function syncUrlHash() {
     const next = buildHash();
     if (!next || window.location.hash === next) return;
-    lastWrittenHash = next;
     try {
-      if (push) {
-        window.location.hash = next;
-      } else if (window.history && window.history.replaceState) {
+      if (window.history && window.history.replaceState) {
         window.history.replaceState(null, '', next);
       }
     } catch (_) {
@@ -1307,125 +1377,382 @@ const CLIENT_SCRIPT = `
     }).join('');
   }
 
-  function renderErrorsTrendSvg(points, activeIdx) {
-    const W = 820, H = 225, padL = 50, padR = 24, padT = 24, padB = 34;
-    const plotW = W - padL - padR;
+  function renderMultiRepoHistorySvg(seriesList, metric) {
+    const W = 1160, H = 200, padL = 54, padR = 66, padT = 24, padB = 30;
+    const innerPadX = 24;
+    const xMin = padL + innerPadX;
+    const xMax = W - padR - innerPadX;
     const plotH = H - padT - padB;
-    const maxVal = Math.max(...points.map((p) => p.findings ? p.findings.total : 0), 1);
-    const axis = computeNiceTicks(maxVal);
-    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
-    const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / axis.max))) * plotH;
 
-    const gridLines = axis.ticks.map((g) => {
-      const y = yAt(g).toFixed(1);
-      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#e2e8f0" stroke-width="1"/>'
-        + '<text x="' + (padL - 8) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + g + '</text>';
-    }).join('');
+    const allPoints = [];
+    for (const s of seriesList) {
+      for (const p of s.points) allPoints.push(p);
+    }
 
-    const versionLines = renderVersionMarkers(points, xAt, padT, H - padB);
+    const timestamps = allPoints.map((p) => Date.parse(p.timestamp)).filter((t) => Number.isFinite(t));
+    const minT = timestamps.length > 0 ? Math.min(...timestamps) : NaN;
+    const maxT = timestamps.length > 0 ? Math.max(...timestamps) : NaN;
+    const hasTimeSpan = Number.isFinite(minT) && Number.isFinite(maxT) && maxT > minT;
 
-    const polyline = (getter, stroke, dash, width) => {
-      const coords = points.map((p, i) => xAt(i).toFixed(1) + ',' + yAt(getter(p)).toFixed(1));
-      if (coords.length < 2) return '';
-      return '<polyline fill="none" stroke="' + stroke + '" stroke-width="' + width + '" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
+    const xFor = (p, idx, len) => {
+      const t = Date.parse(p.timestamp);
+      if (hasTimeSpan && Number.isFinite(t)) {
+        return xMin + ((t - minT) / (maxT - minT)) * (xMax - xMin);
+      }
+      if (len > 1) return xMin + (idx / (len - 1)) * (xMax - xMin);
+      return (xMin + xMax) / 2;
     };
 
-    const dots = points.map((p, i) => {
-      const x = xAt(i).toFixed(1);
-      const yt = yAt(p.findings.total).toFixed(1);
-      const yh = yAt(p.findings.hard).toFixed(1);
-      const isActive = i === activeIdx;
-      const tip = esc(
-        shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nErrors (raw FAIL): ' + p.findings.hard + ' (+' + p.findings.borderline + ' borderline)'
-        + '\\nCalibrated pass: ' + pct(p.calibrated_pass_rate) + ' | Raw pass: ' + pct(p.raw_pass_rate)
-        + (p.version_changed ? '\\nChange: ' + p.change_reasons.join('; ') : '')
-      );
-      return '<g class="chart-point" role="button" tabindex="0" aria-label="Select snapshot ' + esc(isoDay(p.timestamp)) + '" data-select-run="' + i + '">'
-        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#2563eb" stroke-opacity="0.18" stroke-width="10"/>' : '')
-        + '<circle cx="' + x + '" cy="' + yt + '" r="' + (isActive ? 4.4 : 3.2) + '" fill="#64748b" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>'
-        + '<circle cx="' + x + '" cy="' + yh + '" r="' + (isActive ? 6 : 4.3) + '" fill="#b91c1c" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>'
+    let yTicks;
+    let yAt;
+    let formatTick;
+    let valOf;
+    if (metric === 'rate') {
+      const minRate = Math.min(...allPoints.map((p) => typeof p.calibrated_pass_rate === 'number' ? p.calibrated_pass_rate : 1), 1);
+      const axis = computeNiceRateAxis(minRate);
+      yTicks = axis.ticks;
+      const span = Math.max(1e-6, axis.max - axis.min);
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, (v - axis.min) / span))) * plotH;
+      formatTick = (g) => Math.round(g * 100) + '%';
+      valOf = (p) => typeof p.calibrated_pass_rate === 'number' ? p.calibrated_pass_rate : 0;
+    } else {
+      const maxErr = Math.max(...allPoints.map((p) => p.findings ? p.findings.hard : 0), 1);
+      const axis = computeNiceTicks(maxErr);
+      yTicks = axis.ticks;
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / axis.max))) * plotH;
+      formatTick = (g) => String(g);
+      valOf = (p) => p.findings ? p.findings.hard : 0;
+    }
+
+    const gridLines = yTicks.map((g, idx) => {
+      const y = yAt(g).toFixed(1);
+      const stroke = idx === 0 ? '#cbd5e1' : '#e2e8f0';
+      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="' + stroke + '" stroke-width="1"/>'
+        + '<text x="' + (padL - 9) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + esc(formatTick(g)) + '</text>';
+    }).join('');
+
+    // Deduplicate version-change markers across repos when timestamps fall in the same scan batch
+    const rawMarkers = [];
+    for (const s of seriesList) {
+      s.points.forEach((p, i) => {
+        if (!p.version_changed) return;
+        const prev = i > 0 ? s.points[i - 1] : null;
+        rawMarkers.push({
+          x: xFor(p, i, s.points.length),
+          label: formatVersionLabel(prev ? prev.judge_version : null, p.judge_version),
+          reasons: p.change_reasons || [],
+        });
+      });
+    }
+    rawMarkers.sort((a, b) => a.x - b.x);
+    const mergedMarkers = [];
+    for (const m of rawMarkers) {
+      const last = mergedMarkers[mergedMarkers.length - 1];
+      if (last && Math.abs(m.x - last.x) <= 36) {
+        if (!last.labels.includes(m.label)) last.labels.push(m.label);
+        for (const r of m.reasons) {
+          if (!last.reasons.includes(r)) last.reasons.push(r);
+        }
+      } else {
+        mergedMarkers.push({ x: m.x, labels: [m.label], reasons: [...m.reasons] });
+      }
+    }
+    const versionLines = mergedMarkers.map((m) => {
+      const x = m.x;
+      const anchor = x > W - padR - 95 ? 'end' : x < padL + 95 ? 'start' : 'middle';
+      const shortLabel = m.labels[0] + (m.labels.length > 1 ? ' (+' + (m.labels.length - 1) + ')' : '');
+      const fullTip = esc(m.reasons.join(' | ') || shortLabel);
+      return '<g>'
+        + '<line x1="' + x.toFixed(1) + '" y1="' + padT + '" x2="' + x.toFixed(1) + '" y2="' + (H - padB) + '" stroke="#d97706" stroke-width="1.4" stroke-dasharray="4 3"/>'
+        + '<text x="' + x.toFixed(1) + '" y="' + (padT - 8) + '" text-anchor="' + anchor + '" font-size="10.5" font-weight="600" fill="#b45309">' + esc(shortLabel) + '<title>Rubric / judge change: ' + fullTip + '</title></text>'
         + '</g>';
     }).join('');
 
-    const step = Math.max(1, Math.ceil(points.length / 6));
-    const xLabels = points.map((p, i) => {
-      if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
-      const x = xAt(i).toFixed(1);
-      return '<text x="' + x + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.commit_short) + '</text>';
+    // Render non-selected repos first so the selected repo sits cleanly on top
+    const orderedSeries = [
+      ...seriesList.filter((s) => s.repo !== selectedRepo),
+      ...seriesList.filter((s) => s.repo === selectedRepo),
+    ];
+
+    const endLabels = [];
+    const seriesMarkup = orderedSeries.map((s) => {
+      const isSelected = s.repo === selectedRepo;
+      const coords = s.points.map((p, i) => ({
+        x: xFor(p, i, s.points.length),
+        y: yAt(valOf(p)),
+        p,
+        i,
+      }));
+      const lineStr = coords.map((pt) => pt.x.toFixed(1) + ',' + pt.y.toFixed(1)).join(' ');
+      const lineOpacity = isSelected ? '1' : '0.82';
+      const strokeW = isSelected ? '2.8' : '2';
+      const lines = coords.length >= 2
+        ? '<polyline class="history-series-hit" data-history-repo="' + esc(s.repo) + '" fill="none" stroke="transparent" stroke-width="12" points="' + lineStr + '"/>'
+          + '<polyline fill="none" stroke="' + s.color + '" stroke-opacity="' + lineOpacity + '" stroke-width="' + strokeW + '" stroke-linecap="round" stroke-linejoin="round" points="' + lineStr + '"/>'
+        : '';
+
+      if (coords.length > 0) {
+        const last = coords[coords.length - 1];
+        endLabels.push({
+          repo: s.repo,
+          color: s.color,
+          isSelected,
+          x: last.x + 10,
+          y: last.y,
+          text: metric === 'rate' ? pct(valOf(last.p), 0) : String(valOf(last.p)),
+        });
+      }
+
+      const dots = coords.map((pt) => {
+        const isInspected = isSelected && historyMode === selectedMode && pt.i === selectedRunIdx;
+        const r = isInspected ? 5.8 : (isSelected ? 5 : 4.2);
+        const tip = esc(
+          s.repo + ' · ' + shortDate(pt.p.timestamp) + ' · ' + pt.p.commit_short + (pt.p.dirty ? ' (dirty)' : '')
+          + '\\nErrors (raw FAIL): ' + pt.p.findings.hard + ' (+' + pt.p.findings.borderline + ' borderline)'
+          + '\\nCalibrated pass: ' + pct(pt.p.calibrated_pass_rate) + ' | Raw pass: ' + pct(pt.p.raw_pass_rate)
+          + (pt.p.version_changed ? '\\nChange: ' + pt.p.change_reasons.join('; ') : '')
+        );
+        return '<g class="chart-point" role="button" tabindex="0" data-history-point="1" data-history-repo="' + esc(s.repo) + '" data-history-run-idx="' + pt.i + '" aria-label="' + esc(s.repo + ' ' + isoDay(pt.p.timestamp) + ' ' + (metric === 'rate' ? pct(valOf(pt.p)) : valOf(pt.p) + ' errors')) + '">'
+          + '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="11" fill="transparent"><title>' + tip + '</title></circle>'
+          + (isInspected ? '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="8.5" fill="none" stroke="' + s.color + '" stroke-opacity="0.32" stroke-width="2"/>' : '')
+          + '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="' + r + '" fill="' + s.color + '" stroke="#fff" stroke-width="1.6"><title>' + tip + '</title></circle>'
+          + '</g>';
+      }).join('');
+
+      return '<g>' + lines + dots + '</g>';
     }).join('');
 
-    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Errors trend chart">'
-      + gridLines + versionLines
-      + polyline((p) => p.findings.total, '#64748b', '5 3', 1.8)
-      + polyline((p) => p.findings.hard, '#b91c1c', '', 2.4)
-      + dots + xLabels + '</svg>';
+    // Avoid vertical collisions among right-end value labels
+    endLabels.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < endLabels.length; i += 1) {
+      if (endLabels[i].y - endLabels[i - 1].y < 13) {
+        endLabels[i].y = Math.min(H - padB - 2, endLabels[i - 1].y + 13);
+      }
+    }
+    const endLabelSvg = endLabels.map((lbl) =>
+      '<text x="' + Math.min(W - 4, lbl.x).toFixed(1) + '" y="' + (lbl.y + 3.5).toFixed(1) + '" text-anchor="start" font-size="10.5" font-weight="' + (lbl.isSelected ? '700' : '600') + '" fill="' + lbl.color + '">' + esc(lbl.text) + '</text>'
+    ).join('');
+
+    // Build clean, non-overlapping X-axis date ticks across all repos
+    const rawTicks = [];
+    for (const s of seriesList) {
+      s.points.forEach((p, i) => {
+        rawTicks.push({ x: xFor(p, i, s.points.length), timestamp: p.timestamp });
+      });
+    }
+    rawTicks.sort((a, b) => a.x - b.x);
+    const clusters = [];
+    for (const tk of rawTicks) {
+      const last = clusters[clusters.length - 1];
+      if (last && Math.abs(tk.x - last.x) <= 40) continue;
+      clusters.push({ x: tk.x, timestamp: tk.timestamp });
+    }
+    const chosenTicks = [];
+    if (clusters.length <= 6) {
+      for (const c of clusters) {
+        if (chosenTicks.length === 0 || c.x - chosenTicks[chosenTicks.length - 1].x >= 92) {
+          chosenTicks.push(c);
+        }
+      }
+      if (clusters.length >= 2 && chosenTicks[chosenTicks.length - 1] !== clusters[clusters.length - 1]) {
+        const lastCluster = clusters[clusters.length - 1];
+        if (chosenTicks.length > 1 && lastCluster.x - chosenTicks[chosenTicks.length - 1].x < 92) {
+          chosenTicks[chosenTicks.length - 1] = lastCluster;
+        } else if (lastCluster.x - chosenTicks[0].x >= 70) {
+          chosenTicks.push(lastCluster);
+        }
+      }
+    } else {
+      const step = Math.ceil((clusters.length - 1) / 5);
+      for (let i = 0; i < clusters.length; i += step) {
+        chosenTicks.push(clusters[i]);
+      }
+      const lastCluster = clusters[clusters.length - 1];
+      if (chosenTicks[chosenTicks.length - 1] !== lastCluster) {
+        if (lastCluster.x - chosenTicks[chosenTicks.length - 1].x < 92) {
+          chosenTicks[chosenTicks.length - 1] = lastCluster;
+        } else {
+          chosenTicks.push(lastCluster);
+        }
+      }
+    }
+    const dayCounts = {};
+    for (const tk of chosenTicks) {
+      const d = isoDay(tk.timestamp);
+      dayCounts[d] = (dayCounts[d] || 0) + 1;
+    }
+    const hasSameDay = Object.values(dayCounts).some((n) => n > 1);
+    const xLabels = chosenTicks.map((tk, idx) => {
+      const labelText = hasSameDay ? tk.timestamp.replace('T', ' ').slice(5, 16) : isoDay(tk.timestamp);
+      const anchor = idx === 0 && tk.x < padL + 60
+        ? 'start'
+        : (idx === chosenTicks.length - 1 && tk.x > W - padR - 60 ? 'end' : 'middle');
+      return '<text x="' + tk.x.toFixed(1) + '" y="' + (H - 10) + '" text-anchor="' + anchor + '" font-size="10.5" fill="#64748b">' + esc(labelText) + '</text>';
+    }).join('');
+
+    return {
+      hasVersionChanges: mergedMarkers.length > 0,
+      svg: '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Score history chart across repositories">'
+        + gridLines + versionLines + seriesMarkup + endLabelSvg + xLabels + '</svg>',
+    };
   }
 
-  function renderRateTrendSvg(points, activeIdx) {
-    const W = 820, H = 225, padL = 50, padR = 24, padT = 24, padB = 34;
-    const plotW = W - padL - padR;
-    const plotH = H - padT - padB;
-    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
-    const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
+  function showHistoryTooltip(pointEl) {
+    const stage = document.getElementById('history-chart-stage');
+    const tipEl = document.getElementById('history-tooltip');
+    if (!stage || !tipEl || !pointEl) return;
+    const repoName = pointEl.dataset.historyRepo;
+    const runIdx = Number(pointEl.dataset.historyRunIdx);
+    const repoObj = (DATA.repos || []).find((r) => r.name === repoName);
+    const series = repoObj && repoObj.by_mode ? repoObj.by_mode[historyMode] : null;
+    const pt = series && series.points ? series.points[runIdx] : null;
+    if (!pt) return;
+    const color = repoColor(repoName);
+    const changeHtml = pt.version_changed
+      ? '<div class="chart-tooltip-note">Change: ' + esc(pt.change_reasons.join(' · ')) + '</div>'
+      : '';
+    tipEl.innerHTML =
+      '<div class="chart-tooltip-head"><span class="history-legend-dot" style="background:' + color + '"></span><span>' + esc(repoName) + '</span></div>'
+      + '<div class="chart-tooltip-meta">' + esc(shortDate(pt.timestamp)) + ' · ' + esc(pt.commit_short) + (pt.dirty ? ' (dirty)' : '') + ' · ' + esc(pt.judge_version) + '</div>'
+      + '<div class="chart-tooltip-row"><span>Errors (raw FAIL)</span><strong>' + pt.findings.hard + ' (+' + pt.findings.borderline + 'w)</strong></div>'
+      + '<div class="chart-tooltip-row"><span>Calibrated pass</span><strong>' + pct(pt.calibrated_pass_rate) + '</strong></div>'
+      + '<div class="chart-tooltip-row"><span>Raw pass</span><span>' + pct(pt.raw_pass_rate) + '</span></div>'
+      + changeHtml
+      + '<div class="chart-tooltip-hint">Click point to inspect this snapshot</div>';
+    tipEl.hidden = false;
 
-    const gridLines = [0, 0.25, 0.5, 0.75, 1].map((g) => {
-      const y = yAt(g).toFixed(1);
-      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#e2e8f0" stroke-width="1"/>'
-        + '<text x="' + (padL - 8) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + Math.round(g * 100) + '%</text>';
+    const stageRect = stage.getBoundingClientRect();
+    const ptRect = pointEl.getBoundingClientRect();
+    const centerX = ptRect.left - stageRect.left + ptRect.width / 2;
+    const topY = ptRect.top - stageRect.top;
+    const tipW = tipEl.offsetWidth || 230;
+    const tipH = tipEl.offsetHeight || 110;
+    let left = centerX + 14;
+    if (left + tipW > stageRect.width - 8) {
+      left = Math.max(8, centerX - tipW - 14);
+    }
+    let top = topY - tipH / 2;
+    top = Math.max(6, Math.min(Math.max(6, stageRect.height - tipH - 6), top));
+    tipEl.style.left = left.toFixed(0) + 'px';
+    tipEl.style.top = top.toFixed(0) + 'px';
+  }
+
+  function hideHistoryTooltip() {
+    const tipEl = document.getElementById('history-tooltip');
+    if (tipEl) tipEl.hidden = true;
+  }
+
+  function renderHistory() {
+    const container = document.getElementById('history-root');
+    if (!container) return;
+    const repos = DATA.repos || [];
+    const modes = DATA.modes_present || [];
+    if (repos.length === 0 || modes.length === 0) {
+      container.innerHTML = '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>';
+      return;
+    }
+    if (!modes.includes(historyMode)) historyMode = defaultHistoryMode();
+
+    const seriesList = repos
+      .map((r) => {
+        const s = r.by_mode && r.by_mode[historyMode];
+        return s && s.points && s.points.length > 0
+          ? { repo: r.name, color: repoColor(r.name), points: s.points, latest: s.latest, previous: s.previous }
+          : null;
+      })
+      .filter(Boolean);
+
+    const hasTrend = seriesList.some((s) => s.points.length >= 2);
+    const subtitle = historyMetric === 'rate'
+      ? 'All tracked repos · Calibrated pass rate'
+      : 'All tracked repos · Open errors (raw FAIL)';
+
+    const metricTabs =
+      '<div class="tabs" role="tablist" aria-label="History metric">'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'errors' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'errors' ? ' active' : '') + '" data-history-metric="errors">Errors</button>'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'rate' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'rate' ? ' active' : '') + '" data-history-metric="rate">Pass rate</button>'
+      + '</div>';
+
+    const modeTabs =
+      '<div class="tabs" role="tablist" aria-label="History mode">'
+      + modes.map((m) =>
+        '<button type="button" role="tab" aria-selected="' + (m === historyMode ? 'true' : 'false') + '" class="tab-btn' + (m === historyMode ? ' active' : '') + '" data-history-mode="' + esc(m) + '">' + esc(modeLabel(m)) + '</button>'
+      ).join('')
+      + '</div>';
+
+    const header =
+      '<div class="panel-head" id="history-panel-head">'
+      + '<div><h2>Score history</h2><div class="muted" style="font-size:.8rem">' + esc(subtitle) + '</div></div>'
+      + '<div class="history-controls">'
+      + metricTabs
+      + '<div class="mode-control"><span class="control-label">Mode</span>' + modeTabs + '</div>'
+      + '</div>'
+      + '</div>';
+
+    if (!hasTrend) {
+      const timestamps = seriesList.map((s) => s.latest.timestamp).sort();
+      const firstDay = timestamps.length > 0 ? isoDay(timestamps[0]) : '—';
+      const rightMeta = seriesList.length > 0
+        ? seriesList.length + ' repo' + (seriesList.length === 1 ? '' : 's') + ' · 1 snapshot each'
+        : 'No snapshots in ' + modeLabel(historyMode) + ' mode';
+      container.innerHTML = header
+        + '<div class="single-run-note" id="history-single-run-note" style="margin-bottom:0">'
+        + '<span>First snapshot ' + esc(firstDay) + ' · trend appears after the next run</span>'
+        + '<span class="muted numeric">' + esc(rightMeta) + '</span>'
+        + '</div>';
+      return;
+    }
+
+    const chart = renderMultiRepoHistorySvg(seriesList, historyMetric);
+
+    const legendButtons = seriesList.map((s) => {
+      const isSelected = s.repo === selectedRepo;
+      let valText;
+      let deltaHtml = '';
+      if (historyMetric === 'rate') {
+        valText = pct(s.latest.calibrated_pass_rate);
+        if (s.previous) {
+          const dp = (s.latest.calibrated_pass_rate - s.previous.calibrated_pass_rate) * 100;
+          const cls = dp > 0.05 ? 'tone-good' : dp < -0.05 ? 'tone-bad' : 'muted';
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp</span>';
+        }
+      } else {
+        valText = s.latest.findings.hard + ' err';
+        if (s.previous) {
+          const dh = s.latest.findings.hard - s.previous.findings.hard;
+          const cls = dh < 0 ? 'tone-good' : dh > 0 ? 'tone-bad' : 'muted';
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + (dh > 0 ? '+' + dh : dh === 0 ? '±0' : String(dh)) + '</span>';
+        }
+      }
+      return '<button type="button" class="history-legend-btn' + (isSelected ? ' selected' : '') + '" data-history-repo="' + esc(s.repo) + '" aria-pressed="' + (isSelected ? 'true' : 'false') + '">'
+        + '<span class="history-legend-dot" style="background:' + s.color + '"></span>'
+        + '<span class="history-legend-name">' + esc(s.repo) + '</span>'
+        + '<span class="history-legend-val">' + esc(valText) + '</span>'
+        + deltaHtml
+        + '</button>';
     }).join('');
 
-    const versionLines = renderVersionMarkers(points, xAt, padT, H - padB);
+    const versionHint = chart.hasVersionChanges
+      ? '<span class="legend-item muted" style="margin-left:auto;font-size:.75rem"><span class="legend-swatch dashed-amber"></span>Version / rubric change</span>'
+      : '<span class="muted" style="margin-left:auto;font-size:.75rem">Click a repo or point to inspect</span>';
 
-    const polyline = (getter, stroke, dash) => {
-      const coords = points.map((p, i) => {
-        const val = getter(p);
-        return typeof val === 'number' && Number.isFinite(val) ? xAt(i).toFixed(1) + ',' + yAt(val).toFixed(1) : null;
-      }).filter(Boolean);
-      if (coords.length < 2) return '';
-      return '<polyline fill="none" stroke="' + stroke + '" stroke-width="2.2" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
-    };
-
-    const dots = points.map((p, i) => {
-      const x = xAt(i).toFixed(1);
-      const yc = yAt(p.calibrated_pass_rate).toFixed(1);
-      const yr = yAt(p.raw_pass_rate).toFixed(1);
-      const ym = typeof p.mean_pass_probability === 'number' ? yAt(p.mean_pass_probability).toFixed(1) : null;
-      const isActive = i === activeIdx;
-      const tip = esc(
-        shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nRaw pass: ' + pct(p.raw_pass_rate) + ' | Calibrated: ' + pct(p.calibrated_pass_rate)
-        + ' | Mean P(pass): ' + pct(p.mean_pass_probability)
-        + '\\nErrors: ' + p.findings.hard + ' (+' + p.findings.borderline + ' borderline)'
-      );
-      return '<g class="chart-point" role="button" tabindex="0" aria-label="Select snapshot ' + esc(isoDay(p.timestamp)) + '" data-select-run="' + i + '">'
-        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#2563eb" stroke-opacity="0.18" stroke-width="10"/>' : '')
-        + '<circle cx="' + x + '" cy="' + yc + '" r="' + (isActive ? 4.5 : 3.2) + '" fill="#0d9488" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>'
-        + (ym !== null ? '<circle cx="' + x + '" cy="' + ym + '" r="' + (isActive ? 4.2 : 3) + '" fill="#7c3aed" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>' : '')
-        + '<circle cx="' + x + '" cy="' + yr + '" r="' + (isActive ? 6 : 4.2) + '" fill="#2563eb" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>'
-        + '</g>';
-    }).join('');
-
-    const step = Math.max(1, Math.ceil(points.length / 6));
-    const xLabels = points.map((p, i) => {
-      if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
-      const x = xAt(i).toFixed(1);
-      return '<text x="' + x + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.commit_short) + '</text>';
-    }).join('');
-
-    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Pass rate trend chart">'
-      + gridLines + versionLines
-      + polyline((p) => p.calibrated_pass_rate, '#0d9488', '6 3')
-      + polyline((p) => p.mean_pass_probability, '#7c3aed', '2 4')
-      + polyline((p) => p.raw_pass_rate, '#2563eb', '')
-      + dots + xLabels + '</svg>';
+    container.innerHTML = header
+      + '<div class="chart-box history-panel-box">'
+      + '<div class="history-legend">' + legendButtons + versionHint + '</div>'
+      + '<div class="chart-stage" id="history-chart-stage">'
+      + '<div class="svg-wrap">' + chart.svg + '</div>'
+      + '<div class="chart-tooltip" id="history-tooltip" hidden></div>'
+      + '</div>'
+      + '</div>';
   }
 
   function renderFixtureTrendSvg(points) {
     const W = 820, H = 190, padL = 50, padR = 24, padT = 24, padB = 32;
-    const plotW = W - padL - padR;
+    const innerPadX = 18;
+    const xMin = padL + innerPadX;
+    const xMax = W - padR - innerPadX;
     const plotH = H - padT - padB;
-    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
+    const xAt = (i) => points.length <= 1 ? (xMin + xMax) / 2 : xMin + (i / (points.length - 1)) * (xMax - xMin);
     const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
 
     const grid = [0, 0.5, 1].map((g) => {
@@ -1456,7 +1783,10 @@ const CLIENT_SCRIPT = `
     const step = Math.max(1, Math.ceil(points.length / 6));
     const labels = points.map((p, i) => {
       if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
-      return '<text x="' + xAt(i).toFixed(1) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.judge_version) + '</text>';
+      const x = xAt(i);
+      const anchor = i === 0 ? 'start' : (i === points.length - 1 ? 'end' : 'middle');
+      const shortVer = String(p.judge_version || '').replace(/-\\d+-g[0-9a-f]+$/i, '');
+      return '<text x="' + x.toFixed(1) + '" y="' + (H - 10) + '" text-anchor="' + anchor + '" font-size="10.5" fill="#64748b">' + esc(isoDay(p.timestamp) + (shortVer ? ' · ' + shortVer : '')) + '</text>';
     }).join('');
 
     return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Rubric fixture pass rate trend">'
@@ -1546,7 +1876,7 @@ const CLIENT_SCRIPT = `
     }).join('');
 
     container.innerHTML =
-      '<div class="controls">'
+      '<div class="controls" id="heatmap-controls">'
       + '<div class="mode-control"><span class="control-label">Mode</span><div class="tabs" role="tablist" aria-label="Heatmap mode">' + modeTabs + '</div></div>'
       + '<select id="heat-group-select" aria-label="Filter rubric group">' + groupOptions + '</select>'
       + '<input type="search" id="heat-search-input" placeholder="Search rule ID..." value="' + esc(heatSearch) + '">'
@@ -1682,16 +2012,20 @@ const CLIENT_SCRIPT = `
       return '<button type="button" role="tab" aria-selected="' + (isSelected ? 'true' : 'false') + '" class="tab-btn' + (isSelected ? ' active' : '') + (!mSeries ? ' tab-muted' : '') + '" data-pick-mode="' + esc(m) + '">' + esc(modeLabel(m)) + esc(suffix) + '</button>';
     }).join('');
 
-    const headerMeta = '<code>' + esc(repoObj.latest_commit_short) + '</code>'
-      + (repoObj.latest_dirty ? ' <span class="pill warn">dirty</span>' : '')
-      + (repoObj.latest_branch ? ' · ' + esc(repoObj.latest_branch) : '')
+    const runMeta = series && run
+      ? ' · Run ' + (selectedRunIdx + 1) + '/' + series.points.length + ' · ' + esc(run.model)
+      : '';
+    const headerMeta = '<code>' + esc(run ? run.commit_short : repoObj.latest_commit_short) + '</code>'
+      + ((run ? run.dirty : repoObj.latest_dirty) ? ' <span class="pill warn">dirty</span>' : '')
+      + ((run ? run.branch : repoObj.latest_branch) ? ' · ' + esc(run ? run.branch : repoObj.latest_branch) : '')
       + ' · ' + repoObj.modes.length + ' ' + (repoObj.modes.length === 1 ? 'mode' : 'modes')
-      + ' · last run ' + esc(isoDay(repoObj.latest_timestamp));
+      + ' · ' + esc(isoDay(run ? run.timestamp : repoObj.latest_timestamp))
+      + runMeta;
 
     const detailHeader =
-      '<div class="panel-head">'
+      '<div class="panel-head" id="detail-panel-head">'
       + '<div><h2>' + esc(repoObj.name) + '</h2><div class="muted numeric" style="font-size:.79rem;margin-top:2px">' + headerMeta + '</div></div>'
-      + '<div class="mode-control"><span class="control-label">Mode</span><div class="tabs" role="tablist" aria-label="Select inspection mode">' + modeTabs + '</div></div>'
+      + '<div class="mode-control" id="detail-mode-bar"><span class="control-label">Mode</span><div class="tabs" role="tablist" aria-label="Select inspection mode">' + modeTabs + '</div></div>'
       + '</div>';
 
     if (!series || !run) {
@@ -1704,31 +2038,9 @@ const CLIENT_SCRIPT = `
       ? '<div class="filter-banner" id="active-rule-banner"><span>Filtered by rule <code>' + esc(activeRule) + '</code></span><button type="button" class="clear-btn" data-clear-rule>Clear filter &times;</button></div>'
       : '';
 
-    let trendBlock;
-    if (series.points.length < 2) {
-      trendBlock = '<div class="single-run-note">'
-        + '<span>First snapshot ' + esc(isoDay(run.timestamp)) + ' · trend appears after the next run</span>'
-        + '<span class="muted numeric">Run 1/1 · ' + esc(run.model) + '</span>'
-        + '</div>';
-    } else {
-      const legendItems = trendMetric === 'errors'
-        ? '<span class="legend-item"><span class="legend-swatch" style="background:#b91c1c"></span>Errors (raw FAIL)</span>'
-          + '<span class="legend-item"><span class="legend-swatch dashed-slate"></span>Total (incl. borderline)</span>'
-        : '<span class="legend-item"><span class="legend-swatch" style="background:#2563eb"></span>Raw pass rate</span>'
-          + '<span class="legend-item"><span class="legend-swatch dashed"></span>Calibrated pass rate</span>'
-          + '<span class="legend-item"><span class="legend-swatch dotted"></span>Mean P(pass)</span>';
-      trendBlock = '<div class="chart-box">'
-        + '<div class="chart-legend">'
-        + '<div class="tabs" role="tablist" aria-label="Trend metric">'
-        + '<button type="button" role="tab" aria-selected="' + (trendMetric === 'errors' ? 'true' : 'false') + '" class="tab-btn' + (trendMetric === 'errors' ? ' active' : '') + '" data-trend-metric="errors">Errors</button>'
-        + '<button type="button" role="tab" aria-selected="' + (trendMetric === 'rates' ? 'true' : 'false') + '" class="tab-btn' + (trendMetric === 'rates' ? ' active' : '') + '" data-trend-metric="rates">Pass rates</button>'
-        + '</div>'
-        + legendItems
-        + '<span class="muted numeric" style="margin-left:auto">Run ' + (selectedRunIdx + 1) + '/' + series.points.length + ' · ' + esc(run.model) + '</span>'
-        + '</div>'
-        + '<div class="svg-wrap">' + (trendMetric === 'errors' ? renderErrorsTrendSvg(series.points, selectedRunIdx) : renderRateTrendSvg(series.points, selectedRunIdx)) + '</div>'
-        + '</div>';
-    }
+    const historicalRunBanner = selectedRunIdx < series.points.length - 1
+      ? '<div class="hist-run-banner"><span>Inspecting historical snapshot <strong>Run ' + (selectedRunIdx + 1) + '/' + series.points.length + '</strong> (' + esc(shortDate(run.timestamp)) + ' · <code>' + esc(run.commit_short) + '</code>)</span><button type="button" class="clear-btn" data-select-run="' + (series.points.length - 1) + '">Jump to latest</button></div>'
+      : '';
 
     const versionBanner = run.version_changed
       ? '<div class="version-banner"><strong>Rubric / judge change at this snapshot:</strong> ' + esc(run.change_reasons.join(' · ')) + '</div>'
@@ -1860,12 +2172,12 @@ const CLIENT_SCRIPT = `
     }).join('');
 
     const historyOpen = series.points.length > 1 && series.points.length <= 10 ? ' open' : '';
-    const historyDetails = '<details style="margin-top:14px"' + historyOpen + '>'
+    const historyDetails = '<details id="run-history-details" style="margin-top:14px"' + historyOpen + '>'
       + '<summary class="panel-summary" style="font-size:.88rem"><span><strong>Run history</strong> (' + series.points.length + ' snapshot' + (series.points.length === 1 ? '' : 's') + ')</span></summary>'
       + '<div class="table-scroll" style="margin-top:8px"><table><thead><tr><th>Timestamp</th><th>Commit / Branch</th><th>Scope</th><th>Errors</th><th>Borderline</th><th>Error &Delta;</th><th>Calibrated</th><th>Judge version</th><th>Cost</th></tr></thead><tbody>' + runRows + '</tbody></table></div>'
       + '</details>';
 
-    container.innerHTML = detailHeader + activeRuleBanner + trendBlock + versionBanner + modeBody + historyDetails;
+    container.innerHTML = detailHeader + activeRuleBanner + historicalRunBanner + versionBanner + modeBody + historyDetails;
   }
 
   function renderFixtures() {
@@ -1934,14 +2246,15 @@ const CLIENT_SCRIPT = `
       + '</details>';
   }
 
-  function renderAll(pushHash) {
+  function renderAll() {
     ensureSelection();
+    renderHistory();
     renderHeatmap();
     renderRepoDetail();
-    syncUrlHash(Boolean(pushHash));
+    syncUrlHash();
   }
 
-  function selectRuleFilter(ruleId, scrollToDetail) {
+  function selectRuleFilter(ruleId, scrollToDetail, anchorSelector) {
     const nextRule = activeRule === ruleId && !scrollToDetail ? '' : ruleId;
     activeRule = nextRule;
     if (selectedMode === 'code') {
@@ -1950,10 +2263,12 @@ const CLIENT_SCRIPT = `
       fileSearch = nextRule;
     }
     showAllFiles = false;
-    renderAll(true);
     if (scrollToDetail) {
+      renderAll();
       const target = document.getElementById('hotspots-card') || document.getElementById('repo-detail-panel');
       if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      preserveViewportAnchor(anchorSelector || '#detail-mode-bar', () => renderAll());
     }
   }
 
@@ -1974,9 +2289,66 @@ const CLIENT_SCRIPT = `
       activeRule = rule || '';
       if (selectedMode === 'code') moduleSearch = activeRule;
       else fileSearch = activeRule;
-      renderAll(true);
+      renderAll();
       const target = document.getElementById('hotspots-card') || document.getElementById('repo-detail-panel');
       if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    const historyPoint = t.closest('[data-history-point]');
+    if (historyPoint) {
+      const repo = historyPoint.dataset.historyRepo;
+      const runIdx = Number(historyPoint.dataset.historyRunIdx);
+      if (repo) {
+        preserveViewportAnchor('#history-panel-head', () => {
+          selectedRepo = repo;
+          selectedMode = historyMode;
+          selectedRunIdx = Number.isFinite(runIdx) ? runIdx : null;
+          activeRule = '';
+          fileSearch = '';
+          moduleSearch = '';
+          showAllFiles = false;
+          expandedFiles = new Set();
+          renderAll();
+        });
+        const nextPt = [...document.querySelectorAll('[data-history-point]')].find(
+          (el) => el.dataset.historyRepo === repo && Number(el.dataset.historyRunIdx) === runIdx
+        );
+        if (nextPt) showHistoryTooltip(nextPt);
+      }
+      return;
+    }
+
+    const historyRepo = t.closest('[data-history-repo]');
+    if (historyRepo) {
+      const repo = historyRepo.dataset.historyRepo;
+      if (repo) {
+        preserveViewportAnchor('#history-panel-head', () => {
+          selectedRepo = repo;
+          selectedRunIdx = null;
+          showAllFiles = false;
+          expandedFiles = new Set();
+          renderAll();
+        });
+      }
+      return;
+    }
+
+    const historyModeBtn = t.closest('[data-history-mode]');
+    if (historyModeBtn) {
+      preserveViewportAnchor('#history-panel-head', () => {
+        historyMode = historyModeBtn.dataset.historyMode;
+        renderHistory();
+      });
+      return;
+    }
+
+    const historyMetricBtn = t.closest('[data-history-metric]');
+    if (historyMetricBtn) {
+      preserveViewportAnchor('#history-panel-head', () => {
+        historyMetric = historyMetricBtn.dataset.historyMetric;
+        renderHistory();
+      });
       return;
     }
 
@@ -1984,41 +2356,48 @@ const CLIENT_SCRIPT = `
     if (repoBtn) {
       const name = repoBtn.dataset.pickRepo;
       if (name) {
-        selectedRepo = name;
-        selectedRunIdx = null;
-        showAllFiles = false;
-        expandedFiles = new Set();
-        const repoObj = (DATA.repos || []).find((r) => r.name === name);
-        if (repoObj && repoObj.by_mode[heatmapMode]) {
-          selectedMode = heatmapMode;
-        }
-        renderAll(true);
+        preserveViewportAnchor('#heatmap-controls', () => {
+          selectedRepo = name;
+          selectedRunIdx = null;
+          showAllFiles = false;
+          expandedFiles = new Set();
+          const repoObj = (DATA.repos || []).find((r) => r.name === name);
+          if (repoObj && repoObj.by_mode[heatmapMode]) {
+            selectedMode = heatmapMode;
+          }
+          renderAll();
+        });
       }
       return;
     }
 
     const modeBtn = t.closest('[data-pick-mode]');
     if (modeBtn) {
-      selectedMode = modeBtn.dataset.pickMode;
-      selectedRunIdx = null;
-      activeRule = '';
-      fileSearch = '';
-      moduleSearch = '';
-      showAllFiles = false;
-      expandedFiles = new Set();
-      if (DATA.heatmaps && DATA.heatmaps[selectedMode]) {
-        heatmapMode = selectedMode;
-      }
-      renderAll(true);
+      preserveViewportAnchor('#detail-mode-bar', () => {
+        selectedMode = modeBtn.dataset.pickMode;
+        selectedRunIdx = null;
+        activeRule = '';
+        fileSearch = '';
+        moduleSearch = '';
+        showAllFiles = false;
+        expandedFiles = new Set();
+        ensureSelection();
+        renderHistory();
+        renderHeatmap();
+        renderRepoDetail();
+        syncUrlHash();
+      });
       return;
     }
 
     const clearRule = t.closest('[data-clear-rule]');
     if (clearRule) {
-      activeRule = '';
-      fileSearch = '';
-      moduleSearch = '';
-      renderAll(true);
+      preserveViewportAnchor('#detail-mode-bar', () => {
+        activeRule = '';
+        fileSearch = '';
+        moduleSearch = '';
+        renderAll();
+      });
       return;
     }
 
@@ -2026,17 +2405,21 @@ const CLIENT_SCRIPT = `
     if (expandFileBtn) {
       const path = expandFileBtn.dataset.expandFile;
       if (path) {
-        if (expandedFiles.has(path)) expandedFiles.delete(path);
-        else expandedFiles.add(path);
-        renderRepoDetail();
+        preserveViewportAnchor('#hotspots-card', () => {
+          if (expandedFiles.has(path)) expandedFiles.delete(path);
+          else expandedFiles.add(path);
+          renderRepoDetail();
+        });
       }
       return;
     }
 
     const toggleAllBtn = t.closest('[data-toggle-all-files]');
     if (toggleAllBtn) {
-      showAllFiles = !showAllFiles;
-      renderRepoDetail();
+      preserveViewportAnchor('#hotspots-card', () => {
+        showAllFiles = !showAllFiles;
+        renderRepoDetail();
+      });
       return;
     }
 
@@ -2044,29 +2427,53 @@ const CLIENT_SCRIPT = `
     if (ruleBtn) {
       if (t.closest('.tip-card')) return;
       const ruleId = ruleBtn.dataset.filterRule;
-      if (ruleId) selectRuleFilter(ruleId, false);
-      return;
-    }
-
-    const metricBtn = t.closest('[data-trend-metric]');
-    if (metricBtn) {
-      trendMetric = metricBtn.dataset.trendMetric;
-      renderRepoDetail();
+      if (ruleId) selectRuleFilter(ruleId, false, '#detail-mode-bar');
       return;
     }
 
     const runPick = t.closest('[data-select-run]');
     if (runPick) {
-      selectedRunIdx = Number(runPick.dataset.selectRun);
-      renderRepoDetail();
+      const anchor = runPick.closest('#run-history-details') ? '#run-history-details' : '#detail-mode-bar';
+      preserveViewportAnchor(anchor, () => {
+        selectedRunIdx = Number(runPick.dataset.selectRun);
+        renderHistory();
+        renderRepoDetail();
+      });
       return;
     }
 
     const heatBtn = t.closest('[data-heat-mode]');
     if (heatBtn) {
-      heatmapMode = heatBtn.dataset.heatMode;
-      heatGroup = '';
-      renderHeatmap();
+      preserveViewportAnchor('#heatmap-controls', () => {
+        heatmapMode = heatBtn.dataset.heatMode;
+        heatGroup = '';
+        renderHeatmap();
+      });
+    }
+  });
+
+  document.addEventListener('mouseover', (ev) => {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    const pt = t.closest('[data-history-point]');
+    if (pt) {
+      showHistoryTooltip(pt);
+    } else if (!t.closest('#history-tooltip')) {
+      hideHistoryTooltip();
+    }
+  });
+
+  document.addEventListener('focusin', (ev) => {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    const pt = t.closest('[data-history-point]');
+    if (pt) showHistoryTooltip(pt);
+  });
+
+  document.addEventListener('focusout', (ev) => {
+    const next = ev.relatedTarget;
+    if (!next || !next.closest || !next.closest('[data-history-point]')) {
+      hideHistoryTooltip();
     }
   });
 
@@ -2088,32 +2495,38 @@ const CLIENT_SCRIPT = `
     if (!t) return;
     if (t.id === 'file-search-input') {
       fileSearch = t.value;
-      if (activeRule && fileSearch.trim() !== activeRule) {
-        activeRule = '';
-        syncUrlHash(false);
-        renderHeatmap();
-      }
       const pos = t.selectionStart;
-      renderRepoDetail();
+      preserveViewportAnchor('#hotspots-card', () => {
+        if (activeRule && fileSearch.trim() !== activeRule) {
+          activeRule = '';
+          syncUrlHash();
+          renderHeatmap();
+        }
+        renderRepoDetail();
+      });
       const el = document.getElementById('file-search-input');
-      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+      if (el) { el.focus({ preventScroll: true }); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     } else if (t.id === 'module-search-input') {
       moduleSearch = t.value;
-      if (activeRule && moduleSearch.trim() !== activeRule) {
-        activeRule = '';
-        syncUrlHash(false);
-        renderHeatmap();
-      }
       const pos = t.selectionStart;
-      renderRepoDetail();
+      preserveViewportAnchor('#module-architecture-section', () => {
+        if (activeRule && moduleSearch.trim() !== activeRule) {
+          activeRule = '';
+          syncUrlHash();
+          renderHeatmap();
+        }
+        renderRepoDetail();
+      });
       const el = document.getElementById('module-search-input');
-      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+      if (el) { el.focus({ preventScroll: true }); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     } else if (t.id === 'heat-search-input') {
       heatSearch = t.value;
       const pos = t.selectionStart;
-      renderHeatmap();
+      preserveViewportAnchor('#heatmap-controls', () => {
+        renderHeatmap();
+      });
       const el = document.getElementById('heat-search-input');
-      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+      if (el) { el.focus({ preventScroll: true }); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     }
   });
 
@@ -2121,32 +2534,34 @@ const CLIENT_SCRIPT = `
     const t = ev.target;
     if (!t) return;
     if (t.id === 'failing-only-toggle') {
-      failingOnly = t.checked;
-      showAllFiles = false;
-      renderRepoDetail();
+      preserveViewportAnchor('#hotspots-card', () => {
+        failingOnly = t.checked;
+        showAllFiles = false;
+        renderRepoDetail();
+      });
     } else if (t.id === 'module-failing-only-toggle') {
-      moduleFailingOnly = t.checked;
-      renderRepoDetail();
+      preserveViewportAnchor('#module-architecture-section', () => {
+        moduleFailingOnly = t.checked;
+        renderRepoDetail();
+      });
     } else if (t.id === 'heat-group-select') {
-      heatGroup = t.value;
-      renderHeatmap();
+      preserveViewportAnchor('#heatmap-controls', () => {
+        heatGroup = t.value;
+        renderHeatmap();
+      });
     }
   });
 
   window.addEventListener('hashchange', () => {
-    if (lastWrittenHash !== null && window.location.hash === lastWrittenHash) {
-      lastWrittenHash = null;
-      return;
-    }
-    lastWrittenHash = null;
     applyHashState();
     ensureSelection();
+    renderHistory();
     renderHeatmap();
     renderRepoDetail();
   });
 
   applyHashState();
-  renderAll(false);
+  renderAll();
   renderFixtures();
 })();
 `;
@@ -2216,6 +2631,10 @@ ${warningsHtml}
       <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value kpi-value-sm ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-sub">${latestTag ? `Latest release ${escapeHtml(latestTag)}` : 'No release tag'}</div></div>
     </div>
   </div>
+</section>
+
+<section class="panel" id="history-panel" aria-label="Score history">
+  <div id="history-root">${model.repos.length === 0 ? '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>' : ''}</div>
 </section>
 
 <section class="panel" id="heatmap-panel">

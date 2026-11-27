@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildDashboardModel,
   computeNiceAxisTicks,
+  computeNiceRateAxis,
   formatToolingVersion,
   formatVersionDeltaLabel,
   generateDashboard,
@@ -1597,6 +1598,13 @@ test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no
   assert.deepEqual(computeNiceAxisTicks(12), { max: 15, ticks: [0, 5, 10, 15] });
   assert.deepEqual(computeNiceAxisTicks(0), { max: 4, ticks: [0, 2, 4] });
 
+  // 1b. Nice rounded pass-rate Y-axis ticks
+  assert.deepEqual(computeNiceRateAxis(0.864), { min: 0.8, max: 1, ticks: [0.8, 0.85, 0.9, 0.95, 1] });
+  assert.deepEqual(computeNiceRateAxis(0.65), { min: 0.6, max: 1, ticks: [0.6, 0.7, 0.8, 0.9, 1] });
+  assert.deepEqual(computeNiceRateAxis(0.464), { min: 0.4, max: 1, ticks: [0.4, 0.55, 0.7, 0.85, 1] });
+  assert.deepEqual(computeNiceRateAxis(0.3), { min: 0.25, max: 1, ticks: [0.25, 0.5, 0.75, 1] });
+  assert.deepEqual(computeNiceRateAxis(0.1), { min: 0, max: 1, ticks: [0, 0.25, 0.5, 0.75, 1] });
+
   // 2. Header/footer version deduplication
   assert.equal(formatToolingVersion('v2.2.0', 'v2.2.0'), 'v2.2.0');
   assert.equal(formatToolingVersion('v2.2.0', null), 'v2.2.0');
@@ -1765,14 +1773,40 @@ test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no
   assert.doesNotMatch(htmlNoModules, /Not scanned/);
   assert.doesNotMatch(htmlNoModules, /latest tag v2\.2\.0/i);
   assert.match(htmlNoModules, /agent-tooling <strong>v2\.2\.0<\/strong>/);
-  // Heatmap panel appears directly after KPI bar and before repo detail panel
+  // Top Score History sits directly under KPI bar, above Heatmap and Repo Detail
   const kpiPos = htmlNoModules.indexOf('class="kpi-bar"');
+  const historyPos = htmlNoModules.indexOf('id="history-panel"');
   const heatPos = htmlNoModules.indexOf('id="heatmap-panel"');
   const detailPos = htmlNoModules.indexOf('id="repo-detail-panel"');
-  assert.ok(kpiPos > 0 && heatPos > kpiPos && detailPos > heatPos, 'Heatmap must sit directly below KPI strip and above repo detail');
+  assert.ok(
+    kpiPos > 0 && historyPos > kpiPos && heatPos > historyPos && detailPos > heatPos,
+    'Score History must sit directly below KPI strip and above Cross-repo rule heatmap and repo detail',
+  );
 
-  // Client script handles single-run quiet status, Module Architecture setup note, fixture <details> collapse/open, and does not plot jitter on pass-rate chart
+  // Scroll-stability CSS: detail panel min-height + generous bottom page padding prevent scroll clamping
+  assert.match(htmlNoModules, /#repo-detail-panel\{min-height:/);
+  assert.match(htmlNoModules, /padding:20px 24px 160px/);
+
+  // Client script handles top multi-repo Score History, scroll anchoring, history.replaceState,
+  // independent mode toggles, single-run collapse, Module Architecture setup note, and fixture details
   const scriptBlock = /<script id="dashboard-data" type="application\/json">[\s\S]*?<\/script>\n<script>([\s\S]*?)<\/script>/.exec(htmlNoModules)?.[1] ?? '';
+  assert.match(scriptBlock, /function renderHistory\(/);
+  assert.match(scriptBlock, /function renderMultiRepoHistorySvg\(/);
+  assert.match(scriptBlock, /data-history-metric/);
+  assert.match(scriptBlock, /data-history-mode/);
+  assert.match(scriptBlock, /data-history-repo/);
+  assert.match(scriptBlock, /data-history-point/);
+  assert.match(scriptBlock, /history-tooltip/);
+  assert.doesNotMatch(scriptBlock, /data-trend-metric/, 'Duplicate trend chart controls must be removed from repo detail panel');
+  assert.doesNotMatch(scriptBlock, /window\.location\.hash\s*=(?!=)/, 'URL hash updates must use history.replaceState to prevent scroll jumps');
+  assert.match(scriptBlock, /window\.history\.replaceState\(null, '', next\)/);
+  assert.match(scriptBlock, /function preserveViewportAnchor\(/);
+  assert.match(scriptBlock, /preserveViewportAnchor\('#detail-mode-bar'/);
+  // Detail mode tab click must not overwrite heatmapMode or historyMode
+  const modeClickBlock = /const modeBtn = t\.closest\('\[data-pick-mode\]'\);[\s\S]*?return;\s*\}/.exec(scriptBlock)?.[0] ?? '';
+  assert.ok(modeClickBlock.length > 0, 'Detail mode click handler must exist');
+  assert.doesNotMatch(modeClickBlock, /heatmapMode\s*=/, 'Detail mode switch must keep heatmap mode independent');
+  assert.doesNotMatch(modeClickBlock, /historyMode\s*=/, 'Detail mode switch must keep history mode independent');
   assert.match(scriptBlock, /First snapshot /);
   assert.match(scriptBlock, /trend appears after the next run/);
   assert.match(scriptBlock, /Module architecture checks are off\. Add <code>modules<\/code> \/ <code>moduleRoots<\/code> to enable\./);
