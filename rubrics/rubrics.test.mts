@@ -354,7 +354,7 @@ test('pnpm test:rubrics --dry-run validates all 144 checked-in fixtures, rubrics
   assert.notEqual(conflict.status, 0);
   assert.match(conflict.stderr, /Cannot combine --model with --file-model or --module-model/);
 
-  // Verify --backend claude defaults to haiku (file) / sonnet (module) with numeric pass_threshold parity and supports overrides.
+  // Verify --backend claude defaults to haiku across file and module/structure modes with numeric pass_threshold parity and supports overrides.
   const claudeDry = spawnSync(
     process.execPath,
     [HARNESS_CLI, '--dry-run', '--json', '--backend', 'claude', '--rubric', 'readability'],
@@ -365,7 +365,7 @@ test('pnpm test:rubrics --dry-run validates all 144 checked-in fixtures, rubrics
   const claudeReport = JSON.parse(claudeDry.stdout) as RubricHarnessReport;
   assert.equal(claudeReport.backend, 'claude');
   assert.equal(claudeReport.models.file, 'haiku');
-  assert.equal(claudeReport.models.module, 'sonnet');
+  assert.equal(claudeReport.models.module, 'haiku');
   const namedExprCheck = claudeReport.fixtures
     .flatMap((f) => f.checks)
     .find((c) => c.check_id === 'named_domain_expressions');
