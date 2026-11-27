@@ -15,7 +15,11 @@ import {
   type JudgeMode,
   type RubricApplicability,
 } from '../skills/judge-code/scripts/rubrics.mts';
-import type { JudgeBackend } from '../skills/judge-code/scripts/decisions.mts';
+import {
+  ERROR_SCORE_THRESHOLD,
+  probabilityToScore,
+  type JudgeBackend,
+} from '../skills/judge-code/scripts/decisions.mts';
 import { AUTHORITATIVE_RUBRICS_DIR, sha256File } from './sync.mts';
 
 export const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -44,23 +48,32 @@ export interface SnapshotCheckSummary {
   total: number;
   pass_rate: number;
   raw_pass_rate: number;
-  mean_pass_probability: number | null;
-  min_pass_probability: number | null;
+  mean_score?: number | null;
+  min_score?: number | null;
+  /** Legacy 0..1 fields from historical snapshots prior to the 0-100 score scale. */
+  mean_pass_probability?: number | null;
+  min_pass_probability?: number | null;
 }
 
 export interface SnapshotFileCheckScore {
   choice: 'pass' | 'fail';
+  severity?: 'error' | 'warning';
   model_choice?: 'pass' | 'borderline' | 'fail';
-  pass_probability: number | null;
-  confidence: number | null;
+  score?: number | null;
+  /** Legacy 0..1 fields from historical snapshots prior to the 0-100 score scale. */
+  pass_probability?: number | null;
+  confidence?: number | null;
 }
 
 export interface SnapshotFileEntry {
   path: string;
   pass_rate: number;
   raw_pass_rate: number;
-  mean_pass_probability: number | null;
-  min_pass_probability: number | null;
+  mean_score?: number | null;
+  min_score?: number | null;
+  /** Legacy 0..1 fields from historical snapshots. */
+  mean_pass_probability?: number | null;
+  min_pass_probability?: number | null;
   failed_count: number;
   checks: Record<string, SnapshotFileCheckScore>;
 }
@@ -84,8 +97,11 @@ export interface SnapshotModuleEntry {
   ignore?: string[];
   pass_rate: number | null;
   raw_pass_rate: number | null;
-  mean_pass_probability: number | null;
-  min_pass_probability: number | null;
+  mean_score?: number | null;
+  min_score?: number | null;
+  /** Legacy 0..1 fields from historical snapshots. */
+  mean_pass_probability?: number | null;
+  min_pass_probability?: number | null;
   failed_count: number;
   hard_fail_count: number;
   borderline_count: number;
@@ -136,7 +152,9 @@ export interface RepoSnapshot {
     calibrated_pass_rate: number;
     raw_pass_rate: number;
     all_files_pass_rate?: number;
-    mean_pass_probability: number | null;
+    mean_score?: number | null;
+    /** Legacy 0..1 field from historical snapshots. */
+    mean_pass_probability?: number | null;
     elapsed_ms: number;
     cost_usd: number | null;
     requests: number;
@@ -157,9 +175,13 @@ export interface FixtureCheckSnapshot {
   matches: number;
   repeats: number;
   pass_threshold: number | null;
-  min_pass_probability: number | null;
-  max_pass_probability: number | null;
-  mean_pass_probability: number | null;
+  min_score?: number | null;
+  max_score?: number | null;
+  mean_score?: number | null;
+  /** Legacy 0..1 fields from historical snapshots. */
+  min_pass_probability?: number | null;
+  max_pass_probability?: number | null;
+  mean_pass_probability?: number | null;
   margin: number | null;
   jitter: number | null;
 }
@@ -245,13 +267,73 @@ export function compareCodepoint(a: string, b: string): number {
   return 0;
 }
 
+/** Normalize a check score from either the 0-100 `score` field or legacy 0..1 `pass_probability`. */
+export function normalizeScore(
+  check: { score?: number | null; pass_probability?: number | null } | null | undefined,
+): number | null {
+  if (!check) return null;
+  if (typeof check.score === 'number' && Number.isFinite(check.score)) return check.score;
+  if (typeof check.pass_probability === 'number' && Number.isFinite(check.pass_probability)) {
+    return probabilityToScore(check.pass_probability);
+  }
+  return null;
+}
+
+/** Normalize a mean score from either 0-100 `mean_score` or legacy 0..1 `mean_pass_probability`. */
+export function normalizeMeanScore(
+  entry: { mean_score?: number | null; mean_pass_probability?: number | null } | null | undefined,
+): number | null {
+  if (!entry) return null;
+  if (typeof entry.mean_score === 'number' && Number.isFinite(entry.mean_score)) return entry.mean_score;
+  if (typeof entry.mean_pass_probability === 'number' && Number.isFinite(entry.mean_pass_probability)) {
+    return probabilityToScore(entry.mean_pass_probability);
+  }
+  return null;
+}
+
+/** Normalize a min score from either 0-100 `min_score` or legacy 0..1 `min_pass_probability`. */
+export function normalizeMinScore(
+  entry: { min_score?: number | null; min_pass_probability?: number | null } | null | undefined,
+): number | null {
+  if (!entry) return null;
+  if (typeof entry.min_score === 'number' && Number.isFinite(entry.min_score)) return entry.min_score;
+  if (typeof entry.min_pass_probability === 'number' && Number.isFinite(entry.min_pass_probability)) {
+    return probabilityToScore(entry.min_pass_probability);
+  }
+  return null;
+}
+
+/** Normalize a max score from either 0-100 `max_score` or legacy 0..1 `max_pass_probability`. */
+export function normalizeMaxScore(
+  entry: { max_score?: number | null; max_pass_probability?: number | null } | null | undefined,
+): number | null {
+  if (!entry) return null;
+  if (typeof entry.max_score === 'number' && Number.isFinite(entry.max_score)) return entry.max_score;
+  if (typeof entry.max_pass_probability === 'number' && Number.isFinite(entry.max_pass_probability)) {
+    return probabilityToScore(entry.max_pass_probability);
+  }
+  return null;
+}
+
+/** Normalize a pass threshold from either 0-100 (e.g. 80) or legacy (0, 1] (e.g. 0.8) onto 0-100. */
+export function normalizeThreshold(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value > 0 && value <= 1 ? probabilityToScore(value) : value;
+}
+
 export function classifyCheckFailure(
-  check: Pick<SnapshotFileCheckScore, 'choice' | 'model_choice' | 'pass_probability'>,
+  check: Pick<SnapshotFileCheckScore, 'choice' | 'severity' | 'model_choice' | 'score' | 'pass_probability'>,
 ): CheckFailureKind {
   if (check.choice !== 'fail') return null;
+  if (check.severity === 'error') return 'hard';
+  if (check.severity === 'warning') return 'borderline';
+  const score = normalizeScore(check);
+  if (score !== null) {
+    return score < ERROR_SCORE_THRESHOLD ? 'hard' : 'borderline';
+  }
   if (check.model_choice === 'fail') return 'hard';
-  if (check.model_choice === 'pass' || check.model_choice === 'borderline') return 'borderline';
-  return typeof check.pass_probability === 'number' && check.pass_probability >= 0.5 ? 'borderline' : 'hard';
+  if (check.model_choice === 'borderline') return 'borderline';
+  return 'hard';
 }
 
 export function countChecksFindings(checks: Record<string, SnapshotFileCheckScore>): FindingCounts {
@@ -427,9 +509,10 @@ export function loadRubricCatalog(
       else if (target === 'review') scope = 'review';
       else scope = rawScope === 'file' ? 'file' : 'module';
 
-      const passThreshold = q.pass_threshold !== undefined
+      const rawPassThreshold = q.pass_threshold !== undefined
         ? parsePassThreshold(q.pass_threshold, checkId)
         : PASS_THRESHOLD;
+      const passThreshold = probabilityToScore(rawPassThreshold);
       const criteria = q.criteria && typeof q.criteria === 'object' && !Array.isArray(q.criteria)
         ? (q.criteria as Record<string, unknown>)
         : {};

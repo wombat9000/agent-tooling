@@ -1,12 +1,14 @@
 import { join } from 'node:path';
 import {
+  DEFAULT_PASS_SCORE,
+  ERROR_SCORE_THRESHOLD,
   findingSeverity,
+  probabilityToScore,
   type FindingSeverity,
   type JudgeResult,
   type Judgment,
 } from './decisions.mts';
 import {
-  PASS_THRESHOLD,
   formatApplicability,
   type BundledRubricSummary,
   type CheckScope,
@@ -44,14 +46,14 @@ interface TargetBlock {
   findings: TargetFinding[];
   errorCount: number;
   warningCount: number;
-  minProb: number;
+  minScore: number;
 }
 
 interface RuleStat {
   id: string;
   errors: number;
   warnings: number;
-  minProb: number;
+  minScore: number;
 }
 
 function formatElapsed(ms: number | undefined): string {
@@ -65,32 +67,40 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
 }
 
 export function formatThreshold(value: number): string {
-  const fixed2 = value.toFixed(2);
-  if (Math.abs(Number(fixed2) - value) < 1e-9) return fixed2;
-  return String(Number(value.toFixed(4)));
+  const score = value > 0 && value <= 1 ? probabilityToScore(value) : value;
+  const rounded = Number(score.toFixed(1));
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
 function checkThreshold(result: JudgeResult, id: string, check?: Judgment): number | null {
   return check?.pass_threshold ?? result.check_thresholds?.[id] ?? result.pass_threshold;
 }
 
-function formatProb(value: number | null | undefined, threshold?: number | null): string {
-  if (typeof value !== 'number') return 'n/a';
-  const rounded = value.toFixed(2);
-  if (typeof threshold === 'number' && value < threshold && Number(rounded) >= threshold) {
-    return (Math.floor(value * 1000) / 1000).toFixed(3);
+export function formatScore(value: number | null | undefined, threshold?: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
+  const rounded = Math.round(value);
+  const boundaries: number[] = [ERROR_SCORE_THRESHOLD];
+  if (typeof threshold === 'number' && Number.isFinite(threshold)) {
+    boundaries.push(threshold);
   }
-  return rounded;
+  for (const boundary of boundaries) {
+    if (value < boundary && rounded >= boundary) {
+      const floored = Math.floor(value * 10) / 10;
+      const maxBelow = Number((boundary - 0.1).toFixed(1));
+      return Math.min(floored, maxBelow).toFixed(1);
+    }
+  }
+  return String(rounded);
 }
 
 function formatFindingDetail(finding: TargetFinding): string {
   const { check, severity, threshold } = finding;
-  if (typeof check.pass_probability === 'number') {
-    const prob = formatProb(check.pass_probability, threshold);
-    if (severity === 'warning' && typeof threshold === 'number') {
-      return `(${prob} < ${formatThreshold(threshold)})`;
+  if (typeof check.score === 'number') {
+    const score = formatScore(check.score, threshold);
+    if (typeof threshold === 'number') {
+      return `(score ${score}/100, pass >= ${formatThreshold(threshold)})`;
     }
-    return `(${prob})`;
+    return `(score ${score}/100)`;
   }
   if (check.note) return `(${check.note})`;
   return severity === 'warning' ? '(borderline)' : '(fail)';
@@ -117,9 +127,9 @@ function extractTargetFindings(
   findings.sort((a, b) => {
     const sevDiff = Number(b.severity === 'error') - Number(a.severity === 'error');
     if (sevDiff !== 0) return sevDiff;
-    const pa = a.check.pass_probability ?? 0;
-    const pb = b.check.pass_probability ?? 0;
-    if (pa !== pb) return pa - pb;
+    const sa = a.check.score ?? 0;
+    const sb = b.check.score ?? 0;
+    if (sa !== sb) return sa - sb;
     return a.id.localeCompare(b.id);
   });
   return findings;
@@ -128,18 +138,18 @@ function extractTargetFindings(
 function buildTargetBlock(label: string, findings: TargetFinding[]): TargetBlock {
   let errorCount = 0;
   let warningCount = 0;
-  const probs: number[] = [];
+  const scores: number[] = [];
   for (const f of findings) {
     if (f.severity === 'error') errorCount += 1;
     else warningCount += 1;
-    if (typeof f.check.pass_probability === 'number') probs.push(f.check.pass_probability);
+    if (typeof f.check.score === 'number') scores.push(f.check.score);
   }
   return {
     label,
     findings,
     errorCount,
     warningCount,
-    minProb: probs.length > 0 ? Math.min(...probs) : 0,
+    minScore: scores.length > 0 ? Math.min(...scores) : 0,
   };
 }
 
@@ -149,22 +159,22 @@ function collectRuleStats(blocks: TargetBlock[]): RuleStat[] {
     for (const f of block.findings) {
       let stat = byRule.get(f.id);
       if (!stat) {
-        stat = { id: f.id, errors: 0, warnings: 0, minProb: Number.POSITIVE_INFINITY };
+        stat = { id: f.id, errors: 0, warnings: 0, minScore: Number.POSITIVE_INFINITY };
         byRule.set(f.id, stat);
       }
       if (f.severity === 'error') stat.errors += 1;
       else stat.warnings += 1;
-      if (typeof f.check.pass_probability === 'number') {
-        stat.minProb = Math.min(stat.minProb, f.check.pass_probability);
+      if (typeof f.check.score === 'number') {
+        stat.minScore = Math.min(stat.minScore, f.check.score);
       }
     }
   }
   return [...byRule.values()].sort((a, b) => {
     if (b.errors !== a.errors) return b.errors - a.errors;
     if (b.warnings !== a.warnings) return b.warnings - a.warnings;
-    const pa = Number.isFinite(a.minProb) ? a.minProb : 0;
-    const pb = Number.isFinite(b.minProb) ? b.minProb : 0;
-    if (pa !== pb) return pa - pb;
+    const sa = Number.isFinite(a.minScore) ? a.minScore : 0;
+    const sb = Number.isFinite(b.minScore) ? b.minScore : 0;
+    if (sa !== sb) return sa - sb;
     return a.id.localeCompare(b.id);
   });
 }
@@ -206,7 +216,10 @@ function formatRuleCriteria(
     if (!question) continue;
     const group = findRuleGroup(rule.id, groups);
     const scope = rubric.scopes?.[rule.id];
-    const threshold = rubric.thresholds?.[rule.id] ?? checkThreshold(result, rule.id);
+    const rawRubricThreshold = rubric.thresholds?.[rule.id];
+    const threshold = rawRubricThreshold !== undefined
+      ? (rawRubricThreshold > 0 && rawRubricThreshold <= 1 ? probabilityToScore(rawRubricThreshold) : rawRubricThreshold)
+      : checkThreshold(result, rule.id);
     const meta: string[] = [];
     if (group) meta.push(group);
     if (scope) meta.push(scope);
@@ -234,8 +247,8 @@ export function formatRubricList(
     return rubrics.map((rubric) => {
       const tag = formatTags(rubric);
       const checks = rubric.checks.map((id) => {
-        const threshold = rubric.thresholds[id];
-        const thresholdNote = threshold !== PASS_THRESHOLD ? `, >=${formatThreshold(threshold)}` : '';
+        const threshold = probabilityToScore(rubric.thresholds[id]);
+        const thresholdNote = threshold !== DEFAULT_PASS_SCORE ? `, >=${formatThreshold(threshold)}` : '';
         return `${id} [${rubric.scopes[id]}${thresholdNote}]`;
       }).join(', ');
       return `${rubric.slug} (${rubric.id})${tag}: ${checks}`;
@@ -247,7 +260,7 @@ export function formatRubricList(
     const lines = [`${rubric.slug} (${rubric.id})${tag}`];
     for (const id of rubric.checks) {
       const question = rubric.questions[id];
-      lines.push(`  ${id} [${rubric.scopes[id]}, >=${formatThreshold(rubric.thresholds[id])}]`);
+      lines.push(`  ${id} [${rubric.scopes[id]}, >=${formatThreshold(probabilityToScore(rubric.thresholds[id]))}]`);
       lines.push(`    instructions: ${question.instructions}`);
       lines.push(`    pass: ${question.criteria.pass}`);
       lines.push(`    fail: ${question.criteria.fail}`);
@@ -266,7 +279,7 @@ export function formatRuleExplanations(rules: RuleDefinition[]): string {
       `  rubric: ${rubricLabel}`,
       ...(rule.appliesTo ? [`  applies: ${formatApplicability(rule.appliesTo)}`] : []),
       `  scope: ${rule.scope}`,
-      `  threshold: >=${formatThreshold(rule.threshold)}`,
+      `  threshold: >=${formatThreshold(probabilityToScore(rule.threshold))}`,
       `  instructions: ${rule.instructions}`,
       `  pass: ${rule.criteria.pass}`,
       `  fail: ${rule.criteria.fail}`,
@@ -276,7 +289,7 @@ export function formatRuleExplanations(rules: RuleDefinition[]): string {
 
 /**
  * Render ESLint-style linter punch-list output for stdout.
- * Lists only files/modules with findings sorted worst-first (errors, warnings, min P(pass)),
+ * Lists only files/modules with findings sorted worst-first (errors, warnings, min score),
  * followed by a compact rule breakdown, a Rule criteria legend for triggered rules, and a final summary line.
  */
 export function formatLinterOutput(result: JudgeResult, options: FormatLinterOptions = {}): string {
@@ -411,7 +424,7 @@ export function formatLinterOutput(result: JudgeResult, options: FormatLinterOpt
   blocks.sort((a, b) => {
     if (b.errorCount !== a.errorCount) return b.errorCount - a.errorCount;
     if (b.warningCount !== a.warningCount) return b.warningCount - a.warningCount;
-    if (a.minProb !== b.minProb) return a.minProb - b.minProb;
+    if (a.minScore !== b.minScore) return a.minScore - b.minScore;
     return a.label.localeCompare(b.label);
   });
 

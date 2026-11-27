@@ -15,12 +15,14 @@ import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scr
 import {
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
+  probabilityToScore,
   runDecisionJudge,
   runWithConcurrency,
   type JudgeBackend,
   type JudgeResult,
   type JudgeRunOptions,
 } from '../skills/judge-code/scripts/decisions.mts';
+import { formatThreshold } from '../skills/judge-code/scripts/format.mts';
 import {
   PASS_THRESHOLD,
   matchesFileApplicability,
@@ -95,9 +97,9 @@ export interface ModeEvaluationSummary {
   matches: number;
   repeats: number;
   choices: Array<ExpectedChoice | 'error'>;
-  pass_probabilities: Array<number | null>;
-  min_pass_probability: number | null;
-  max_pass_probability: number | null;
+  scores: Array<number | null>;
+  min_score: number | null;
+  max_score: number | null;
   errors: string[];
 }
 
@@ -132,10 +134,10 @@ export interface ModeSignalStats {
   pass_fixtures_passed: number;
   fail_fixtures_total: number;
   fail_fixtures_passed: number;
-  good_min_p: number | null;
-  good_max_p: number | null;
-  bad_min_p: number | null;
-  bad_max_p: number | null;
+  good_min_score: number | null;
+  good_max_score: number | null;
+  bad_min_score: number | null;
+  bad_max_score: number | null;
 }
 
 export interface CriterionSignalSummary {
@@ -709,11 +711,11 @@ function computeModeSignalStats(
   const passEntries = entries.filter((e) => e.expected === 'pass');
   const failEntries = entries.filter((e) => e.expected === 'fail');
 
-  const collectProbs = (list: ReadonlyArray<{ summary?: ModeEvaluationSummary }>) => {
+  const collectScores = (list: ReadonlyArray<{ summary?: ModeEvaluationSummary }>) => {
     const nums: number[] = [];
     for (const item of list) {
-      for (const p of item.summary?.pass_probabilities ?? []) {
-        if (typeof p === 'number' && Number.isFinite(p)) nums.push(p);
+      for (const s of item.summary?.scores ?? []) {
+        if (typeof s === 'number' && Number.isFinite(s)) nums.push(s);
       }
     }
     return {
@@ -724,8 +726,8 @@ function computeModeSignalStats(
 
   const passPassed = passEntries.filter((e) => e.summary?.passed === true).length;
   const failPassed = failEntries.filter((e) => e.summary?.passed === true).length;
-  const goodProbs = collectProbs(passEntries);
-  const badProbs = collectProbs(failEntries);
+  const goodScores = collectScores(passEntries);
+  const badScores = collectScores(failEntries);
 
   const allEvaluated = entries.length > 0 && entries.every((e) => e.summary !== undefined);
   const canClassify = !dryRun && allEvaluated && passEntries.length > 0 && failEntries.length > 0;
@@ -739,10 +741,10 @@ function computeModeSignalStats(
     pass_fixtures_passed: dryRun ? 0 : passPassed,
     fail_fixtures_total: failEntries.length,
     fail_fixtures_passed: dryRun ? 0 : failPassed,
-    good_min_p: goodProbs.min,
-    good_max_p: goodProbs.max,
-    bad_min_p: badProbs.min,
-    bad_max_p: badProbs.max,
+    good_min_score: goodScores.min,
+    good_max_score: goodScores.max,
+    bad_min_score: badScores.min,
+    bad_max_score: badScores.max,
   };
 }
 
@@ -997,7 +999,9 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     const checks: CheckEvaluationSummary[] = Object.entries(fixture.expect).map(([checkId, expected]) => {
       const declaredScope = resolved.scopes[checkId];
       const rubricSlug = findRubricSlugForCheck(resolved, checkId);
-      const threshold = backend === 'openrouter' ? (resolved.thresholds[checkId] ?? PASS_THRESHOLD) : null;
+      const threshold = backend === 'openrouter'
+        ? probabilityToScore(resolved.thresholds[checkId] ?? PASS_THRESHOLD)
+        : null;
 
       const modeSummaries: Partial<Record<HarnessExecutionMode, ModeEvaluationSummary>> = {};
 
@@ -1018,37 +1022,37 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
             matches: 0,
             repeats: 0,
             choices: [],
-            pass_probabilities: [],
-            min_pass_probability: null,
-            max_pass_probability: null,
+            scores: [],
+            min_score: null,
+            max_score: null,
             errors: modeErrors,
           };
           continue;
         }
 
         const choices: Array<ExpectedChoice | 'error'> = [];
-        const probs: Array<number | null> = [];
+        const scores: Array<number | null> = [];
         let matches = 0;
 
         for (const outcome of modeOutcomes) {
           const judgment = outcome.result?.status === 'scored' ? outcome.result.quality?.checks[checkId] : undefined;
           if (!judgment) {
             choices.push('error');
-            probs.push(null);
+            scores.push(null);
             continue;
           }
           choices.push(judgment.choice);
-          // In per-file mode, aggregatePerFile gates pass/fail on the weakest file (min_pass_probability).
-          const prob = typeof judgment.min_pass_probability === 'number'
-            ? judgment.min_pass_probability
-            : judgment.pass_probability;
-          probs.push(prob);
+          // In per-file mode, aggregatePerFile gates pass/fail on the weakest file (min_score).
+          const score = typeof judgment.min_score === 'number'
+            ? judgment.min_score
+            : judgment.score;
+          scores.push(score);
           if (judgment.choice === expected) matches += 1;
         }
 
-        const numericProbs = probs.filter((p): p is number => typeof p === 'number');
-        const minProb = numericProbs.length > 0 ? Math.min(...numericProbs) : null;
-        const maxProb = numericProbs.length > 0 ? Math.max(...numericProbs) : null;
+        const numericScores = scores.filter((s): s is number => typeof s === 'number');
+        const minScore = numericScores.length > 0 ? Math.min(...numericScores) : null;
+        const maxScore = numericScores.length > 0 ? Math.max(...numericScores) : null;
 
         modeSummaries[execMode] = {
           mode: execMode,
@@ -1058,9 +1062,9 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
           matches,
           repeats: effectiveRepeats,
           choices,
-          pass_probabilities: probs,
-          min_pass_probability: minProb,
-          max_pass_probability: maxProb,
+          scores,
+          min_score: minScore,
+          max_score: maxScore,
           errors: modeErrors,
         };
       }
@@ -1126,10 +1130,15 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
   };
 }
 
-function formatProbBounds(min: number | null, max: number | null): string {
+function formatScoreVal(value: number): string {
+  const rounded = Number(value.toFixed(1));
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function formatScoreBounds(min: number | null, max: number | null): string {
   if (min === null || max === null) return '-';
-  const lo = min.toFixed(2);
-  const hi = max.toFixed(2);
+  const lo = formatScoreVal(min);
+  const hi = formatScoreVal(max);
   return lo === hi ? lo : `${lo}..${hi}`;
 }
 
@@ -1137,17 +1146,17 @@ function formatModeCell(summary: ModeEvaluationSummary | undefined, dryRun: bool
   if (!summary) return '-';
   if (dryRun) return summary.errors.length === 0 ? 'ok' : 'err';
   const verdict = summary.passed ? 'ok' : `${summary.matches}/${summary.repeats}`;
-  const prob = formatProbBounds(summary.min_pass_probability, summary.max_pass_probability);
+  const score = formatScoreBounds(summary.min_score, summary.max_score);
   const suffix = summary.enforced ? '' : ' (info)';
-  return `${verdict} ${prob}${suffix}`;
+  return `${verdict} ${score}${suffix}`;
 }
 
 function formatSignalCell(stats: ModeSignalStats, dryRun: boolean): string {
   if (dryRun) return `dry-run (G:${stats.pass_fixtures_total} B:${stats.fail_fixtures_total})`;
   if (stats.signal === null) return `incomplete (G:${stats.pass_fixtures_total} B:${stats.fail_fixtures_total})`;
   const label = stats.signal ? 'yes' : 'no';
-  const gRange = formatProbBounds(stats.good_min_p, stats.good_max_p);
-  const bRange = formatProbBounds(stats.bad_min_p, stats.bad_max_p);
+  const gRange = formatScoreBounds(stats.good_min_score, stats.good_max_score);
+  const bRange = formatScoreBounds(stats.bad_min_score, stats.bad_max_score);
   if (gRange === '-' && bRange === '-') return label;
   return `${label} (G:${gRange} B:${bRange})`;
 }
@@ -1177,11 +1186,11 @@ export function formatReportTable(report: RubricHarnessReport): string {
     if (subset.length === 0) return;
     lines.push('');
     if (heading) lines.push(heading);
-    const headers = ['Fixture', 'Files', 'Scope', 'Check', 'Expect', 'File (P)', 'Module (P)', 'Thr', 'Status'];
+    const headers = ['Fixture', 'Files', 'Scope', 'Check', 'Expect', 'File (Score)', 'Module (Score)', 'Thr', 'Status'];
     const rows: string[][] = [];
     for (const fixture of subset) {
       for (const check of fixture.checks) {
-        const thr = check.pass_threshold !== null ? `>=${check.pass_threshold.toFixed(2)}` : '-';
+        const thr = check.pass_threshold !== null ? `>=${formatThreshold(check.pass_threshold)}` : '-';
         const status = report.dry_run
           ? (fixture.status === 'dry_run' ? 'OK' : 'ERROR')
           : fixture.status === 'error'
@@ -1211,11 +1220,11 @@ export function formatReportTable(report: RubricHarnessReport): string {
   if (structFixtures.length > 0) {
     lines.push('');
     lines.push('Project Structure Fixtures:');
-    const headers = ['Fixture', 'Files', 'Check', 'Expect', 'Structure (P)', 'Thr', 'Status'];
+    const headers = ['Fixture', 'Files', 'Check', 'Expect', 'Structure (Score)', 'Thr', 'Status'];
     const rows: string[][] = [];
     for (const fixture of structFixtures) {
       for (const check of fixture.checks) {
-        const thr = check.pass_threshold !== null ? `>=${check.pass_threshold.toFixed(2)}` : '-';
+        const thr = check.pass_threshold !== null ? `>=${formatThreshold(check.pass_threshold)}` : '-';
         const status = report.dry_run
           ? (fixture.status === 'dry_run' ? 'OK' : 'ERROR')
           : fixture.status === 'error'
@@ -1275,8 +1284,8 @@ export function formatReportTable(report: RubricHarnessReport): string {
       );
       for (const m of modeList) {
         const perRepeat = m.choices.map((ch, idx) => {
-          const p = m.pass_probabilities[idx];
-          return p !== null ? `${ch}(${p.toFixed(3)})` : ch;
+          const s = m.scores[idx];
+          return s !== null ? `${ch}(${formatScoreVal(s)}/100)` : ch;
         }).join(', ');
         lines.push(`  - ${fixture.id} [${m.mode}] :: ${check.check_id}: expected ${check.expected}, got [${perRepeat}]`);
       }

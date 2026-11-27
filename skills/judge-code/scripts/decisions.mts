@@ -13,6 +13,8 @@ import {
 import type { StructureManifest } from './structure.mts';
 
 export { PASS_THRESHOLD };
+export const ERROR_SCORE_THRESHOLD = 60;
+export const DEFAULT_PASS_SCORE = probabilityToScore(PASS_THRESHOLD);
 export const ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const DEFAULT_DECISION_MODEL = 'liquid/d1.2-ultra';
 export const DEFAULT_FILE_MODE_DECISION_MODEL = 'typesafe/jev-1.14';
@@ -44,15 +46,14 @@ export interface Judgment {
   choice: 'pass' | 'fail';
   severity?: FindingSeverity;
   model_choice?: 'pass' | 'borderline' | 'fail';
-  pass_probability: number | null;
-  confidence: number | null;
+  score: number | null;
   pass_threshold?: number;
   note?: string;
   files_passed?: number;
   files_total?: number;
   files_errors?: number;
   files_warnings?: number;
-  min_pass_probability?: number | null;
+  min_score?: number | null;
 }
 
 export interface FileJudgment {
@@ -149,19 +150,50 @@ export interface JudgeRunOptions {
 }
 
 /**
- * Map a scored check to ESLint-style severity:
- * - `error`: raw model FAIL (`model_choice === 'fail'`, i.e. `P(pass) < 0.50`)
- * - `warning`: threshold borderline (`model_choice === 'pass'` with `P(pass) < pass_threshold`, or CLI `'borderline'`)
+ * Convert a raw model probability in [0, 1] to the 0-100 score scale (1 decimal precision).
+ * When `guardThresholds` (on the 0-100 scale) are provided, a probability strictly below a
+ * threshold never rounds up to equal or exceed that threshold.
+ */
+export function probabilityToScore(
+  prob: number,
+  guardThresholds: readonly number[] = [],
+): number {
+  const rounded = Number((prob * 100).toFixed(1));
+  for (const thresholdScore of guardThresholds) {
+    const thresholdProb = thresholdScore / 100;
+    if (prob < thresholdProb && rounded >= thresholdScore) {
+      const floored = Math.floor(prob * 1000) / 10;
+      const maxBelow = Number((thresholdScore - 0.1).toFixed(1));
+      return Number(Math.min(floored, maxBelow).toFixed(1));
+    }
+  }
+  return rounded;
+}
+
+/** Convert a map of raw (0, 1] rubric thresholds to the 0-100 score scale. */
+export function thresholdsToScores(thresholds: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(thresholds).map(([id, threshold]) => [id, probabilityToScore(threshold)]),
+  );
+}
+
+/**
+ * Map a scored check to ESLint-style severity on the 0-100 score scale:
+ * - `error`: score < 60 (raw probability < 0.60, or CLI backend `'fail'`)
+ * - `warning`: 60 <= score < pass_threshold (or CLI backend `'borderline'`)
  * - `null`: passing check
  */
 export function findingSeverity(
-  check: Pick<Judgment, 'choice' | 'severity' | 'model_choice' | 'pass_probability'>,
+  check: Pick<Judgment, 'choice' | 'severity' | 'model_choice' | 'score'>,
 ): FindingSeverity | null {
   if (check.choice !== 'fail') return null;
   if (check.severity === 'error' || check.severity === 'warning') return check.severity;
+  if (typeof check.score === 'number' && Number.isFinite(check.score)) {
+    return check.score < ERROR_SCORE_THRESHOLD ? 'error' : 'warning';
+  }
   if (check.model_choice === 'fail') return 'error';
-  if (check.model_choice === 'pass' || check.model_choice === 'borderline') return 'warning';
-  return typeof check.pass_probability === 'number' && check.pass_probability >= 0.5 ? 'warning' : 'error';
+  if (check.model_choice === 'borderline') return 'warning';
+  return 'error';
 }
 
 /** Count total error and warning findings across a JudgeResult. */
@@ -272,18 +304,17 @@ export function aggregatePerFile(
     const passed = perTarget.filter((c) => c.choice === 'pass').length;
     const errors = perTarget.filter((c) => findingSeverity(c) === 'error').length;
     const warnings = perTarget.filter((c) => findingSeverity(c) === 'warning').length;
-    const hasProbabilities = perTarget.every((c) => typeof c.pass_probability === 'number');
-    const hasConfidence = perTarget.every((c) => typeof c.confidence === 'number');
-    const meanProb = hasProbabilities
-      ? perTarget.reduce((sum, c) => sum + c.pass_probability!, 0) / targetCount
+    const hasScores = perTarget.every((c) => typeof c.score === 'number');
+    const meanScore = hasScores
+      ? Number((perTarget.reduce((sum, c) => sum + c.score!, 0) / targetCount).toFixed(1))
       : null;
-    const minProb = hasProbabilities
-      ? Math.min(...perTarget.map((c) => c.pass_probability!))
+    const minScore = hasScores
+      ? Math.min(...perTarget.map((c) => c.score!))
       : null;
-    const meanConf = hasConfidence
-      ? perTarget.reduce((sum, c) => sum + c.confidence!, 0) / targetCount
-      : null;
-    const threshold = thresholds?.[id];
+    const rawThreshold = thresholds?.[id];
+    const scoreThreshold = rawThreshold !== undefined
+      ? (rawThreshold > 0 && rawThreshold <= 1 ? probabilityToScore(rawThreshold) : rawThreshold)
+      : undefined;
     const choice: 'pass' | 'fail' = passed === targetCount ? 'pass' : 'fail';
     const severity: FindingSeverity | undefined = choice === 'fail'
       ? (errors > 0 ? 'error' : 'warning')
@@ -295,10 +326,9 @@ export function aggregatePerFile(
       files_total: targetCount,
       ...(errors > 0 ? { files_errors: errors } : {}),
       ...(warnings > 0 ? { files_warnings: warnings } : {}),
-      pass_probability: meanProb,
-      min_pass_probability: minProb,
-      confidence: meanConf,
-      ...(threshold !== undefined && threshold !== PASS_THRESHOLD ? { pass_threshold: threshold } : {}),
+      score: meanScore,
+      min_score: minScore,
+      ...(scoreThreshold !== undefined && scoreThreshold !== DEFAULT_PASS_SCORE ? { pass_threshold: scoreThreshold } : {}),
     };
   }
 
@@ -365,7 +395,7 @@ export function prepareJudgeRun(
       ? saveJson(join(out, 'request.json'), request)
       : `${JSON.stringify(request, null, 2)}\n`)
     : '';
-  const checkThresholds = overriddenThresholds(effectiveRubric.thresholds, passThreshold);
+  const checkThresholds = overriddenThresholds(thresholdsToScores(effectiveRubric.thresholds), passThreshold);
   const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   const result: JudgeResult = {
@@ -406,7 +436,7 @@ export async function runPerFileJudge(
 
   if (fileNames.length === 0) {
     if (!options.allowEmpty) throw new Error('No files to score');
-    const checkThresholds = overriddenThresholds(options.rubric.thresholds, passThreshold);
+    const checkThresholds = overriddenThresholds(thresholdsToScores(options.rubric.thresholds), passThreshold);
     const emptyResult: JudgeResult = {
       status: options.dryRun ? 'dry_run' : 'scored',
       backend,
@@ -448,7 +478,7 @@ export async function runPerFileJudge(
   const effectiveRubric = narrowResolvedRubric(options.rubric, activeCheckIds);
   const skippedNotApplicable = Object.keys(options.rubric.questions).filter((id) => !activeCheckIds.has(id));
   const activeQuestionIds = Object.keys(effectiveRubric.questions);
-  const checkThresholds = overriddenThresholds(effectiveRubric.thresholds, passThreshold);
+  const checkThresholds = overriddenThresholds(thresholdsToScores(effectiveRubric.thresholds), passThreshold);
 
   const startMs = performance.now();
   let out: string | undefined;
@@ -568,7 +598,7 @@ export async function runPerFileJudge(
     pass_threshold: passThreshold,
     ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: !options.dryRun && errored.length === 0
-      ? aggregatePerFile(fileResults, activeQuestionIds, passThreshold !== null ? effectiveRubric.thresholds : undefined)
+      ? aggregatePerFile(fileResults, activeQuestionIds, passThreshold !== null ? thresholdsToScores(effectiveRubric.thresholds) : undefined)
       : null,
     file_results: fileResults,
     ...(errored.length > 0
@@ -707,7 +737,7 @@ export async function runMultiModuleJudge(
   const models = [...new Set(moduleResults.map((entry) => entry.returned_model).filter((m): m is string => Boolean(m)))];
   const elapsedMs = Math.round(performance.now() - startMs);
   const totalFiles = moduleResults.reduce((sum, entry) => sum + entry.file_count, 0);
-  const checkThresholds = overriddenThresholds(effectiveRubric.thresholds, passThreshold);
+  const checkThresholds = overriddenThresholds(thresholdsToScores(effectiveRubric.thresholds), passThreshold);
   const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
   const result: JudgeResult = {
@@ -727,7 +757,7 @@ export async function runMultiModuleJudge(
     pass_threshold: passThreshold,
     ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
     quality: !options.dryRun && errored.length === 0
-      ? aggregatePerFile(moduleResults, activeQuestionIds, passThreshold !== null ? effectiveRubric.thresholds : undefined)
+      ? aggregatePerFile(moduleResults, activeQuestionIds, passThreshold !== null ? thresholdsToScores(effectiveRubric.thresholds) : undefined)
       : null,
     module_results: moduleResults,
     ...(errored.length > 0
@@ -908,18 +938,19 @@ export function readAnswers(
       || (answer.choice === 'pass' ? pass < fail : fail < pass)) {
       throw new Error(`Answer ${id} has inconsistent probabilities`);
     }
-    const threshold = thresholds?.[id] ?? PASS_THRESHOLD;
-    const choice: 'pass' | 'fail' = pass >= threshold ? 'pass' : 'fail';
+    const rawThreshold = thresholds?.[id] ?? PASS_THRESHOLD;
+    const scoreThreshold = probabilityToScore(rawThreshold);
+    const choice: 'pass' | 'fail' = pass >= rawThreshold ? 'pass' : 'fail';
     const severity: FindingSeverity | undefined = choice === 'fail'
-      ? (answer.choice === 'fail' ? 'error' : 'warning')
+      ? (pass < ERROR_SCORE_THRESHOLD / 100 ? 'error' : 'warning')
       : undefined;
+    const score = probabilityToScore(pass, [ERROR_SCORE_THRESHOLD, scoreThreshold]);
     return [id, {
       choice,
       ...(severity ? { severity } : {}),
       model_choice: answer.choice,
-      pass_probability: pass,
-      confidence: probability(answer.confidence, `${id}.confidence`),
-      ...(threshold !== PASS_THRESHOLD ? { pass_threshold: threshold } : {}),
+      score,
+      ...(scoreThreshold !== DEFAULT_PASS_SCORE ? { pass_threshold: scoreThreshold } : {}),
     }];
   }));
   return { model, checks };
@@ -958,7 +989,7 @@ export async function runDecisionJudge(
     return runPerFileJudge(
       options,
       'openrouter',
-      PASS_THRESHOLD,
+      DEFAULT_PASS_SCORE,
       DEFAULT_OPENROUTER_CONCURRENCY,
       async (request, body, fileDir) => {
         const responsePath = fileDir !== undefined ? join(fileDir, 'response.txt') : undefined;
@@ -973,7 +1004,7 @@ export async function runDecisionJudge(
     return runMultiModuleJudge(
       options,
       'openrouter',
-      PASS_THRESHOLD,
+      DEFAULT_PASS_SCORE,
       DEFAULT_OPENROUTER_CONCURRENCY,
       async (request, body, moduleDir) => {
         const responsePath = moduleDir !== undefined ? join(moduleDir, 'response.txt') : undefined;
@@ -985,7 +1016,7 @@ export async function runDecisionJudge(
   }
 
   const startMs = performance.now();
-  const { out, request, body, result } = prepareJudgeRun(options, 'openrouter', PASS_THRESHOLD);
+  const { out, request, body, result } = prepareJudgeRun(options, 'openrouter', DEFAULT_PASS_SCORE);
 
   if (!options.dryRun && Object.keys(request.questions).length > 0) {
     try {

@@ -70,8 +70,8 @@ Options:
   --help, -h            Show this help
 
 Severity & exit codes:
-  error    Raw model FAIL (P(pass) < 0.50, or CLI backend fail)
-  warning  Threshold borderline (raw PASS with P(pass) < pass_threshold, or CLI backend borderline)
+  error    Score < 60/100 (or CLI backend fail)
+  warning  Score 60 up to the rule's pass threshold (default 80/100, or CLI backend borderline)
 
   ${EXIT_OK}  Clean (0 errors, and warnings within --max-warnings / no --fail-on-warning)
   ${EXIT_FINDINGS}  Findings (1+ errors, or warning limit exceeded)

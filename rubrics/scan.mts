@@ -19,6 +19,8 @@ import {
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
   PASS_THRESHOLD,
+  findingSeverity,
+  probabilityToScore,
   runDecisionJudge,
   runWithConcurrency,
   type JudgeResult,
@@ -47,6 +49,7 @@ import { generateDashboard } from './dashboard.mts';
 import {
   REPO_ROOT,
   SNAPSHOT_SCHEMA_VERSION,
+  classifyCheckFailure,
   compareCodepoint,
   computeHashesDigest,
   countChecksFindings,
@@ -55,6 +58,7 @@ import {
   hashDirectoryTree,
   hashJsonDirectory,
   loadSnapshotsFromDir,
+  normalizeScore,
   readAgentToolingGitInfo,
   readInstalledJudgeCodeInfo,
   readTargetRepoGitInfo,
@@ -805,9 +809,9 @@ function createCostTrackingTransport(baseTransport: typeof fetch = fetch): CostT
 function sanitizeFileCheck(check: Judgment): SnapshotFileCheckScore {
   return {
     choice: check.choice,
+    ...(check.severity !== undefined ? { severity: check.severity } : {}),
     ...(check.model_choice !== undefined ? { model_choice: check.model_choice } : {}),
-    pass_probability: typeof check.pass_probability === 'number' ? check.pass_probability : null,
-    confidence: typeof check.confidence === 'number' ? check.confidence : null,
+    score: typeof check.score === 'number' ? check.score : null,
   };
 }
 
@@ -815,10 +819,10 @@ function buildSnapshotFileEntry(path: string, checks: Record<string, Judgment>):
   const entries = Object.entries(checks);
   const total = entries.length;
   const calibratedPassed = entries.filter(([, c]) => c.choice === 'pass').length;
-  const rawPassed = entries.filter(([, c]) => (c.model_choice ?? c.choice) === 'pass').length;
-  const probs = entries
-    .map(([, c]) => c.pass_probability)
-    .filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
+  const rawPassed = entries.filter(([, c]) => findingSeverity(c) !== 'error').length;
+  const scores = entries
+    .map(([, c]) => c.score)
+    .filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
   const sanitizedChecks: Record<string, SnapshotFileCheckScore> = {};
   for (const [id, c] of entries) {
     sanitizedChecks[id] = sanitizeFileCheck(c);
@@ -827,8 +831,8 @@ function buildSnapshotFileEntry(path: string, checks: Record<string, Judgment>):
     path,
     pass_rate: total > 0 ? calibratedPassed / total : 0,
     raw_pass_rate: total > 0 ? rawPassed / total : 0,
-    mean_pass_probability: probs.length > 0 ? probs.reduce((s, p) => s + p, 0) / probs.length : null,
-    min_pass_probability: probs.length > 0 ? Math.min(...probs) : null,
+    mean_score: scores.length > 0 ? Number((scores.reduce((sum, s) => sum + s, 0) / scores.length).toFixed(1)) : null,
+    min_score: scores.length > 0 ? Math.min(...scores) : null,
     failed_count: total - calibratedPassed,
     checks: sanitizedChecks,
   };
@@ -842,7 +846,7 @@ function aggregateSnapshotChecksAndMetrics(
   calibratedPassRate: number;
   rawPassRate: number;
   allFilesPassRate: number;
-  meanPassProbability: number | null;
+  meanScore: number | null;
 } {
   const groupByCheck = new Map<string, string>();
   for (const [group, ids] of Object.entries(resolved.groups)) {
@@ -857,7 +861,7 @@ function aggregateSnapshotChecksAndMetrics(
   let totalCalibratedPassed = 0;
   let totalRawPassed = 0;
   let totalPairs = 0;
-  const allProbs: number[] = [];
+  const allScores: number[] = [];
 
   for (const id of questionIds) {
     const scores = fileEntries
@@ -865,25 +869,27 @@ function aggregateSnapshotChecksAndMetrics(
       .filter((c): c is SnapshotFileCheckScore => c !== undefined);
     if (scores.length === 0) continue;
     const passed = scores.filter((c) => c.choice === 'pass').length;
-    const rawPassed = scores.filter((c) => (c.model_choice ?? c.choice) === 'pass').length;
-    const probs = scores
-      .map((c) => c.pass_probability)
-      .filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
+    const rawPassed = scores.filter((c) => classifyCheckFailure(c) !== 'hard').length;
+    const numericScores = scores
+      .map((c) => normalizeScore(c))
+      .filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
     totalCalibratedPassed += passed;
     totalRawPassed += rawPassed;
     totalPairs += scores.length;
-    for (const p of probs) allProbs.push(p);
+    for (const s of numericScores) allScores.push(s);
 
     checks[id] = {
-      threshold: resolved.thresholds[id] ?? PASS_THRESHOLD,
+      threshold: probabilityToScore(resolved.thresholds[id] ?? PASS_THRESHOLD),
       rubric_group: groupByCheck.get(id) ?? null,
       passed,
       raw_passed: rawPassed,
       total: scores.length,
       pass_rate: scores.length > 0 ? passed / scores.length : 0,
       raw_pass_rate: scores.length > 0 ? rawPassed / scores.length : 0,
-      mean_pass_probability: probs.length > 0 ? probs.reduce((s, p) => s + p, 0) / probs.length : null,
-      min_pass_probability: probs.length > 0 ? Math.min(...probs) : null,
+      mean_score: numericScores.length > 0
+        ? Number((numericScores.reduce((sum, s) => sum + s, 0) / numericScores.length).toFixed(1))
+        : null,
+      min_score: numericScores.length > 0 ? Math.min(...numericScores) : null,
     };
   }
 
@@ -894,7 +900,9 @@ function aggregateSnapshotChecksAndMetrics(
     calibratedPassRate: totalPairs > 0 ? totalCalibratedPassed / totalPairs : 0,
     rawPassRate: totalPairs > 0 ? totalRawPassed / totalPairs : 0,
     allFilesPassRate: evaluatedCount > 0 && totalTargets > 0 ? allFilesPassedChecks / evaluatedCount : 0,
-    meanPassProbability: allProbs.length > 0 ? allProbs.reduce((s, p) => s + p, 0) / allProbs.length : null,
+    meanScore: allScores.length > 0
+      ? Number((allScores.reduce((sum, s) => sum + s, 0) / allScores.length).toFixed(1))
+      : null,
   };
 }
 
@@ -989,19 +997,19 @@ function buildFixtureSnapshotFromReport(
         (m): m is NonNullable<typeof m> => Boolean(m && m.enforced),
       );
       for (const m of modeSummaries) {
-        const numericProbs = m.pass_probabilities.filter((p): p is number => typeof p === 'number' && Number.isFinite(p));
-        const meanProb = numericProbs.length > 0
-          ? numericProbs.reduce((s, p) => s + p, 0) / numericProbs.length
+        const numericScores = m.scores.filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
+        const meanScore = numericScores.length > 0
+          ? Number((numericScores.reduce((sum, s) => sum + s, 0) / numericScores.length).toFixed(1))
           : null;
-        const jitter = m.min_pass_probability !== null && m.max_pass_probability !== null
-          ? Number((m.max_pass_probability - m.min_pass_probability).toFixed(6))
+        const jitter = m.min_score !== null && m.max_score !== null
+          ? Number((m.max_score - m.min_score).toFixed(1))
           : null;
         let margin: number | null = null;
         if (c.pass_threshold !== null) {
-          if (c.expected === 'pass' && m.min_pass_probability !== null) {
-            margin = Number((m.min_pass_probability - c.pass_threshold).toFixed(6));
-          } else if (c.expected === 'fail' && m.max_pass_probability !== null) {
-            margin = Number((c.pass_threshold - m.max_pass_probability).toFixed(6));
+          if (c.expected === 'pass' && m.min_score !== null) {
+            margin = Number((m.min_score - c.pass_threshold).toFixed(1));
+          } else if (c.expected === 'fail' && m.max_score !== null) {
+            margin = Number((c.pass_threshold - m.max_score).toFixed(1));
           }
         }
         if (margin !== null) margins.push(margin);
@@ -1016,9 +1024,9 @@ function buildFixtureSnapshotFromReport(
           matches: m.matches,
           repeats: m.repeats,
           pass_threshold: c.pass_threshold,
-          min_pass_probability: m.min_pass_probability,
-          max_pass_probability: m.max_pass_probability,
-          mean_pass_probability: meanProb,
+          min_score: m.min_score,
+          max_score: m.max_score,
+          mean_score: meanScore,
           margin,
           jitter,
         });
@@ -1049,10 +1057,10 @@ function buildFixtureSnapshotFromReport(
       checks_total: report.checks_total,
       checks_passed: report.checks_passed,
       check_pass_rate: report.checks_total > 0 ? report.checks_passed / report.checks_total : 0,
-      min_margin: margins.length > 0 ? Math.min(...margins) : null,
-      mean_margin: margins.length > 0 ? margins.reduce((s, m) => s + m, 0) / margins.length : null,
-      max_jitter: jitters.length > 0 ? Math.max(...jitters) : null,
-      mean_jitter: jitters.length > 0 ? jitters.reduce((s, j) => s + j, 0) / jitters.length : null,
+      min_margin: margins.length > 0 ? Number(Math.min(...margins).toFixed(1)) : null,
+      mean_margin: margins.length > 0 ? Number((margins.reduce((s, m) => s + m, 0) / margins.length).toFixed(1)) : null,
+      max_jitter: jitters.length > 0 ? Number(Math.max(...jitters).toFixed(1)) : null,
+      mean_jitter: jitters.length > 0 ? Number((jitters.reduce((s, j) => s + j, 0) / jitters.length).toFixed(1)) : null,
       elapsed_ms: report.elapsed_ms,
       cost_usd: options.costUsd,
       requests: options.requests,
@@ -1343,7 +1351,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               calibrated_pass_rate: agg.calibratedPassRate,
               raw_pass_rate: agg.rawPassRate,
               all_files_pass_rate: agg.allFilesPassRate,
-              mean_pass_probability: agg.meanPassProbability,
+              mean_score: agg.meanScore,
               elapsed_ms: Math.round(performance.now() - runStart),
               cost_usd: tracker.hasCost ? Number(tracker.costUsd.toFixed(6)) : null,
               requests: tracker.requests,
@@ -1471,7 +1479,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               check_count: checkCount,
               calibrated_pass_rate: agg.calibratedPassRate,
               raw_pass_rate: agg.rawPassRate,
-              mean_pass_probability: agg.meanPassProbability,
+              mean_score: agg.meanScore,
               elapsed_ms: Math.round(performance.now() - runStart),
               cost_usd: tracker.hasCost ? Number(tracker.costUsd.toFixed(6)) : null,
               requests: tracker.requests,
@@ -1536,8 +1544,8 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               ...(mod.ignore.length > 0 ? { ignore: mod.ignore } : {}),
               pass_rate: null,
               raw_pass_rate: null,
-              mean_pass_probability: null,
-              min_pass_probability: null,
+              mean_score: null,
+              min_score: null,
               failed_count: 0,
               hard_fail_count: 0,
               borderline_count: 0,
@@ -1651,8 +1659,8 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
                     ...(mod.ignore.length > 0 ? { ignore: mod.ignore } : {}),
                     pass_rate: fileEntry.pass_rate,
                     raw_pass_rate: fileEntry.raw_pass_rate,
-                    mean_pass_probability: fileEntry.mean_pass_probability,
-                    min_pass_probability: fileEntry.min_pass_probability,
+                    mean_score: fileEntry.mean_score,
+                    min_score: fileEntry.min_score,
                     failed_count: counts.total,
                     hard_fail_count: counts.hard,
                     borderline_count: counts.borderline,
@@ -1797,7 +1805,7 @@ export async function runScanner(options: RunScannerOptions): Promise<ScanRunSum
               modules_errored: erroredModules.length,
               calibrated_pass_rate: agg.calibratedPassRate,
               raw_pass_rate: agg.rawPassRate,
-              mean_pass_probability: agg.meanPassProbability,
+              mean_score: agg.meanScore,
               elapsed_ms: Math.round(performance.now() - runStart),
               cost_usd: tracker.hasCost ? Number(tracker.costUsd.toFixed(6)) : null,
               requests: tracker.requests,
