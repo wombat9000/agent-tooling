@@ -1,0 +1,8 @@
+{
+  "id": "bounded-data-loading-good",
+  "description": "Delegates dashboard summaries and search/filtering to bounded server endpoints, exposes real cursor pagination with a single list projection, uses a repeating-cursor guard for explicit bulk export, and fetches a small single-owner preference list",
+  "rubric": "api-design",
+  "expect": {
+    "bounded_data_loading_and_server_queries": "pass"
+  }
+}

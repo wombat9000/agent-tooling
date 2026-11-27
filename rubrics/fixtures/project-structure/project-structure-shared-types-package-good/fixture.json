@@ -1,0 +1,10 @@
+{
+  "id": "project-structure-shared-types-package-good",
+  "description": "Small flat shared-types contract package (~12 domain-named type files in packages/types/src) is a focused single-purpose package, not a junk drawer",
+  "mode": "structure",
+  "root_name": "packages",
+  "rubric": "project-structure",
+  "expect": {
+    "no_junk_drawer_directories": "pass"
+  }
+}

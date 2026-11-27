@@ -1,0 +1,8 @@
+{
+  "id": "parameter-lists-destructured-props-good",
+  "description": "Destructuring a single cohesive props or options record with 7-8 related fields counts as 1 parameter, not a long positional parameter list",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_long_parameter_lists_or_data_clumps": "pass"
+  }
+}

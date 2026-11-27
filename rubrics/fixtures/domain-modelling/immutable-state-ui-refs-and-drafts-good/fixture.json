@@ -1,0 +1,8 @@
+{
+  "id": "immutable-state-ui-refs-and-drafts-good",
+  "description": "Covers stateless UI callback forwarding, async lifecycle and sequence coordination refs, and local mutation of freshly cloned scratch drafts without aliasing caller inputs",
+  "rubric": "domain-modelling",
+  "expect": {
+    "immutable_state": "pass"
+  }
+}

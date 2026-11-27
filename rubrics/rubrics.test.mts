@@ -129,7 +129,7 @@ test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricS
   assert.deepEqual(second.unchanged, ['prod.json', 'struct.json']);
 });
 
-test('all 58 criteria across all 14 authoritative rubrics have full paired pass and fail fixture coverage under rubrics/fixtures/', () => {
+test('all 59 criteria across all 14 authoritative rubrics have full paired pass and fail fixture coverage under rubrics/fixtures/', () => {
   const allRubricFiles = readdirSync(AUTHORITATIVE_RUBRICS_DIR)
     .filter((f) => f.endsWith('.json'))
     .sort();
@@ -149,13 +149,13 @@ test('all 58 criteria across all 14 authoritative rubrics have full paired pass 
     criteriaByTarget[target].push(...Object.keys(parsed.questions));
   }
 
-  assert.equal(criteriaByTarget.production_code.length, 38, 'Expected 38 production_code criteria');
+  assert.equal(criteriaByTarget.production_code.length, 39, 'Expected 39 production_code criteria');
   assert.equal(criteriaByTarget.project_structure.length, 7, 'Expected 7 project_structure criteria');
   assert.equal(criteriaByTarget.test_code.length, 13, 'Expected 13 test_code criteria');
   assert.equal(
     criteriaByTarget.production_code.length + criteriaByTarget.project_structure.length + criteriaByTarget.test_code.length,
-    58,
-    'Expected 58 total authoritative criteria',
+    59,
+    'Expected 59 total authoritative criteria',
   );
 
   const fixtures = loadFixtures();
@@ -293,9 +293,9 @@ test('loadFixtures enforces real-file fixture.json + files/ layout and rejects i
   assert.throws(() => loadFixtures(badRootDir), /must be a single safe directory name/);
 });
 
-test('pnpm test:rubrics --dry-run validates all 144 checked-in fixtures, rubrics, CLI filters, and 51-criterion criteria_matrix offline', () => {
+test('pnpm test:rubrics --dry-run validates all 153 checked-in fixtures, rubrics, CLI filters, and 52-criterion criteria_matrix offline', () => {
   const fixtures = loadFixtures();
-  assert.ok(fixtures.length >= 144, `Expected at least 144 fixtures across all 58 criteria, found ${fixtures.length}`);
+  assert.ok(fixtures.length >= 153, `Expected at least 153 fixtures across all 59 criteria, found ${fixtures.length}`);
 
   const env = { ...process.env };
   delete env.OPENROUTER_API_KEY;
@@ -314,7 +314,7 @@ test('pnpm test:rubrics --dry-run validates all 144 checked-in fixtures, rubrics
   assert.equal(report.models.module, DEFAULT_DECISION_MODEL);
   assert.equal(report.fixtures_total, fixtures.length);
   assert.equal(report.fixtures_passed, fixtures.length);
-  assert.equal(report.criteria_matrix.length, 51, 'Expected 38 production_code + 13 test_code dual-mode criteria');
+  assert.equal(report.criteria_matrix.length, 52, 'Expected 39 production_code + 13 test_code dual-mode criteria');
 
   // Verify --rule works for both production_code and test_code rules offline.
   const filtered = spawnSync(
