@@ -1,0 +1,8 @@
+{
+  "id": "bounded-data-loading-bad",
+  "description": "Downloads an entire unbounded member collection via an unguarded cursor loop to compute dashboard aggregates and substring search client-side, silently truncates orders to page 1, and runs a client-side N+1 detail fetch loop",
+  "rubric": "api-design",
+  "expect": {
+    "bounded_data_loading_and_server_queries": "fail"
+  }
+}

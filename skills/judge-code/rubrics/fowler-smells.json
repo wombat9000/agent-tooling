@@ -80,8 +80,8 @@
       "scope": "file",
       "instructions": "Is the supplied production code free of Comments-as-Deodorant and Dead Code smells?",
       "criteria": {
-        "pass": "Comments are reserved for non-obvious rationale, concurrency/locking intent, or contract nuances rather than narrating obvious lines or apologizing for convoluted code, and there is no commented-out code or unreachable private dead code.",
-        "fail": "The code contains noisy comments that merely restate obvious code, comments excusing unclear logic that should be refactored, commented-out code blocks, or unused private helpers/constants."
+        "pass": "Comments are concise and purposeful—including brief doc-comments (such as short JSDoc, KDoc, or docstring summaries on exported modules, functions, types, or hooks explaining intent or contract) as well as non-obvious rationale, concurrency/locking intent, or contract nuances—rather than narrating obvious statements line by line or apologizing for convoluted code, and there is no commented-out code or unreachable private dead code.",
+        "fail": "The code contains commented-out code blocks, unused or unreachable dead code (helpers, constants, or branches), noisy line-by-line narration restating obvious statements, or defensive deodorant comments excusing convoluted or hacky logic that should be refactored. Concise doc-comments summarizing the intent or contract of exported modules, functions, types, or hooks do NOT fail."
       }
     }
   }

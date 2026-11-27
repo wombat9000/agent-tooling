@@ -1,0 +1,8 @@
+{
+  "id": "comment-deodorant-doc-comments-good",
+  "description": "Clean 25-line modules with concise 1-line doc-comments on exported functions and hooks and zero dead code or line-by-line narration",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_comment_deodorant_or_dead_code": "pass"
+  }
+}

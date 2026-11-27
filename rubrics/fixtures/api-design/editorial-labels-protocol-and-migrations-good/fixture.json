@@ -1,0 +1,8 @@
+{
+  "id": "editorial-labels-protocol-and-migrations-good",
+  "description": "Closed allow-lists and unions restricted to upload MIME/protocol media types, A+-to-E- letter grade scales, and retired schema-migration field keys while keeping user-facing labels open",
+  "rubric": "api-design",
+  "expect": {
+    "no_rigid_enums_for_editorial_labels": "pass"
+  }
+}
