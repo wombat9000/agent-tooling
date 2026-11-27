@@ -3,7 +3,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { CLAUDE_DEEP_MODEL, CLAUDE_FILE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
+import { CLAUDE_DEEP_MODEL, CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
 import {
   findRepoRoot,
   resolveConventionsPath,
@@ -46,9 +46,9 @@ const USAGE = `Usage:
   judge-code explain <check-id...> [options]  Show full criteria (instructions, pass, fail) for check ID(s)
 
 Options:
-  --deep                Use deep model instead of fast file model (${DEFAULT_DECISION_MODEL} on openrouter, ${CLAUDE_DEEP_MODEL} on claude)
+  --deep                Use deep model (${DEFAULT_DECISION_MODEL} instead of ${DEFAULT_FILE_MODE_DECISION_MODEL} on openrouter; ${CLAUDE_DEEP_MODEL} instead of ${CLAUDE_MODEL} on claude)
   --model ID            Explicit model ID override (OpenRouter ID on openrouter, or CLI model ID on codex/claude)
-  --backend BACKEND     Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_FILE_MODEL} / ${CLAUDE_DEEP_MODEL})
+  --backend BACKEND     Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL}; --deep for ${CLAUDE_DEEP_MODEL})
   --quiet, -q           Show errors only; hide borderline warnings
   --verbose, -v         Include full rule instructions and pass/fail criteria in \`judge-code list\`
   --json                Emit structured JSON result to stdout instead of formatted linter output
@@ -121,7 +121,7 @@ function resolveModel(
   }
   if (backend === 'claude') {
     if (modelArg !== undefined) return validateCliModel(modelArg, backend);
-    return mode === 'file' && !deep ? CLAUDE_FILE_MODEL : CLAUDE_DEEP_MODEL;
+    return deep ? CLAUDE_DEEP_MODEL : CLAUDE_MODEL;
   }
   if (backend === 'codex') {
     if (deep) {

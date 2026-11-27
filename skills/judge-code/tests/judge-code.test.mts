@@ -877,7 +877,7 @@ console.log(JSON.stringify({
   assert.equal(claudeFormatted.status, 1, claudeFormatted.stderr);
   assert.match(claudeFormatted.stdout, /error\s+named_domain_expressions\s+\(score 55\/100, pass >= 60\)/);
 
-  // Claude --deep and module/structure modes default to sonnet; --model overrides work on both claude and codex
+  // Claude defaults to haiku across file, module, and structure modes; --deep switches to sonnet; --model overrides work on claude and codex
   const claudeDeep = run('preview', ['booking', '--rubric', 'readability', '--backend', 'claude', '--deep', '--dry-run', '--json']);
   assert.equal(claudeDeep.status, 0, claudeDeep.stderr);
   assert.equal(JSON.parse(claudeDeep.stdout).requested_model, 'sonnet');
@@ -885,12 +885,22 @@ console.log(JSON.stringify({
   const claudeModule = run('preview', ['module', 'booking', '--rubric', 'readability', '--backend', 'claude', '--json'], stubEnv);
   assert.equal(claudeModule.status, 1, claudeModule.stderr);
   const claudeModuleRes = JSON.parse(claudeModule.stdout);
-  assert.equal(claudeModuleRes.requested_model, 'sonnet');
-  assert.equal(claudeModuleRes.returned_model, 'claude-sonnet-test');
+  assert.equal(claudeModuleRes.requested_model, 'haiku');
+  assert.equal(claudeModuleRes.returned_model, 'claude-haiku-test');
+
+  const claudeModuleDeep = run('preview', ['module', 'booking', '--rubric', 'readability', '--backend', 'claude', '--deep', '--json'], stubEnv);
+  assert.equal(claudeModuleDeep.status, 1, claudeModuleDeep.stderr);
+  const claudeModuleDeepRes = JSON.parse(claudeModuleDeep.stdout);
+  assert.equal(claudeModuleDeepRes.requested_model, 'sonnet');
+  assert.equal(claudeModuleDeepRes.returned_model, 'claude-sonnet-test');
 
   const claudeStructure = run('preview', ['structure', 'booking', '--backend', 'claude', '--dry-run', '--json']);
   assert.equal(claudeStructure.status, 0, claudeStructure.stderr);
-  assert.equal(JSON.parse(claudeStructure.stdout).requested_model, 'sonnet');
+  assert.equal(JSON.parse(claudeStructure.stdout).requested_model, 'haiku');
+
+  const claudeStructureDeep = run('preview', ['structure', 'booking', '--backend', 'claude', '--deep', '--dry-run', '--json']);
+  assert.equal(claudeStructureDeep.status, 0, claudeStructureDeep.stderr);
+  assert.equal(JSON.parse(claudeStructureDeep.stdout).requested_model, 'sonnet');
 
   const modelOnClaude = run('preview', ['booking', '--backend', 'claude', '--model', 'opus', '--dry-run', '--json']);
   assert.equal(modelOnClaude.status, 0, modelOnClaude.stderr);

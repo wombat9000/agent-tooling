@@ -26,9 +26,8 @@ export const CLAUDE_FILE_MODEL = 'haiku';
 export const CLAUDE_DEEP_MODEL = 'sonnet';
 export const CLAUDE_MODEL = CLAUDE_FILE_MODEL;
 
-export function defaultCliModel(backend: CliBackend, mode: JudgeMode = 'code'): string {
-  if (backend === 'codex') return CODEX_MODEL;
-  return mode === 'file' ? CLAUDE_FILE_MODEL : CLAUDE_DEEP_MODEL;
+export function defaultCliModel(backend: CliBackend, _mode: JudgeMode = 'code'): string {
+  return backend === 'codex' ? CODEX_MODEL : CLAUDE_MODEL;
 }
 
 const CLI_TIMEOUT_MS = 120_000;
