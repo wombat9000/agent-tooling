@@ -3,7 +3,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
+import { CLAUDE_DEEP_MODEL, CLAUDE_FILE_MODEL, CODEX_MODEL, runCliJudge } from './cli-backend.mts';
 import {
   findRepoRoot,
   resolveConventionsPath,
@@ -46,9 +46,9 @@ const USAGE = `Usage:
   judge-code explain <check-id...> [options]  Show full criteria (instructions, pass, fail) for check ID(s)
 
 Options:
-  --deep                Use ${DEFAULT_DECISION_MODEL} instead of ${DEFAULT_FILE_MODE_DECISION_MODEL} (openrouter only)
-  --model ID            Explicit OpenRouter Decisions model ID (openrouter only)
-  --backend BACKEND     Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
+  --deep                Use deep model instead of fast file model (${DEFAULT_DECISION_MODEL} on openrouter, ${CLAUDE_DEEP_MODEL} on claude)
+  --model ID            Explicit model ID override (OpenRouter ID on openrouter, or CLI model ID on codex/claude)
+  --backend BACKEND     Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_FILE_MODEL} / ${CLAUDE_DEEP_MODEL})
   --quiet, -q           Show errors only; hide borderline warnings
   --verbose, -v         Include full rule instructions and pass/fail criteria in \`judge-code list\`
   --json                Emit structured JSON result to stdout instead of formatted linter output
@@ -70,8 +70,8 @@ Options:
   --help, -h            Show this help
 
 Severity & exit codes:
-  error    Score < 60/100 (or CLI backend fail)
-  warning  Score 60 up to the rule's pass threshold (default 80/100, or CLI backend borderline)
+  error    Score < 60/100
+  warning  Score 60 up to the rule's pass threshold (default 80/100)
 
   ${EXIT_OK}  Clean (0 errors, and warnings within --max-warnings / no --fail-on-warning)
   ${EXIT_FINDINGS}  Findings (1+ errors, or warning limit exceeded)
@@ -102,23 +102,33 @@ function parseMaxWarnings(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function validateCliModel(value: string, backend: 'codex' | 'claude'): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith('-') || /\s/.test(trimmed)) {
+    throw new Error(`Invalid --model for --backend ${backend}: ${value}`);
+  }
+  return trimmed;
+}
+
 function resolveModel(
   backend: JudgeBackend,
   mode: JudgeMode,
   modelArg: string | undefined,
   deep: boolean,
-): string | undefined {
+): string {
   if (deep && modelArg !== undefined) {
     throw new Error('Cannot combine --deep and --model');
   }
-  if (backend !== 'openrouter') {
-    if (modelArg !== undefined) {
-      throw new Error(`--model is only supported with --backend openrouter (codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`);
-    }
+  if (backend === 'claude') {
+    if (modelArg !== undefined) return validateCliModel(modelArg, backend);
+    return mode === 'file' && !deep ? CLAUDE_FILE_MODEL : CLAUDE_DEEP_MODEL;
+  }
+  if (backend === 'codex') {
     if (deep) {
-      throw new Error(`--deep is only supported with --backend openrouter (codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`);
+      throw new Error(`--deep is only supported with --backend openrouter or --backend claude (codex uses ${CODEX_MODEL}; use --model to override)`);
     }
-    return undefined;
+    if (modelArg !== undefined) return validateCliModel(modelArg, backend);
+    return CODEX_MODEL;
   }
   const defaultModel = mode === 'file' && !deep
     ? DEFAULT_FILE_MODE_DECISION_MODEL

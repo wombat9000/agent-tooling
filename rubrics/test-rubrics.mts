@@ -11,7 +11,7 @@ import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scripts/cli-backend.mts';
+import { CLAUDE_DEEP_MODEL, CLAUDE_FILE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scripts/cli-backend.mts';
 import {
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
@@ -55,10 +55,10 @@ Production and test_code fixtures run in both \`file\` (per-file) and \`module\`
   --rubric SLUG        Run only fixtures testing this rubric slug (repeatable)
   --rule CHECK_ID      Run only fixtures asserting this check ID (repeatable)
   --modes MODE         Dual-mode target execution: both (default), file, or module
-  --backend BACKEND    Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_MODEL})
-  --file-model ID      OpenRouter model override for file mode (default: ${DEFAULT_FILE_MODE_DECISION_MODEL})
-  --module-model ID    OpenRouter model override for module/structure mode (default: ${DEFAULT_DECISION_MODEL})
-  --model ID           OpenRouter model override for all modes (cannot combine with --file-model or --module-model)
+  --backend BACKEND    Judge backend: openrouter (default), codex (${CODEX_MODEL}), or claude (${CLAUDE_FILE_MODEL} / ${CLAUDE_DEEP_MODEL})
+  --file-model ID      Model override for file mode (default: ${DEFAULT_FILE_MODE_DECISION_MODEL} openrouter, ${CLAUDE_FILE_MODEL} claude, ${CODEX_MODEL} codex)
+  --module-model ID    Model override for module/structure mode (default: ${DEFAULT_DECISION_MODEL} openrouter, ${CLAUDE_DEEP_MODEL} claude, ${CODEX_MODEL} codex)
+  --model ID           Model override for all modes (cannot combine with --file-model or --module-model)
   --concurrency N      Max concurrent judge runs (default: ${DEFAULT_OPENROUTER_CONCURRENCY} openrouter, ${DEFAULT_CLI_CONCURRENCY} codex/claude)
   --dry-run            Validate all fixtures, rubric resolution, and request payloads offline (no API calls)
   --json               Print structured JSON report instead of human-readable tables
@@ -98,6 +98,7 @@ export interface ModeEvaluationSummary {
   repeats: number;
   choices: Array<ExpectedChoice | 'error'>;
   scores: Array<number | null>;
+  notes?: Array<string | null>;
   min_score: number | null;
   max_score: number | null;
   errors: string[];
@@ -610,27 +611,33 @@ function findRubricSlugForCheck(resolved: ResolvedRubric, checkId: string): stri
   return resolved.rubric;
 }
 
+function validateCliModelOverride(value: string, flag: string, backend: 'codex' | 'claude'): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith('-') || /\s/.test(trimmed)) {
+    throw new Error(`Invalid ${flag} for --backend ${backend}: ${value}`);
+  }
+  return trimmed;
+}
+
 function resolveModels(
   backend: JudgeBackend,
   options: { model?: string; fileModel?: string; moduleModel?: string },
 ): { file: string; module: string } {
-  const hasAnyOverride = options.model !== undefined
-    || options.fileModel !== undefined
-    || options.moduleModel !== undefined;
-
-  if (backend !== 'openrouter') {
-    if (hasAnyOverride) {
-      throw new Error(
-        `--model / --file-model / --module-model are only supported with --backend openrouter `
-        + `(codex uses ${CODEX_MODEL}, claude uses ${CLAUDE_MODEL})`,
-      );
-    }
-    const cliModel = backend === 'codex' ? CODEX_MODEL : CLAUDE_MODEL;
-    return { file: cliModel, module: cliModel };
-  }
-
   if (options.model !== undefined && (options.fileModel !== undefined || options.moduleModel !== undefined)) {
     throw new Error('Cannot combine --model with --file-model or --module-model');
+  }
+
+  if (backend !== 'openrouter') {
+    const defaultFile = backend === 'claude' ? CLAUDE_FILE_MODEL : CODEX_MODEL;
+    const defaultModule = backend === 'claude' ? CLAUDE_DEEP_MODEL : CODEX_MODEL;
+    if (options.model !== undefined) {
+      const m = validateCliModelOverride(options.model, '--model', backend);
+      return { file: m, module: m };
+    }
+    return {
+      file: options.fileModel !== undefined ? validateCliModelOverride(options.fileModel, '--file-model', backend) : defaultFile,
+      module: options.moduleModel !== undefined ? validateCliModelOverride(options.moduleModel, '--module-model', backend) : defaultModule,
+    };
   }
 
   for (const [flag, val] of [
@@ -943,7 +950,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
         requirements: unit.fixture.requirements,
         conventions: unit.fixture.conventions,
         rubric: unit.resolved,
-        model: backend === 'openrouter' ? unit.model : undefined,
+        model: unit.model,
         concurrency,
         dryRun,
       };
@@ -999,9 +1006,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
     const checks: CheckEvaluationSummary[] = Object.entries(fixture.expect).map(([checkId, expected]) => {
       const declaredScope = resolved.scopes[checkId];
       const rubricSlug = findRubricSlugForCheck(resolved, checkId);
-      const threshold = backend === 'openrouter'
-        ? probabilityToScore(resolved.thresholds[checkId] ?? PASS_THRESHOLD)
-        : null;
+      const threshold = probabilityToScore(resolved.thresholds[checkId] ?? PASS_THRESHOLD);
 
       const modeSummaries: Partial<Record<HarnessExecutionMode, ModeEvaluationSummary>> = {};
 
@@ -1032,6 +1037,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
 
         const choices: Array<ExpectedChoice | 'error'> = [];
         const scores: Array<number | null> = [];
+        const notes: Array<string | null> = [];
         let matches = 0;
 
         for (const outcome of modeOutcomes) {
@@ -1039,6 +1045,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
           if (!judgment) {
             choices.push('error');
             scores.push(null);
+            notes.push(null);
             continue;
           }
           choices.push(judgment.choice);
@@ -1047,12 +1054,26 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
             ? judgment.min_score
             : judgment.score;
           scores.push(score);
+          let note: string | null = judgment.note ?? null;
+          if (note === null && outcome.result?.file_results) {
+            const perFileJudgments = outcome.result.file_results
+              .filter((fr) => fr.status === 'scored' && fr.checks?.[checkId])
+              .map((fr) => ({ file: fr.file, check: fr.checks![checkId] }))
+              .filter((item) => typeof item.check.note === 'string' && item.check.note.length > 0);
+            if (perFileJudgments.length > 0) {
+              perFileJudgments.sort((a, b) => (a.check.score ?? 0) - (b.check.score ?? 0));
+              const worst = perFileJudgments[0];
+              note = `${worst.file}: ${worst.check.note}`;
+            }
+          }
+          notes.push(note);
           if (judgment.choice === expected) matches += 1;
         }
 
         const numericScores = scores.filter((s): s is number => typeof s === 'number');
         const minScore = numericScores.length > 0 ? Math.min(...numericScores) : null;
         const maxScore = numericScores.length > 0 ? Math.max(...numericScores) : null;
+        const hasNotes = notes.some((n) => n !== null);
 
         modeSummaries[execMode] = {
           mode: execMode,
@@ -1063,6 +1084,7 @@ export async function runRubricHarness(options: RunHarnessOptions = {}): Promise
           repeats: effectiveRepeats,
           choices,
           scores,
+          ...(hasNotes ? { notes } : {}),
           min_score: minScore,
           max_score: maxScore,
           errors: modeErrors,

@@ -47,8 +47,8 @@ node "$SKILL_DIR/scripts/judge-code.mts" module src/features/billing --out /path
 
 ### Options
 
-- `--deep` — switch OpenRouter model to `liquid/d1.2-ultra` (default for `module` and `structure`; default for file linting is `typesafe/jev-1.14`).
-- `--model ID` — explicit OpenRouter Decisions model ID (openrouter backend only).
+- `--deep` — switch file linting to the deep model (`liquid/d1.2-ultra` on OpenRouter, `sonnet` on `--backend claude`; default for `module` and `structure`; default for file linting is `typesafe/jev-1.14` on OpenRouter and `haiku` on Claude).
+- `--model ID` — explicit model ID override (full OpenRouter ID on `openrouter`, or CLI model name on `claude` / `codex`).
 - `--quiet`, `-q` — print `error`s only and hide borderline `warning`s and warning-only files.
 - `--verbose`, `-v` — include full rule `instructions`, `pass`, and `fail` criteria in `judge-code list`.
 - `--json` — emit the full structured `JudgeResult` JSON to stdout instead of formatted linter output.
@@ -91,8 +91,8 @@ Rule criteria:
 
 Scores are on a `0-100` quality scale where clean code typically scores `90-99/100`:
 
-- **`error`**: `score < 60` (a serious flaw — `50/100` is nowhere near passing, not a coin flip), or CLI backend `"fail"`.
-- **`warning`**: `60` up to the criterion's pass bar (default `80`; rules with a `60` pass bar such as `no_primitive_obsession` and `named_domain_expressions` have no warning band—below `60` is `error`, `60+` passes), or CLI backend `"borderline"`.
+- **`error`**: `score < 60` (a serious flaw — `50/100` is nowhere near passing, not a coin flip).
+- **`warning`**: `60` up to the criterion's pass bar (default `80`; rules with a `60` pass bar such as `no_primitive_obsession` and `named_domain_expressions` have no warning band—below `60` is `error`, `60+` passes).
 - **Pass**: at or above the criterion's pass bar (default `80`).
 - **Exit `0`**: 0 errors (and warnings within `--max-warnings`, if set, and `--fail-on-warning` not triggered).
 - **Exit `1`**: 1+ errors found (or `--fail-on-warning` / `--max-warnings` exceeded).
@@ -102,4 +102,4 @@ Scores are on a `0-100` quality scale where clean code typically scores `90-99/1
 
 Select regular `.kt`, `.ts`, `.tsx`, `.mts`, or `.cts` files or directories (or a directory for `structure`). Directory traversal skips symlinks, hidden entries (except React Router's `.server` and `.client` folders), build/generated/dependency directories (`node_modules`, `vendor`, `build`, `dist`, `out`, `target`, `coverage`, `generated`), and paths matched by `--ignore`. Universal cross-language test and test-support conventions (`test/`, `tests/`, `testing/`, `__tests__/`, `__mocks__/`, `__fixtures__/`, `testFixtures/`, `fixtures/`, `androidTest/`, `*.test.*`, `*.spec.*`, `*.mock.*`, `*_test.*`, `*_spec.*`, `*Test.*`, `*Tests.*`, `*Spec.*`, `conftest.py`, `test_*.py`) are excluded in file/module linting and classified as `test` in `structure`. A 128 KiB input limit applies (per file plus optional docs in file mode; combined per bundle in `module` and `structure` modes).
 
-Live scoring defaults to [OpenRouter Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) using `OPENROUTER_API_KEY` in the environment, with bounded exponential backoff retries on transient HTTP `429`/`502`/`503`/`504` responses. When `OPENROUTER_API_KEY` is unavailable, pass `--backend codex` (`gpt-6-luna` at `low` reasoning effort) or `--backend claude` (`haiku` with thinking disabled via `MAX_THINKING_TOKENS=0`) explicitly. Keep the same `--backend` across before-and-after runs so scores remain comparable.
+Live scoring defaults to [OpenRouter Decisions](https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request) using `OPENROUTER_API_KEY` in the environment, with bounded exponential backoff retries on transient HTTP `429`/`502`/`503`/`504` responses. When `OPENROUTER_API_KEY` is unavailable, pass `--backend codex` (`gpt-6-luna` at `low` reasoning effort) or `--backend claude` (`haiku` for file linting, `sonnet` for `module`/`structure` or `--deep`, isolated from repository context with thinking disabled via `MAX_THINKING_TOKENS=0`) explicitly. All backends emit the same `0-100` score scale, per-criterion thresholds, and linter/JSON output shape. Keep the same `--backend` across before-and-after runs so scores remain comparable.

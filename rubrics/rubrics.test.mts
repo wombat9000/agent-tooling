@@ -353,6 +353,47 @@ test('pnpm test:rubrics --dry-run validates all 144 checked-in fixtures, rubrics
   );
   assert.notEqual(conflict.status, 0);
   assert.match(conflict.stderr, /Cannot combine --model with --file-model or --module-model/);
+
+  // Verify --backend claude defaults to haiku (file) / sonnet (module) with numeric pass_threshold parity and supports overrides.
+  const claudeDry = spawnSync(
+    process.execPath,
+    [HARNESS_CLI, '--dry-run', '--json', '--backend', 'claude', '--rubric', 'readability'],
+    { env, encoding: 'utf8' },
+  );
+  assert.ifError(claudeDry.error);
+  assert.equal(claudeDry.status, 0, claudeDry.stderr || claudeDry.stdout);
+  const claudeReport = JSON.parse(claudeDry.stdout) as RubricHarnessReport;
+  assert.equal(claudeReport.backend, 'claude');
+  assert.equal(claudeReport.models.file, 'haiku');
+  assert.equal(claudeReport.models.module, 'sonnet');
+  const namedExprCheck = claudeReport.fixtures
+    .flatMap((f) => f.checks)
+    .find((c) => c.check_id === 'named_domain_expressions');
+  assert.equal(namedExprCheck?.pass_threshold, 60);
+  const directReadCheck = claudeReport.fixtures
+    .flatMap((f) => f.checks)
+    .find((c) => c.check_id === 'direct_readability');
+  assert.equal(directReadCheck?.pass_threshold, 80);
+
+  const claudeOverride = spawnSync(
+    process.execPath,
+    [HARNESS_CLI, '--dry-run', '--json', '--backend', 'claude', '--file-model', 'sonnet', '--module-model', 'opus', '--rubric', 'readability'],
+    { env, encoding: 'utf8' },
+  );
+  assert.equal(claudeOverride.status, 0, claudeOverride.stderr || claudeOverride.stdout);
+  const claudeOverrideReport = JSON.parse(claudeOverride.stdout) as RubricHarnessReport;
+  assert.equal(claudeOverrideReport.models.file, 'sonnet');
+  assert.equal(claudeOverrideReport.models.module, 'opus');
+
+  const codexOverride = spawnSync(
+    process.execPath,
+    [HARNESS_CLI, '--dry-run', '--json', '--backend', 'codex', '--model', 'gpt-6.2-sol', '--rubric', 'readability'],
+    { env, encoding: 'utf8' },
+  );
+  assert.equal(codexOverride.status, 0, codexOverride.stderr || codexOverride.stdout);
+  const codexOverrideReport = JSON.parse(codexOverride.stdout) as RubricHarnessReport;
+  assert.equal(codexOverrideReport.models.file, 'gpt-6.2-sol');
+  assert.equal(codexOverrideReport.models.module, 'gpt-6.2-sol');
 });
 
 test('runRubricHarness runs dual file+module modes narrowed to expected checks, ignores scope filter in file mode, and enforces scope gating', async (t) => {

@@ -752,8 +752,9 @@ test('per-file budget allows >128 KiB directories while rejecting any single fil
   assert.ok(!leaked.stderr.includes('fixture-api-key'));
 });
 
-test('codex and claude CLI backends work without OPENROUTER_API_KEY or --out, map borderline to warning and fail to error', (t) => {
-  const { run, root } = setup(t);
+test('codex and claude CLI backends isolate context, score on 0-100 with threshold parity, and support --deep/--model', async (t) => {
+  const { run, root, project } = setup(t);
+  const { adaptCliChecks } = await import('../scripts/cli-backend.mts');
   const fakeBin = join(root, 'fake-bin');
   mkdirSync(fakeBin, { recursive: true });
 
@@ -764,14 +765,18 @@ const args = process.argv.slice(2);
 const outIdx = args.indexOf('-o');
 const schemaIdx = args.indexOf('--output-schema');
 const modelIdx = args.indexOf('-m');
-if (args[0] !== 'exec' || outIdx === -1 || schemaIdx === -1 || args[modelIdx + 1] !== 'gpt-6-luna') process.exit(2);
+if (args[0] !== 'exec' || outIdx === -1 || schemaIdx === -1 || modelIdx === -1) process.exit(2);
 const schema = JSON.parse(fs.readFileSync(args[schemaIdx + 1], 'utf8'));
-const ids = schema.properties.checks.items.properties.id.enum;
+const itemProps = schema.properties.checks.items.properties;
+const itemReq = schema.properties.checks.items.required;
+if (JSON.stringify(itemReq) !== JSON.stringify(['id', 'note', 'score'])) process.exit(3);
+if (itemProps.score?.type !== 'integer' || itemProps.score?.minimum !== 0 || itemProps.score?.maximum !== 100) process.exit(4);
+const ids = itemProps.id.enum;
 const payload = {
   checks: ids.map((id) => ({
     id,
-    note: id === 'direct_readability' ? 'Clear domain names.' : 'Mixed concern in one check.',
-    choice: id === 'direct_readability' ? 'pass' : 'borderline',
+    note: id === 'direct_readability' ? 'Mixed concern in one check.' : 'Satisfies 60-bar rule.',
+    score: id === 'direct_readability' ? 72 : 65,
   })),
 };
 fs.writeFileSync(args[outIdx + 1], JSON.stringify(payload));
@@ -780,19 +785,53 @@ fs.writeFileSync(args[outIdx + 1], JSON.stringify(payload));
 
   const claudeStub = join(fakeBin, 'claude');
   writeFileSync(claudeStub, `#!/usr/bin/env node
+const fs = require('node:fs');
 const args = process.argv.slice(2);
-const schemaIdx = args.indexOf('--json-schema');
-const modelIdx = args.indexOf('--model');
-if (args[0] !== '-p' || schemaIdx === -1 || args[modelIdx + 1] !== 'haiku' || process.env.MAX_THINKING_TOKENS !== '0') process.exit(2);
-const schema = JSON.parse(args[schemaIdx + 1]);
-const ids = schema.properties.checks.items.properties.id.enum;
+const flagVal = (flag) => {
+  const idx = args.indexOf(flag);
+  return idx === -1 ? undefined : args[idx + 1];
+};
+if (args[0] !== '-p') process.exit(10);
+if (args.includes('--bare')) process.exit(11);
+if (!args.includes('--restricted')) process.exit(12);
+if (!args.includes('--strict-mcp-config')) process.exit(13);
+if (!args.includes('--no-session-persistence')) process.exit(14);
+if (!args.includes('--disable-slash-commands')) process.exit(15);
+if (flagVal('--effort') !== 'low') process.exit(16);
+if (flagVal('--output-format') !== 'json') process.exit(17);
+if (flagVal('--setting-sources') !== '') process.exit(18);
+if (flagVal('--tools') !== '') process.exit(19);
+const sysPrompt = flagVal('--system-prompt') || '';
+if (!sysPrompt.includes('0 to 100') || !sysPrompt.includes('90-100') || !sysPrompt.includes('0-59')) process.exit(20);
+if (process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC !== '1') process.exit(21);
+if (process.env.MAX_THINKING_TOKENS !== '0') process.exit(22);
+if (process.env.CLAUDE_CODE_SIMPLE !== undefined) process.exit(23);
+if (fs.readdirSync(process.cwd()).length !== 0) process.exit(24);
+if (process.cwd() === ${JSON.stringify(project)}) process.exit(25);
+
+const stdin = fs.readFileSync(0, 'utf8');
+let parsedStdin;
+try {
+  parsedStdin = JSON.parse(stdin);
+} catch {
+  process.exit(26);
+}
+if (!parsedStdin.state || !parsedStdin.questions) process.exit(27);
+
+const schema = JSON.parse(flagVal('--json-schema'));
+const itemProps = schema.properties.checks.items.properties;
+const itemReq = schema.properties.checks.items.required;
+if (JSON.stringify(itemReq) !== JSON.stringify(['id', 'note', 'score'])) process.exit(28);
+if (itemProps.score?.type !== 'integer' || itemProps.score?.minimum !== 0 || itemProps.score?.maximum !== 100) process.exit(29);
+const ids = itemProps.id.enum;
+const model = flagVal('--model');
 console.log(JSON.stringify({
-  modelUsage: { 'claude-haiku-test': { inputTokens: 10 } },
+  modelUsage: { ['claude-' + model + '-test']: { inputTokens: 10 } },
   structured_output: {
     checks: ids.map((id) => ({
       id,
       note: id === 'direct_readability' ? 'Looks clean.' : 'Violates rule.',
-      choice: id === 'direct_readability' ? 'pass' : 'fail',
+      score: id === 'direct_readability' ? 92 : 55,
     })),
   },
 }));
@@ -801,34 +840,106 @@ console.log(JSON.stringify({
 
   const stubEnv = { PATH: `${fakeBin}:${process.env.PATH ?? ''}` };
 
-  // Codex borderline -> warning (exit 0 without --fail-on-warning, exit 1 with --fail-on-warning)
+  // Codex: direct_readability (72 on >=80 -> warning), named_domain_expressions (65 on >=60 -> pass)
   const codexProc = run('preview', ['module', 'booking', '--rubric', 'readability', '--backend', 'codex'], stubEnv);
   assert.equal(codexProc.status, 0, codexProc.stderr);
-  assert.match(codexProc.stdout, /warning\s+named_domain_expressions\s+\(Mixed concern in one check\.\)/);
+  assert.match(codexProc.stdout, /warning\s+direct_readability\s+\(score 72\/100, pass >= 80\)/);
+  assert.doesNotMatch(codexProc.stdout, /named_domain_expressions/);
   assert.match(codexProc.stdout, /✖ 0 errors, 1 warning across 1 module/);
 
   const codexWarnFail = run('preview', ['module', 'booking', '--rubric', 'readability', '--backend', 'codex', '--fail-on-warning'], stubEnv);
   assert.equal(codexWarnFail.status, 1, codexWarnFail.stderr);
 
-  // Claude fail -> error (exit 1)
+  // Claude file mode defaults to haiku; named_domain_expressions (55 on >=60 -> error)
   const claudeProc = run('preview', ['booking', '--rubric', 'readability', '--backend', 'claude', '--concurrency', '2', '--json'], stubEnv);
   assert.equal(claudeProc.status, 1, claudeProc.stderr);
   const claudeRes = JSON.parse(claudeProc.stdout);
   assert.equal(claudeRes.backend, 'claude');
+  assert.equal(claudeRes.requested_model, 'haiku');
+  assert.equal(claudeRes.returned_model, 'claude-haiku-test');
+  assert.equal(claudeRes.pass_threshold, 80);
+  assert.deepEqual(claudeRes.check_thresholds, { named_domain_expressions: 60 });
+  assert.equal(claudeRes.quality.checks.direct_readability.choice, 'pass');
+  assert.equal(claudeRes.quality.checks.direct_readability.score, 92);
+  assert.equal(claudeRes.quality.checks.direct_readability.min_score, 92);
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.choice, 'fail');
   assert.equal(claudeRes.quality.checks.named_domain_expressions.severity, 'error');
   assert.equal(claudeRes.quality.checks.named_domain_expressions.files_errors, 4);
-  assert.equal(claudeRes.quality.checks.named_domain_expressions.score, null);
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.score, 55);
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.min_score, 55);
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.pass_threshold, 60);
+  assert.equal(claudeRes.file_results[0].checks.named_domain_expressions.note, 'Violates rule.');
   assert.equal(claudeProc.stdout.includes('confidence'), false);
   assert.equal(claudeProc.stdout.includes('pass_probability'), false);
 
-  // --model and --deep are rejected on CLI backends with exit 2
-  const modelOnCodex = run('reject', ['booking', '--backend', 'codex', '--model', 'gpt-6.2-sol', '--dry-run']);
-  assert.equal(modelOnCodex.status, 2);
-  assert.match(modelOnCodex.stderr, /only supported with --backend openrouter/);
+  // Claude formatted linter output matches OpenRouter 1:1
+  const claudeFormatted = run('preview', ['booking', '--rubric', 'readability', '--backend', 'claude', '--concurrency', '2'], stubEnv);
+  assert.equal(claudeFormatted.status, 1, claudeFormatted.stderr);
+  assert.match(claudeFormatted.stdout, /error\s+named_domain_expressions\s+\(score 55\/100, pass >= 60\)/);
 
-  const deepOnClaude = run('reject', ['booking', '--backend', 'claude', '--deep', '--dry-run']);
-  assert.equal(deepOnClaude.status, 2);
-  assert.match(deepOnClaude.stderr, /only supported with --backend openrouter/);
+  // Claude --deep and module/structure modes default to sonnet; --model overrides work on both claude and codex
+  const claudeDeep = run('preview', ['booking', '--rubric', 'readability', '--backend', 'claude', '--deep', '--dry-run', '--json']);
+  assert.equal(claudeDeep.status, 0, claudeDeep.stderr);
+  assert.equal(JSON.parse(claudeDeep.stdout).requested_model, 'sonnet');
+
+  const claudeModule = run('preview', ['module', 'booking', '--rubric', 'readability', '--backend', 'claude', '--json'], stubEnv);
+  assert.equal(claudeModule.status, 1, claudeModule.stderr);
+  const claudeModuleRes = JSON.parse(claudeModule.stdout);
+  assert.equal(claudeModuleRes.requested_model, 'sonnet');
+  assert.equal(claudeModuleRes.returned_model, 'claude-sonnet-test');
+
+  const claudeStructure = run('preview', ['structure', 'booking', '--backend', 'claude', '--dry-run', '--json']);
+  assert.equal(claudeStructure.status, 0, claudeStructure.stderr);
+  assert.equal(JSON.parse(claudeStructure.stdout).requested_model, 'sonnet');
+
+  const modelOnClaude = run('preview', ['booking', '--backend', 'claude', '--model', 'opus', '--dry-run', '--json']);
+  assert.equal(modelOnClaude.status, 0, modelOnClaude.stderr);
+  assert.equal(JSON.parse(modelOnClaude.stdout).requested_model, 'opus');
+
+  const modelOnCodex = run('preview', ['booking', '--backend', 'codex', '--model', 'gpt-6.2-sol', '--dry-run', '--json']);
+  assert.equal(modelOnCodex.status, 0, modelOnCodex.stderr);
+  assert.equal(JSON.parse(modelOnCodex.stdout).requested_model, 'gpt-6.2-sol');
+
+  const deepOnCodex = run('reject', ['booking', '--backend', 'codex', '--deep', '--dry-run']);
+  assert.equal(deepOnCodex.status, 2);
+  assert.match(deepOnCodex.stderr, /--deep is only supported with --backend openrouter or --backend claude/);
+
+  const deepAndModelOnClaude = run('reject', ['booking', '--backend', 'claude', '--deep', '--model', 'opus', '--dry-run']);
+  assert.equal(deepAndModelOnClaude.status, 2);
+  assert.match(deepAndModelOnClaude.stderr, /Cannot combine --deep and --model/);
+
+  // Direct unit checks for adaptCliChecks boundary mapping and validation
+  const adapted = adaptCliChecks(
+    {
+      checks: [
+        { id: 'err_59', note: 'Serious flaw.', score: 59 },
+        { id: 'warn_60', note: 'Below 80.', score: 60 },
+        { id: 'warn_79', note: 'Just under 80.', score: 79 },
+        { id: 'pass_80', note: 'Solid.', score: 80 },
+        { id: 'cal_pass_60', note: 'Acceptable for 60 bar.', score: 60 },
+        { id: 'cal_err_59', note: 'Fails 60 bar.', score: 59 },
+        { id: 'cal_warn_65', note: 'Below 70 bar.', score: 65 },
+      ],
+    },
+    ['err_59', 'warn_60', 'warn_79', 'pass_80', 'cal_pass_60', 'cal_err_59', 'cal_warn_65'],
+    { err_59: 0.8, warn_60: 0.8, warn_79: 0.8, pass_80: 0.8, cal_pass_60: 0.6, cal_err_59: 0.6, cal_warn_65: 0.7 },
+  );
+  assert.deepEqual(adapted.err_59, { choice: 'fail', severity: 'error', score: 59, note: 'Serious flaw.' });
+  assert.deepEqual(adapted.warn_60, { choice: 'fail', severity: 'warning', score: 60, note: 'Below 80.' });
+  assert.deepEqual(adapted.warn_79, { choice: 'fail', severity: 'warning', score: 79, note: 'Just under 80.' });
+  assert.deepEqual(adapted.pass_80, { choice: 'pass', score: 80, note: 'Solid.' });
+  assert.deepEqual(adapted.cal_pass_60, { choice: 'pass', score: 60, pass_threshold: 60, note: 'Acceptable for 60 bar.' });
+  assert.deepEqual(adapted.cal_err_59, { choice: 'fail', severity: 'error', score: 59, pass_threshold: 60, note: 'Fails 60 bar.' });
+  assert.deepEqual(adapted.cal_warn_65, { choice: 'fail', severity: 'warning', score: 65, pass_threshold: 70, note: 'Below 70 bar.' });
+
+  assert.throws(
+    () => adaptCliChecks({ checks: [{ id: 'a', note: 'x', score: 75.5 }] }, ['a']),
+    /Invalid score for a/,
+  );
+  assert.throws(
+    () => adaptCliChecks({ checks: [{ id: 'a', note: 'x', score: 101 }] }, ['a']),
+    /Invalid score for a/,
+  );
 
   // Failing CLI backend exits 2
   const failingBin = join(root, 'failing-bin');
