@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-boundary-dto-good",
+  "description": "Standalone public API boundary DTO interfaces with plain primitive fields and optional boolean input flags paired with boundary parsing and typed policy lookup",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "pass"
+  }
+}
