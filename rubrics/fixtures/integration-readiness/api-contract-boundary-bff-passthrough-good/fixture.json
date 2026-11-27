@@ -1,0 +1,8 @@
+{
+  "id": "api-contract-boundary-bff-passthrough-good",
+  "description": "Thin server-side BFF HTTP pass-through proxy forwarder and route returning upstream status, selected response headers, and body verbatim back to the browser without casting or JSON parsing",
+  "rubric": "integration-readiness",
+  "expect": {
+    "clean_api_contract_boundary": "pass"
+  }
+}

@@ -293,9 +293,9 @@ test('loadFixtures enforces real-file fixture.json + files/ layout and rejects i
   assert.throws(() => loadFixtures(badRootDir), /must be a single safe directory name/);
 });
 
-test('pnpm test:rubrics --dry-run validates all 153 checked-in fixtures, rubrics, CLI filters, and 52-criterion criteria_matrix offline', () => {
+test('pnpm test:rubrics --dry-run validates all 154 checked-in fixtures, rubrics, CLI filters, and 52-criterion criteria_matrix offline', () => {
   const fixtures = loadFixtures();
-  assert.ok(fixtures.length >= 153, `Expected at least 153 fixtures across all 59 criteria, found ${fixtures.length}`);
+  assert.ok(fixtures.length >= 154, `Expected at least 154 fixtures across all 59 criteria, found ${fixtures.length}`);
 
   const env = { ...process.env };
   delete env.OPENROUTER_API_KEY;
