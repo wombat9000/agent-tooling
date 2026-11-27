@@ -1,0 +1,8 @@
+{
+  "id": "suite-and-config-diagnostics-good",
+  "description": "Playwright config enforces forbidOnly in CI, bounds retries to CI, captures traces on retry/failure, centralizes baseURL, and specs use relative routes and explicit reasoned conditional skips",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_suite_and_config_diagnostics": "pass"
+  }
+}

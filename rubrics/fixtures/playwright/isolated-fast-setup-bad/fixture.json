@@ -1,0 +1,8 @@
+{
+  "id": "isolated-fast-setup-bad",
+  "description": "Tests depend on serial execution order with shared mutable module state, repeatedly log in through the UI in beforeEach, and leak manual browser contexts without cleanup",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_isolated_fast_setup": "fail"
+  }
+}

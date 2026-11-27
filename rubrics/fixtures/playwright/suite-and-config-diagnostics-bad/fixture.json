@@ -1,0 +1,8 @@
+{
+  "id": "suite-and-config-diagnostics-bad",
+  "description": "Playwright config omits forbidOnly and baseURL, sets excessive unconditional retries and huge test timeouts, disables traces, and specs hardcode localhost URLs with committed test.only and unreasoned test.skip",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_suite_and_config_diagnostics": "fail"
+  }
+}

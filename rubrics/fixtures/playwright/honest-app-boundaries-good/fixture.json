@@ -1,0 +1,8 @@
+{
+  "id": "honest-app-boundaries-good",
+  "description": "Happy-path E2E specs hit the real backend and verify reload and API persistence, while reserving page.route strictly for targeted 503 fault injection and an external third-party map CDN",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_honest_app_boundaries": "pass"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "isolated-fast-setup-good",
+  "description": "Suite reuses storageState auth, seeds unique isolated records via API fixtures with teardown cleanup, runs tests in parallel, and clears storageState only for auth flow tests",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_isolated_fast_setup": "pass"
+  }
+}

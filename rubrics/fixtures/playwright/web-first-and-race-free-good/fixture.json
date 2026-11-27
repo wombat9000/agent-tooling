@@ -1,0 +1,8 @@
+{
+  "id": "web-first-and-race-free-good",
+  "description": "Specs use awaited web-first assertions, arm download/response listeners before actions, use static checks on response/download metadata, and use expect.poll for async job status",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_web_first_and_race_free": "pass"
+  }
+}

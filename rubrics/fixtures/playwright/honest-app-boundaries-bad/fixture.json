@@ -1,0 +1,8 @@
+{
+  "id": "honest-app-boundaries-bad",
+  "description": "Happy-path E2E specs mock away first-party app APIs with hardcoded fake JSON via page.route and mutate internal client store globals via page.evaluate",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_honest_app_boundaries": "fail"
+  }
+}

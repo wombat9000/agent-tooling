@@ -1,0 +1,8 @@
+{
+  "id": "strict-scoped-locators-bad",
+  "description": "Specs rely on brittle CSS descendant chains, XPath, nth-child and .nth()/.first() positional crutches, and getByTestId overuse on standard accessible controls",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_strict_scoped_locators": "fail"
+  }
+}
