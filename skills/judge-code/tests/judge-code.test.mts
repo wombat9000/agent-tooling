@@ -802,7 +802,7 @@ if (flagVal('--output-format') !== 'json') process.exit(17);
 if (flagVal('--setting-sources') !== '') process.exit(18);
 if (flagVal('--tools') !== '') process.exit(19);
 const sysPrompt = flagVal('--system-prompt') || '';
-if (!sysPrompt.includes('0 to 100') || !sysPrompt.includes('90-100') || !sysPrompt.includes('0-59')) process.exit(20);
+if (!sysPrompt.includes('0 to 100') || !sysPrompt.includes('90-100') || !sysPrompt.includes('0-59') || !sysPrompt.includes('do not lower the score of a clean file')) process.exit(20);
 if (process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC !== '1') process.exit(21);
 if (process.env.MAX_THINKING_TOKENS !== '0') process.exit(22);
 if (process.env.CLAUDE_CODE_SIMPLE !== undefined) process.exit(23);
