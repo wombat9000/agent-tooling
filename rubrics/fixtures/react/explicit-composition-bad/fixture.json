@@ -3,6 +3,6 @@
   "description": "Packs profile form, billing controls, API key management table, webhook settings, and destructive confirmation modal into one monolithic screen component",
   "rubric": "react",
   "expect": {
-    "explicit_component_composition": "fail"
+    "react_component_composition": "fail"
   }
 }

@@ -789,7 +789,7 @@ test('applies_to schema validation enforces valid extensions/runtime_imports and
     hasRequirements: false,
     hasConventions: false,
   });
-  assert.deepEqual(resolvedReact.appliesTo?.effect_lifecycle_and_async_safety, {
+  assert.deepEqual(resolvedReact.appliesTo?.react_effect_lifecycle, {
     extensions: ['.tsx'],
     runtime_imports: ['react', 'react-dom'],
   });
@@ -803,7 +803,7 @@ test('applies_to schema validation enforces valid extensions/runtime_imports and
       id: 'non-react-bad',
       description: 'Non-React fixture targeting react rubric should fail validation',
       rubric: 'react',
-      expect: { effect_lifecycle_and_async_safety: 'pass' },
+      expect: { react_effect_lifecycle: 'pass' },
     },
     { 'plain.ts': 'export const value = 1;\n' },
   );

@@ -3,6 +3,6 @@
   "description": "Cleans up event listeners in effect teardown, guards async search requests with AbortController, and executes user actions directly in handlers",
   "rubric": "react",
   "expect": {
-    "effect_lifecycle_and_async_safety": "pass"
+    "react_effect_lifecycle": "pass"
   }
 }

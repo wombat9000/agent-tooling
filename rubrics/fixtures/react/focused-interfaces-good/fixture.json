@@ -3,6 +3,6 @@
   "description": "Uses a few orthogonal display booleans on a button and a discriminated-union prop contract for distinct dialog modes",
   "rubric": "react",
   "expect": {
-    "focused_component_interfaces": "pass"
+    "react_component_interfaces": "pass"
   }
 }
