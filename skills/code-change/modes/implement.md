@@ -38,7 +38,26 @@ Run the verification commands and read their output. Record each as
 without your change, say so and leave it. List any check you could not run and
 what therefore remains unverified.
 
-## 4. Get a review
+## 4. Review the change
+
+**Default to `judge-code`** when the `judge-code` skill is loaded or available and
+applies to the changed code, instead of spawning an independent reviewer subagent:
+
+- Follow the `judge-code` skill on the changed production code: run per-file linting
+  (`judge-code --changed` or `judge-code <paths...>`) and a `module` check
+  (`judge-code module <paths...>`) on affected modules when the change spans multiple
+  files, adds a module, or alters interfaces or boundaries.
+- Read the printed `Rule criteria:` legend (or `judge-code explain <check-id...>`)
+  before editing, inspect each `error` and `warning` in source, fix verified findings
+  while keeping typecheck and tests green, and re-run `judge-code` on the same scope.
+
+**Use an independent review only when** `judge-code` is not loaded or available,
+cannot run or does not cover the change (for example, missing credentials/backend,
+an unsupported language, or a test-only change), or the user explicitly asks for an
+independent review (which may run alongside `judge-code`). Note the fallback reason
+in the handoff.
+
+### Fallback: independent review
 
 **Delegate the review** when any of these apply:
 
@@ -46,7 +65,7 @@ what therefore remains unverified.
 - A public interface changed: an exported API, schema, CLI, configuration or wire format.
 - A new module, class or file with its own responsibility was added.
 - The change touches persistence, concurrency, authentication, authorization or money.
-- The user asked for a review.
+- The user explicitly asked for an independent review.
 
 Otherwise, review the change yourself by following `modes/review.md`.
 
@@ -84,13 +103,15 @@ the handoff that the review was a self-review.
 
 Assess each finding before acting on it:
 
-- **Blocking**: fix it.
-- **Should fix**: fix it, or explain in the handoff why the departure is justified.
+- **Blocking** or **`judge-code` `error`**: fix it (for a `judge-code` false positive or higher-precedence override, explain why in the handoff).
+- **Should fix** or **`judge-code` `warning`**: fix it, or explain in the handoff why the departure is justified.
 - **Optional**: your choice. Optional findings never expand the task's scope.
 
-Rerun the affected checks after fixes. Request one targeted re-review only when a
-Blocking fix changed behavior. If the reviewer and you still disagree after that,
-report the disagreement to the user instead of looping.
+Rerun the affected verification checks (typecheck, linters, tests) after fixes, and
+re-run `judge-code` with the same scope when it was used. For an independent review,
+request one targeted re-review only when a Blocking fix changed behavior; if the
+reviewer and you still disagree after that, report the disagreement to the user
+instead of looping.
 
 ## 6. Hand off
 
@@ -99,8 +120,8 @@ Report in this shape:
 ```text
 Summary: what changed and why (2–4 lines)
 Verification: command → result, one per line; checks not run and why
-Review: delegated | self-review
-  - <finding title> (<severity>): fixed | declined because <reason>
+Review: judge-code | delegated | self-review
+  - <finding or rule> (<severity>): fixed | declined because <reason>
 Assumptions and limitations: …
 State: uncommitted changes on <branch> | committed <sha>
 ```
