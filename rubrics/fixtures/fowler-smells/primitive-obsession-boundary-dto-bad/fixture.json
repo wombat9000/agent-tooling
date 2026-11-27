@@ -1,0 +1,8 @@
+{
+  "id": "primitive-obsession-boundary-dto-bad",
+  "description": "Core domain logic branches directly on unconstrained raw category/status strings, coupled boolean control flags, and repeated magic strings and unnamed thresholds instead of parsing at the boundary",
+  "rubric": "fowler-smells",
+  "expect": {
+    "no_primitive_obsession": "fail"
+  }
+}
