@@ -18,8 +18,12 @@ import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildDashboardModel,
+  computeNiceAxisTicks,
+  formatToolingVersion,
+  formatVersionDeltaLabel,
   generateDashboard,
   renderDashboardHtml,
+  stripSharedPathPrefix,
 } from './dashboard.mts';
 import {
   discoverRepoModules,
@@ -1558,16 +1562,24 @@ test('dashboard model and HTML support Feature / Module Architecture, linter pun
     [{ id: 'dependency_inversion', severity: 'borderline' }],
   );
 
-  // Render HTML and verify punch-list layout, aligned errors/warnings terminology, offline self-containment, XSS escaping, and valid client script syntax
+  // Render HTML and verify redesigned UX/UI: errors-first hero, Tooling health separation,
+  // heatmap-first layout (no duplicate punch-list table), offline self-containment, XSS escaping, and valid client script syntax
   const html = renderDashboardHtml(model);
   assert.ok(!/https?:\/\//i.test(html), 'Dashboard HTML must remain 100% offline with zero external URLs');
   assert.match(html, /Rubric Quality Punch-List/);
-  assert.match(html, /Open findings/);
-  assert.match(html, /2 errors · 2 warnings/);
+  assert.match(html, /Open errors \(raw FAIL\)/);
+  assert.match(html, /\+2 borderline across 2 repos/);
+  assert.match(html, /Tooling health/);
+  assert.match(html, /Cross-repo rule heatmap/);
+  assert.doesNotMatch(html, /Repositories punch-list \(worst-first\)/);
+  assert.doesNotMatch(html, /\* = rubric\/judge change/);
+  assert.doesNotMatch(html, /Click any repository to inspect/);
   assert.match(html, /Module architecture/);
-  assert.match(html, /Repositories punch-list \(worst-first\)/);
+  assert.match(html, /2 errors/);
   assert.match(html, /Feature \/ Module Architecture/);
-  assert.match(html, /Errors \/ Warnings/);
+  assert.match(html, /minmax\(0,/);
+  assert.match(html, /:focus-visible/);
+  assert.match(html, /hashchange/);
   assert.ok(!html.includes('</script><img'), 'Raw </script> in module name must be escaped');
   assert.ok(!html.includes('<script>alert(10)</script>'), 'Raw <script> in module error must be escaped');
 
@@ -1575,6 +1587,200 @@ test('dashboard model and HTML support Feature / Module Architecture, linter pun
   const scriptMatch = /<script id="dashboard-data" type="application\/json">[\s\S]*?<\/script>\n<script>([\s\S]*?)<\/script>/.exec(html);
   assert.ok(scriptMatch, 'Client script block must be present');
   assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline dashboard client script must parse cleanly');
+});
+
+test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no Not scanned tile, single-run collapse, and fixture details', () => {
+  // 1. Nice rounded Y-axis ticks (never odd splits like 134 / 267)
+  assert.deepEqual(computeNiceAxisTicks(243), { max: 300, ticks: [0, 100, 200, 300] });
+  assert.deepEqual(computeNiceAxisTicks(267), { max: 300, ticks: [0, 100, 200, 300] });
+  assert.deepEqual(computeNiceAxisTicks(134), { max: 150, ticks: [0, 50, 100, 150] });
+  assert.deepEqual(computeNiceAxisTicks(12), { max: 15, ticks: [0, 5, 10, 15] });
+  assert.deepEqual(computeNiceAxisTicks(0), { max: 4, ticks: [0, 2, 4] });
+
+  // 2. Header/footer version deduplication
+  assert.equal(formatToolingVersion('v2.2.0', 'v2.2.0'), 'v2.2.0');
+  assert.equal(formatToolingVersion('v2.2.0', null), 'v2.2.0');
+  assert.equal(formatToolingVersion('v2.2.0', 'v2.3.0'), 'v2.2.0 · update available: v2.3.0');
+  assert.equal(formatToolingVersion('v2.2.0-3-gabc1234', 'v2.2.0'), 'v2.2.0-3-gabc1234 · latest tag: v2.2.0');
+
+  // 3. Chart version delta marker labels
+  assert.equal(formatVersionDeltaLabel('v1.3.0', 'v2.2.0'), 'v1.3 → v2.2');
+  assert.equal(formatVersionDeltaLabel('v1.2.1', 'v1.3.0'), 'v1.2.1 → v1.3');
+  assert.equal(formatVersionDeltaLabel('v2.2.0', 'v2.2.0'), 'rubric Δ');
+  assert.equal(formatVersionDeltaLabel(null, 'v2.2.0'), 'rubric Δ');
+
+  // 4. Shared file path prefix stripping
+  assert.equal(
+    stripSharedPathPrefix(['src/main/kotlin/com/app/a/One.kt', 'src/main/kotlin/com/app/b/Two.kt']),
+    'src/main/kotlin/com/app/',
+  );
+  assert.equal(stripSharedPathPrefix(['src/only.ts']), '');
+  assert.equal(stripSharedPathPrefix(['a/one.ts', 'b/two.ts']), '');
+
+  // 5. Render without module scans -> NO "Not scanned" KPI tile; version deduped when judge_version === latest_tag
+  const catalog = loadRubricCatalog();
+  const matchedCatalog = {
+    ...catalog,
+    agent_tooling: {
+      ...catalog.agent_tooling,
+      judge_version: 'v2.2.0',
+      latest_tag: 'v2.2.0',
+    },
+  };
+  const fileOnlySnap: RepoSnapshot = {
+    schema_version: 1,
+    kind: 'repo',
+    timestamp: '2026-11-25T22:46:02.000Z',
+    repo: {
+      name: 'alpha-web',
+      branch: 'main',
+      commit: '111122223333',
+      commit_short: '1111222',
+      dirty: false,
+      installed_judge_code: { ref: 'v1.3.0', source: 'wombat9000/agent-tooling', computed_hash: 'abcd1234', skill_path: 'skills/judge-code/SKILL.md' },
+    },
+    scan: {
+      mode: 'file',
+      sources: ['app'],
+      rubrics: ['readability'],
+      rubric_id: 'readability-v2',
+      rubric_groups: { readability: ['direct_readability'] },
+      exclude: [],
+      model: 'typesafe/jev-1.14',
+      returned_model: 'typesafe/jev-1.14',
+      backend: 'openrouter',
+      conventions_hash: null,
+      requirements_hash: null,
+    },
+    judge_version: 'v1.3.0',
+    agent_tooling_tag: 'v1.3.0',
+    agent_tooling_commit: 'deadbee',
+    rubric_hashes: { readability: 'aaaa' },
+    rubrics_digest: computeHashesDigest({ readability: 'aaaa' }),
+    metrics: {
+      file_count: 2,
+      target_count: 2,
+      check_count: 1,
+      calibrated_pass_rate: 0.5,
+      raw_pass_rate: 0.5,
+      mean_pass_probability: 0.65,
+      elapsed_ms: 120,
+      cost_usd: 0.001,
+      requests: 2,
+      retries: 0,
+    },
+    checks: {
+      direct_readability: {
+        threshold: 0.8,
+        rubric_group: 'readability',
+        passed: 1,
+        raw_passed: 1,
+        total: 2,
+        pass_rate: 0.5,
+        raw_pass_rate: 0.5,
+        mean_pass_probability: 0.65,
+        min_pass_probability: 0.3,
+      },
+    },
+    files: [
+      {
+        path: 'app/features/auth/login.ts',
+        pass_rate: 0,
+        raw_pass_rate: 0,
+        mean_pass_probability: 0.3,
+        min_pass_probability: 0.3,
+        failed_count: 1,
+        checks: { direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: 0.3, confidence: 0.9 } },
+      },
+      {
+        path: 'app/features/auth/logout.ts',
+        pass_rate: 1,
+        raw_pass_rate: 1,
+        mean_pass_probability: 0.95,
+        min_pass_probability: 0.95,
+        failed_count: 0,
+        checks: { direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 } },
+      },
+    ],
+  };
+
+  const passingFixtures: LoadedSnapshotRecord<RubricFixturesSnapshot>[] = [
+    {
+      file: 'fx-pass.json',
+      snapshot: {
+        schema_version: 1,
+        kind: 'rubric_fixtures',
+        timestamp: '2026-11-25T22:46:14.000Z',
+        judge_version: 'v2.2.0',
+        agent_tooling_tag: 'v2.2.0',
+        agent_tooling_commit: '956ed80',
+        rubric_hashes: { readability: 'aaaa' },
+        fixture_hashes: { f1: '1111' },
+        combined_hash: '2222',
+        scan: { backend: 'openrouter', model: null, repeats: 2 },
+        metrics: {
+          status: 'passed',
+          fixtures_total: 1,
+          fixtures_passed: 1,
+          fixture_pass_rate: 1,
+          checks_total: 2,
+          checks_passed: 2,
+          check_pass_rate: 1,
+          min_margin: 0.19,
+          mean_margin: 0.21,
+          max_jitter: 0.05,
+          mean_jitter: 0.03,
+          elapsed_ms: 400,
+          cost_usd: 0.0002,
+          requests: 2,
+        },
+        checks: [
+          {
+            fixture_id: 'f1',
+            mode: 'file',
+            rubric: 'readability-v2',
+            check_id: 'direct_readability',
+            expected: 'pass',
+            passed: true,
+            matches: 2,
+            repeats: 2,
+            pass_threshold: 0.8,
+            min_pass_probability: 0.94,
+            max_pass_probability: 0.99,
+            mean_pass_probability: 0.965,
+            margin: 0.19,
+            jitter: 0.05,
+          },
+        ],
+      },
+    },
+  ];
+
+  const modelNoModules = buildDashboardModel({
+    repoSnapshots: [{ file: '1.json', snapshot: fileOnlySnap }],
+    fixtureSnapshots: passingFixtures,
+    catalog: matchedCatalog,
+  });
+  const htmlNoModules = renderDashboardHtml(modelNoModules);
+  assert.doesNotMatch(htmlNoModules, /Not scanned/);
+  assert.doesNotMatch(htmlNoModules, /latest tag v2\.2\.0/i);
+  assert.match(htmlNoModules, /agent-tooling <strong>v2\.2\.0<\/strong>/);
+  // Heatmap panel appears directly after KPI bar and before repo detail panel
+  const kpiPos = htmlNoModules.indexOf('class="kpi-bar"');
+  const heatPos = htmlNoModules.indexOf('id="heatmap-panel"');
+  const detailPos = htmlNoModules.indexOf('id="repo-detail-panel"');
+  assert.ok(kpiPos > 0 && heatPos > kpiPos && detailPos > heatPos, 'Heatmap must sit directly below KPI strip and above repo detail');
+
+  // Client script handles single-run quiet status, Module Architecture setup note, fixture <details> collapse/open, and does not plot jitter on pass-rate chart
+  const scriptBlock = /<script id="dashboard-data" type="application\/json">[\s\S]*?<\/script>\n<script>([\s\S]*?)<\/script>/.exec(htmlNoModules)?.[1] ?? '';
+  assert.match(scriptBlock, /First snapshot /);
+  assert.match(scriptBlock, /trend appears after the next run/);
+  assert.match(scriptBlock, /Module architecture checks are off\. Add <code>modules<\/code> \/ <code>moduleRoots<\/code> to enable\./);
+  assert.match(scriptBlock, /DEFAULT_HOTSPOT_LIMIT = 15/);
+  assert.match(scriptBlock, /MAX_VISIBLE_RULE_TAGS = 3/);
+  assert.match(scriptBlock, /fixture-details/);
+  assert.doesNotMatch(scriptBlock, /Max repeat jitter/);
+  assert.doesNotThrow(() => new Function(scriptBlock));
 });
 
 test('CLI supports --module-root and --skip-modules offline in --dry-run mode', (t) => {
