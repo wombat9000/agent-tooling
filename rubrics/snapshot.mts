@@ -7,19 +7,19 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseApplicability } from '../skills/judge-code/scripts/rubrics/applicability.mts';
+import { parsePassThreshold } from '../skills/judge-code/scripts/rubrics/loader.mts';
 import {
   PASS_THRESHOLD,
-  parseApplicability,
-  parsePassThreshold,
   type CheckScope,
   type JudgeMode,
   type RubricApplicability,
-} from '../skills/judge-code/scripts/rubrics.mts';
+} from '../skills/judge-code/scripts/rubrics/types.mts';
+import { probabilityToScore } from '../skills/judge-code/scripts/engine/scoring.mts';
 import {
   ERROR_SCORE_THRESHOLD,
-  probabilityToScore,
   type JudgeBackend,
-} from '../skills/judge-code/scripts/decisions.mts';
+} from '../skills/judge-code/scripts/engine/types.mts';
 import { AUTHORITATIVE_RUBRICS_DIR, sha256File } from './sync.mts';
 
 export const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));

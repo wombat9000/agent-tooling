@@ -1,12 +1,7 @@
 import { basename } from 'node:path';
-import { isPlaywrightConfigFilename } from './inputs.mts';
-import {
-  hasRuntimeImport,
-  narrowResolvedRubric,
-  nonempty,
-  object,
-  type ResolvedRubric,
-} from './rubrics.mts';
+import { isPlaywrightConfigFilename } from '../inputs/classify-path.mts';
+import { hasRuntimeImport, narrowResolvedRubric } from './applicability.mts';
+import { nonempty, object, type ResolvedRubric } from './types.mts';
 
 export type TestKind = 'unit' | 'integration' | 'e2e_browser' | 'test_support' | 'other';
 
@@ -134,7 +129,6 @@ const TEST_KIND_POLICIES: Record<TestKind, TestKindPolicy> = {
     roleLabel: ({ isPlaywright }) => (isPlaywright ? 'e2e_playwright' : 'e2e_browser'),
     selectRubrics: ({ isPlaywright }) => (
       isPlaywright
-        // Playwright specs use the dedicated playwright rubric rather than generic testing-e2e.
         ? [{ group: 'testing-core' }, { group: 'playwright' }]
         : [{ group: 'testing-core' }, { group: 'testing-e2e' }]
     ),
@@ -239,9 +233,7 @@ export function buildOpenRouterClassifyRequest(file: TestFileInput): OpenRouterC
   return {
     model: CLASSIFIER_OPENROUTER_MODEL,
     state: buildClassifyState(file),
-    questions: {
-      test_kind: TEST_KIND_QUESTION,
-    },
+    questions: { test_kind: TEST_KIND_QUESTION },
   };
 }
 
@@ -355,9 +347,7 @@ export function routeTestBundleRubrics(
   return narrowResolvedRubric(testRubric, keep);
 }
 
-/**
- * Zero-network dry-run preview for a single test file using Stage 0 Playwright detection only.
- */
+/** Zero-network dry-run preview for a single test file using Stage 0 Playwright detection only. */
 export function previewTestFileRubric(
   file: TestFileInput,
   testRubric: ResolvedRubric,
@@ -428,7 +418,6 @@ export async function classifyTestFile(
       retries: 0,
     });
   }
-
   if (options.invokeOpenRouter) {
     const request = buildOpenRouterClassifyRequest(file);
     const { raw, retries } = await options.invokeOpenRouter(`${JSON.stringify(request, null, 2)}\n`);
@@ -442,7 +431,6 @@ export async function classifyTestFile(
       retries,
     });
   }
-
   if (options.invokeCli) {
     const invoked = await options.invokeCli(buildCliClassifyCall(file));
     const parsed = parseCliTestKind(invoked.raw);
@@ -455,6 +443,5 @@ export async function classifyTestFile(
       retries: 0,
     });
   }
-
   throw new Error('classifyTestFile requires invokeOpenRouter or invokeCli');
 }

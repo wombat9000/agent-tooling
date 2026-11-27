@@ -11,32 +11,31 @@ import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scripts/cli-backend.mts';
+import { formatThreshold } from '../skills/judge-code/scripts/cli/format-summary.mts';
+import { CLAUDE_MODEL, CODEX_MODEL, runCliJudge } from '../skills/judge-code/scripts/engine/cli-backend.mts';
+import { runDecisionJudge } from '../skills/judge-code/scripts/engine/openrouter.mts';
+import { probabilityToScore, runWithConcurrency } from '../skills/judge-code/scripts/engine/scoring.mts';
 import {
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
-  probabilityToScore,
-  runDecisionJudge,
-  runWithConcurrency,
   type JudgeBackend,
   type JudgeResult,
   type JudgeRunOptions,
-} from '../skills/judge-code/scripts/decisions.mts';
-import { formatThreshold } from '../skills/judge-code/scripts/format.mts';
+} from '../skills/judge-code/scripts/engine/types.mts';
+import { readStructureInputs, type StructureManifest } from '../skills/judge-code/scripts/inputs/structure.mts';
+import { matchesFileApplicability } from '../skills/judge-code/scripts/rubrics/applicability.mts';
+import { resolveRubrics } from '../skills/judge-code/scripts/rubrics/resolver.mts';
 import {
   PASS_THRESHOLD,
-  matchesFileApplicability,
   nonempty,
   object,
-  resolveRubrics,
   type CheckScope,
   type ChoiceQuestion,
   type JudgeMode,
   type ResolvedRubric,
   type RubricApplicability,
   type RubricTarget,
-} from '../skills/judge-code/scripts/rubrics.mts';
-import { readStructureInputs, type StructureManifest } from '../skills/judge-code/scripts/structure.mts';
+} from '../skills/judge-code/scripts/rubrics/types.mts';
 
 export const AUTHORITATIVE_RUBRICS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const DEFAULT_FIXTURES_DIR = fileURLToPath(new URL('./fixtures', import.meta.url));

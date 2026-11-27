@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
-} from '../skills/judge-code/scripts/decisions.mts';
+} from '../skills/judge-code/scripts/engine/types.mts';
 import {
   AUTHORITATIVE_RUBRICS_DIR,
   SKILL_RUBRICS_DIR,
@@ -818,7 +818,8 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
 });
 
 test('applies_to schema validation enforces valid extensions/runtime_imports and fixture applicability', async (t) => {
-  const { parseApplicability, resolveRubrics } = await import('../skills/judge-code/scripts/rubrics.mts');
+  const { parseApplicability } = await import('../skills/judge-code/scripts/rubrics/applicability.mts');
+  const { resolveRubrics } = await import('../skills/judge-code/scripts/rubrics/resolver.mts');
   const root = makeTempDir(t, 'applies-to-validation-');
 
   // Valid shapes

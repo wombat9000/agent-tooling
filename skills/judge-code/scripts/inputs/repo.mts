@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { canonicalizeOrFallback, isPathInsideDir } from './fs-read.mts';
 
 export const DEFAULT_CONVENTIONS_FILENAME = 'AGENTS.md';
 
@@ -15,11 +16,16 @@ export interface ChangedFilesResult {
   files: string[];
 }
 
-function runGit(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
+interface ResolvedPathFilter {
+  abs: string;
+  isDir: boolean;
+}
+
+function runGit(cwd: string, args: string[], timeoutMs = 15_000): { ok: boolean; stdout: string; stderr: string } {
   const proc = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
-    timeout: 15_000,
+    timeout: timeoutMs,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (proc.error) {
@@ -36,9 +42,8 @@ function runGit(cwd: string, args: string[]): { ok: boolean; stdout: string; std
   };
 }
 
-function isInsideDir(candidate: string, root: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+function splitNul(output: string): string[] {
+  return output.split('\0').filter((entry) => entry.length > 0);
 }
 
 /**
@@ -57,29 +62,14 @@ export function findRepoRoot(startDir: string, cwd: string = process.cwd()): str
       timeout: 5_000,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    if (!proc.error && proc.status === 0 && proc.stdout.trim()) {
-      try {
-        return realpathSync(proc.stdout.trim());
-      } catch {
-        return resolve(proc.stdout.trim());
-      }
+    const topLevel = proc.stdout?.trim();
+    if (!proc.error && proc.status === 0 && topLevel) {
+      return canonicalizeOrFallback(topLevel, resolve(topLevel));
     }
   }
-  const canonicalCwd = (() => {
-    try {
-      return realpathSync(cwd);
-    } catch {
-      return resolve(cwd);
-    }
-  })();
-  const canonicalProbe = (() => {
-    try {
-      return realpathSync(probeDir);
-    } catch {
-      return probeDir;
-    }
-  })();
-  return isInsideDir(canonicalProbe, canonicalCwd) ? canonicalCwd : canonicalProbe;
+  const canonicalCwd = canonicalizeOrFallback(cwd, resolve(cwd));
+  const canonicalProbe = canonicalizeOrFallback(probeDir, probeDir);
+  return isPathInsideDir(canonicalProbe, canonicalCwd) ? canonicalCwd : canonicalProbe;
 }
 
 /**
@@ -96,9 +86,7 @@ export function resolveConventionsPath(options: {
   if (options.noConventions && options.cliConventions !== undefined) {
     throw new Error('Cannot combine --conventions and --no-conventions');
   }
-  if (options.noConventions) {
-    return { source: 'none' };
-  }
+  if (options.noConventions) return { source: 'none' };
   if (options.cliConventions !== undefined) {
     return { path: options.cliConventions, source: 'cli' };
   }
@@ -106,8 +94,7 @@ export function resolveConventionsPath(options: {
   const stat = lstatSync(candidate, { throwIfNoEntry: false });
   if (stat?.isFile() && stat.size > 0) {
     try {
-      const content = readFileSync(candidate, 'utf8');
-      if (content.trim().length > 0) {
+      if (readFileSync(candidate, 'utf8').trim().length > 0) {
         return { path: candidate, source: 'auto' };
       }
     } catch {
@@ -117,8 +104,76 @@ export function resolveConventionsPath(options: {
   return { source: 'none' };
 }
 
-function splitNul(output: string): string[] {
-  return output.split('\0').filter((entry) => entry.length > 0);
+function resolveDiffBaseRef(repoRoot: string, explicitBaseRef?: string): string | null {
+  if (explicitBaseRef !== undefined) {
+    const verified = runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${explicitBaseRef}^{commit}`]);
+    if (!verified.ok) {
+      throw new Error(`Unknown git base ref for --changed: ${explicitBaseRef}`);
+    }
+    return explicitBaseRef;
+  }
+  if (runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'main^{commit}']).ok) {
+    return 'main';
+  }
+  if (runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).ok) {
+    return 'HEAD';
+  }
+  return null;
+}
+
+function collectChangedRelPaths(repoRoot: string, baseRef: string | null): Set<string> {
+  const changedRelPaths = new Set<string>();
+  if (baseRef !== null) {
+    const mergeBaseProc = runGit(repoRoot, ['merge-base', baseRef, 'HEAD']);
+    const diffTarget = mergeBaseProc.ok && mergeBaseProc.stdout.trim() ? mergeBaseProc.stdout.trim() : baseRef;
+    const diffProc = runGit(repoRoot, ['diff', '--name-only', '-z', '--diff-filter=ACMR', diffTarget]);
+    if (!diffProc.ok) {
+      throw new Error(`git diff failed for --changed (${diffTarget}): ${diffProc.stderr}`);
+    }
+    for (const rel of splitNul(diffProc.stdout)) changedRelPaths.add(rel);
+  } else {
+    const stagedProc = runGit(repoRoot, ['diff', '--name-only', '-z', '--cached', '--diff-filter=ACMR']);
+    if (stagedProc.ok) {
+      for (const rel of splitNul(stagedProc.stdout)) changedRelPaths.add(rel);
+    }
+  }
+  const untrackedProc = runGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z']);
+  if (untrackedProc.ok) {
+    for (const rel of splitNul(untrackedProc.stdout)) changedRelPaths.add(rel);
+  }
+  return changedRelPaths;
+}
+
+function resolvePathFilters(cwd: string, pathFilters?: string[]): ResolvedPathFilter[] {
+  return (pathFilters ?? []).map((filterPath) => {
+    const abs = resolve(cwd, filterPath);
+    const stat = lstatSync(abs, { throwIfNoEntry: false });
+    if (!stat?.isDirectory() && !stat?.isFile()) {
+      throw new Error(`Path not found: ${filterPath}`);
+    }
+    return { abs: realpathSync(abs), isDir: stat.isDirectory() };
+  });
+}
+
+function collectMatchingExistingFiles(
+  repoRoot: string,
+  changedRelPaths: ReadonlySet<string>,
+  filters: readonly ResolvedPathFilter[],
+): string[] {
+  const files: string[] = [];
+  for (const rel of [...changedRelPaths].sort((a, b) => a.localeCompare(b))) {
+    const abs = join(repoRoot, ...rel.split('/'));
+    if (!lstatSync(abs, { throwIfNoEntry: false })?.isFile()) continue;
+    const canonical = realpathSync(abs);
+    if (filters.length > 0) {
+      const matchesFilter = filters.some((filter) => (
+        filter.isDir ? isPathInsideDir(canonical, filter.abs) : canonical === filter.abs
+      ));
+      if (!matchesFilter) continue;
+    }
+    files.push(canonical);
+  }
+  return files;
 }
 
 /**
@@ -134,68 +189,9 @@ export function resolveGitChangedFiles(options: {
     throw new Error('--changed requires a git repository');
   }
   const repoRoot = realpathSync(top.stdout.trim());
-
-  let baseRef: string | null = null;
-  if (options.baseRef !== undefined) {
-    const verified = runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${options.baseRef}^{commit}`]);
-    if (!verified.ok) {
-      throw new Error(`Unknown git base ref for --changed: ${options.baseRef}`);
-    }
-    baseRef = options.baseRef;
-  } else {
-    const hasMain = runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'main^{commit}']).ok;
-    if (hasMain) {
-      baseRef = 'main';
-    } else if (runGit(repoRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).ok) {
-      baseRef = 'HEAD';
-    }
-  }
-
-  const changedRelPaths = new Set<string>();
-  if (baseRef !== null) {
-    const mergeBaseProc = runGit(repoRoot, ['merge-base', baseRef, 'HEAD']);
-    const diffTarget = mergeBaseProc.ok && mergeBaseProc.stdout.trim()
-      ? mergeBaseProc.stdout.trim()
-      : baseRef;
-    const diffProc = runGit(repoRoot, ['diff', '--name-only', '-z', '--diff-filter=ACMR', diffTarget]);
-    if (!diffProc.ok) {
-      throw new Error(`git diff failed for --changed (${diffTarget}): ${diffProc.stderr}`);
-    }
-    for (const rel of splitNul(diffProc.stdout)) changedRelPaths.add(rel);
-  } else {
-    // Unborn HEAD (no commits yet): check staged additions.
-    const stagedProc = runGit(repoRoot, ['diff', '--name-only', '-z', '--cached', '--diff-filter=ACMR']);
-    if (stagedProc.ok) {
-      for (const rel of splitNul(stagedProc.stdout)) changedRelPaths.add(rel);
-    }
-  }
-
-  const untrackedProc = runGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z']);
-  if (untrackedProc.ok) {
-    for (const rel of splitNul(untrackedProc.stdout)) changedRelPaths.add(rel);
-  }
-
-  const resolvedFilters = (options.pathFilters ?? []).map((filterPath) => {
-    const abs = resolve(options.cwd, filterPath);
-    const st = lstatSync(abs, { throwIfNoEntry: false });
-    if (!st?.isDirectory() && !st?.isFile()) {
-      throw new Error(`Path not found: ${filterPath}`);
-    }
-    return { abs: realpathSync(abs), isDir: st.isDirectory() };
-  });
-
-  const files: string[] = [];
-  for (const rel of [...changedRelPaths].sort((a, b) => a.localeCompare(b))) {
-    const abs = join(repoRoot, ...rel.split('/'));
-    const st = lstatSync(abs, { throwIfNoEntry: false });
-    if (!st?.isFile()) continue; // Skip deleted files and symlinks.
-    const canonical = realpathSync(abs);
-    if (resolvedFilters.length > 0) {
-      const matches = resolvedFilters.some((f) => (f.isDir ? isInsideDir(canonical, f.abs) : canonical === f.abs));
-      if (!matches) continue;
-    }
-    files.push(canonical);
-  }
-
+  const baseRef = resolveDiffBaseRef(repoRoot, options.baseRef);
+  const changedRelPaths = collectChangedRelPaths(repoRoot, baseRef);
+  const filters = resolvePathFilters(options.cwd, options.pathFilters);
+  const files = collectMatchingExistingFiles(repoRoot, changedRelPaths, filters);
   return { repoRoot, baseRef, files };
 }
