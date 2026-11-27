@@ -23,7 +23,7 @@ import {
 } from './decisions.mts';
 import { formatLinterOutput, formatRubricList, formatRuleExplanations } from './format.mts';
 import { readInputs, readPerFileInputs, resolveOutputOutsideSource } from './inputs.mts';
-import { bundledRubrics, explainRules, resolveRubrics, type JudgeMode } from './rubrics.mts';
+import { bundledRubrics, explainRules, resolveUnifiedRubrics, type JudgeMode } from './rubrics.mts';
 import { readStructureInputs } from './structure.mts';
 
 export const EXIT_OK = 0;
@@ -38,7 +38,7 @@ export interface ExitCodeOptions {
 }
 
 const USAGE = `Usage:
-  judge-code <path...> [options]              Lint files/directories (file-scoped checks, fast model)
+  judge-code <path...> [options]              Lint production & test files/directories (file-scoped checks, fast model)
   judge-code --changed [base-ref] [options]   Lint git-modified/untracked files (default base: main or HEAD)
   judge-code module <path...> [options]       Lint module bundle(s) with file + module checks (deep model)
   judge-code structure <path> [options]       Lint directory layout via structural manifest (deep model)
@@ -338,7 +338,7 @@ async function main(): Promise<void> {
     repoRoot,
   });
 
-  const rubric = resolveRubrics({
+  const unified = resolveUnifiedRubrics({
     mode: resolvedMode,
     rubrics: values.rubric ?? [],
     rules: values.rule,
@@ -373,7 +373,7 @@ async function main(): Promise<void> {
       ignore: cliIgnore,
       requirements: inputs.requirements,
       conventions: inputs.conventions,
-      rubric,
+      rubric: unified.structure!,
       out: inputs.out,
       model,
       dryRun: values['dry-run'],
@@ -383,6 +383,9 @@ async function main(): Promise<void> {
     if (positionals.length === 0) {
       throw new Error(`Specify one or more paths for \`judge-code module <path...>\`\n\n${USAGE}`);
     }
+    const includeProduction = unified.production !== undefined;
+    const includeTests = unified.test !== undefined;
+    const primaryRubric = unified.production ?? unified.test!;
 
     const useMultiModules = positionals.length > 1
       && positionals.every((p) => Boolean(lstatSync(resolve(cwd, p), { throwIfNoEntry: false })?.isDirectory()));
@@ -410,10 +413,13 @@ async function main(): Promise<void> {
           requirements: values.requirements,
           conventions: conventionsInfo.path,
           allowCredentials: values['allow-credentials'],
+          includeProduction,
+          includeTests,
         });
         return {
           name: spec.name,
           files: loaded.files,
+          ...(includeTests ? { testFiles: loaded.testFiles ?? {} } : {}),
           requirements: loaded.requirements,
           conventions: loaded.conventions,
         };
@@ -423,7 +429,9 @@ async function main(): Promise<void> {
         mode: 'code',
         modules: loadedModules,
         ignore: cliIgnore,
-        rubric,
+        rubric: primaryRubric,
+        testRubric: unified.test,
+        explicitTestSelection: unified.explicitTestSelection,
         out: resolvedOut,
         model,
         concurrency,
@@ -443,17 +451,23 @@ async function main(): Promise<void> {
         requirements: values.requirements,
         conventions: conventionsInfo.path,
         allowCredentials: values['allow-credentials'],
+        includeProduction,
+        includeTests,
       });
       runOptions = {
         mode: 'code',
         target: targetLabel,
         files: inputs.files,
+        ...(includeTests ? { testFiles: inputs.testFiles ?? {} } : {}),
         ignore: cliIgnore,
         requirements: inputs.requirements,
         conventions: inputs.conventions,
-        rubric,
+        rubric: primaryRubric,
+        testRubric: unified.test,
+        explicitTestSelection: unified.explicitTestSelection,
         out: inputs.out,
         model,
+        concurrency,
         dryRun: values['dry-run'],
       };
     }
@@ -462,6 +476,9 @@ async function main(): Promise<void> {
     if (!changed && positionals.length === 0) {
       throw new Error(USAGE);
     }
+    const includeProduction = unified.production !== undefined;
+    const includeTests = unified.test !== undefined;
+    const primaryRubric = unified.production ?? unified.test!;
     const sources = changed ? changedFiles! : positionals.map((p) => resolve(cwd, p));
     const inputs = readPerFileInputs({
       sources,
@@ -472,14 +489,19 @@ async function main(): Promise<void> {
       conventions: conventionsInfo.path,
       allowCredentials: values['allow-credentials'],
       allowEmpty: changed,
+      includeProduction,
+      includeTests,
     });
     runOptions = {
       mode: 'file',
       files: inputs.files,
+      ...(includeTests ? { testFiles: inputs.testFiles ?? {} } : {}),
       ignore: cliIgnore,
       requirements: inputs.requirements,
       conventions: inputs.conventions,
-      rubric,
+      rubric: primaryRubric,
+      testRubric: unified.test,
+      explicitTestSelection: unified.explicitTestSelection,
       out: inputs.out,
       model,
       concurrency,
@@ -499,7 +521,7 @@ async function main(): Promise<void> {
       quiet: values.quiet,
       outDir: runOptions.out,
       conventionsLabel,
-      rubric,
+      rubric: unified.combinedCriteria,
     }));
   }
 

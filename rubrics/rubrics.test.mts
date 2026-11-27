@@ -79,10 +79,17 @@ function writeRealFixture(
 
 test('skills/judge-code/rubrics/ has exact file-set and SHA-256 parity with shipped rubrics in rubrics/', () => {
   const shipped = listShippedRubricFiles(AUTHORITATIVE_RUBRICS_DIR);
-  assert.equal(shipped.length, 10, `Expected 10 shipped rubrics, found ${shipped.length}: ${shipped.join(', ')}`);
+  assert.equal(shipped.length, 15, `Expected 15 shipped rubrics, found ${shipped.length}: ${shipped.join(', ')}`);
   assert.ok(shipped.includes('react.json'), 'react.json must be shipped to judge-code');
-  assert.ok(!shipped.some((file) => file.startsWith('testing-')), 'test_code rubrics must not be shipped to judge-code');
-  assert.ok(!shipped.includes('playwright.json'), 'playwright.json (test_code) must not be shipped to judge-code');
+  for (const testRubric of [
+    'playwright.json',
+    'testing-core.json',
+    'testing-e2e.json',
+    'testing-integration.json',
+    'testing-unit.json',
+  ]) {
+    assert.ok(shipped.includes(testRubric), `${testRubric} (test_code) must be shipped to judge-code`);
+  }
 
   const check = checkRubricSync(AUTHORITATIVE_RUBRICS_DIR, SKILL_RUBRICS_DIR);
   assert.equal(check.inSync, true, formatSyncDrift(check));
@@ -90,7 +97,7 @@ test('skills/judge-code/rubrics/ has exact file-set and SHA-256 parity with ship
   const cli = spawnSync(process.execPath, [SYNC_CLI, '--check'], { encoding: 'utf8' });
   assert.ifError(cli.error);
   assert.equal(cli.status, 0, cli.stderr || cli.stdout);
-  assert.match(cli.stdout, /OK: 10 shipped rubric\(s\) match/);
+  assert.match(cli.stdout, /OK: 15 shipped rubric\(s\) match/);
 });
 
 test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricSync detects all drift types', (t) => {
@@ -103,22 +110,24 @@ test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricS
   writeFileSync(join(sourceDir, 'prod.json'), JSON.stringify({ rubric: 'prod-v1', target: 'production_code', questions: {} }));
   writeFileSync(join(sourceDir, 'struct.json'), JSON.stringify({ rubric: 'struct-v1', target: 'project_structure', questions: {} }));
   writeFileSync(join(sourceDir, 'testing-core.json'), JSON.stringify({ rubric: 'testing-core-v1', target: 'test_code', questions: {} }));
+  writeFileSync(join(sourceDir, 'review-only.json'), JSON.stringify({ rubric: 'review-v1', target: 'review', questions: {} }));
 
   writeFileSync(join(targetDir, 'stale.json'), '{"rubric":"stale-v1"}');
   writeFileSync(join(targetDir, 'prod.json'), '{"rubric":"prod-v1","target":"production_code","questions":{"drifted":true}}');
 
   const before = checkRubricSync(sourceDir, targetDir);
   assert.equal(before.inSync, false);
-  assert.deepEqual(before.missing, ['struct.json']);
+  assert.deepEqual(before.missing, ['struct.json', 'testing-core.json']);
   assert.deepEqual(before.extra, ['stale.json']);
   assert.deepEqual(before.mismatched.map((m) => m.file), ['prod.json']);
   assert.match(formatSyncDrift(before), /pnpm sync:rubrics/);
 
   const synced = syncRubrics(sourceDir, targetDir);
-  assert.deepEqual(synced.expectedFiles, ['prod.json', 'struct.json']);
-  assert.deepEqual(synced.copied, ['prod.json', 'struct.json']);
+  assert.deepEqual(synced.expectedFiles, ['prod.json', 'struct.json', 'testing-core.json']);
+  assert.deepEqual(synced.copied, ['prod.json', 'struct.json', 'testing-core.json']);
   assert.deepEqual(synced.removed, ['stale.json']);
-  assert.equal(existsSync(join(targetDir, 'testing-core.json')), false);
+  assert.equal(existsSync(join(targetDir, 'testing-core.json')), true);
+  assert.equal(existsSync(join(targetDir, 'review-only.json')), false);
   assert.equal(existsSync(join(targetDir, 'stale.json')), false);
 
   const after = checkRubricSync(sourceDir, targetDir);
@@ -127,7 +136,7 @@ test('syncRubrics mirrors shipped rubrics, removes stale files, and checkRubricS
   const second = syncRubrics(sourceDir, targetDir);
   assert.deepEqual(second.copied, []);
   assert.deepEqual(second.removed, []);
-  assert.deepEqual(second.unchanged, ['prod.json', 'struct.json']);
+  assert.deepEqual(second.unchanged, ['prod.json', 'struct.json', 'testing-core.json']);
 });
 
 test('all 65 criteria across all 15 authoritative rubrics have full paired pass and fail fixture coverage under rubrics/fixtures/', () => {

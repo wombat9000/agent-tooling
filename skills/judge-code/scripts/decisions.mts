@@ -1,8 +1,19 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
+  classifyTestFile,
+  previewTestBundleRubric,
+  previewTestFileRubric,
+  routeTestBundleRubrics,
+  routeTestRubrics,
+  type TestKindClassification,
+} from './classifier.mts';
+import { MAX_INPUT_BYTES } from './inputs.mts';
+import {
+  CONVENTIONS_CHECK_ID,
   PASS_THRESHOLD,
   filterRubricForFiles,
+  mergeResolvedRubrics,
   narrowResolvedRubric,
   nonempty,
   object,
@@ -58,6 +69,7 @@ export interface Judgment {
 
 export interface FileJudgment {
   file: string;
+  file_role?: string;
   status: 'scored' | 'dry_run' | 'skipped' | 'error';
   skip_reason?: 'not_applicable';
   returned_model: string | null;
@@ -72,6 +84,7 @@ export interface FileJudgment {
 export interface ModuleInput {
   name: string;
   files: Record<string, string>;
+  testFiles?: Record<string, string>;
   requirements?: string;
   conventions?: string;
 }
@@ -135,6 +148,7 @@ export interface JudgeRunOptions {
   mode?: JudgeMode;
   target?: string;
   files?: Record<string, string>;
+  testFiles?: Record<string, string>;
   productionContext?: Record<string, string>;
   modules?: ModuleInput[];
   structure?: StructureManifest;
@@ -142,12 +156,25 @@ export interface JudgeRunOptions {
   requirements?: string;
   conventions?: string;
   rubric: ResolvedRubric;
+  testRubric?: ResolvedRubric;
+  explicitTestSelection?: boolean;
   model?: string;
   out?: string;
   concurrency?: number;
   dryRun?: boolean;
   allowEmpty?: boolean;
 }
+
+export type ScoreRequestFn = (
+  request: CodeRequest,
+  body: string,
+  artifactDir?: string,
+) => Promise<{ model: string; checks: Record<string, Judgment>; retries?: number }>;
+
+export type TestClassifierFn = (
+  filePath: string,
+  content: string,
+) => Promise<TestKindClassification>;
 
 /**
  * Convert a raw model probability in [0, 1] to the 0-100 score scale (1 decimal precision).
@@ -419,24 +446,77 @@ export function prepareJudgeRun(
   return { out, request, body, result, rubric: effectiveRubric };
 }
 
+function resolvePartitionRubrics(options: JudgeRunOptions): {
+  isUnified: boolean;
+  prodRubric?: ResolvedRubric;
+  testRubric?: ResolvedRubric;
+  candidateRubric: ResolvedRubric;
+} {
+  const isUnified = options.testFiles !== undefined || options.testRubric !== undefined;
+  const prodRubric = options.rubric.target === 'production_code' ? options.rubric : undefined;
+  const testRubric = options.testRubric ?? (options.rubric.target === 'test_code' ? options.rubric : undefined);
+  const parts = [prodRubric, testRubric].filter((r): r is ResolvedRubric => r !== undefined);
+  const candidateRubric = parts.length > 0 ? mergeResolvedRubrics(parts) : options.rubric;
+  return { isUnified, prodRubric, testRubric, candidateRubric };
+}
+
+function emptyResolvedRubric(base: ResolvedRubric): ResolvedRubric {
+  return narrowResolvedRubric(base, new Set());
+}
+
+function withoutConventionsCheck(rubric: ResolvedRubric): ResolvedRubric {
+  if (!(CONVENTIONS_CHECK_ID in rubric.questions)) return rubric;
+  const keep = new Set(Object.keys(rubric.questions).filter((id) => id !== CONVENTIONS_CHECK_ID));
+  return narrowResolvedRubric(rubric, keep);
+}
+
+function utf8BytesOfFiles(files: Record<string, string>): number {
+  let bytes = 0;
+  for (const content of Object.values(files)) {
+    bytes += Buffer.byteLength(content, 'utf8');
+  }
+  return bytes;
+}
+
+function fitsProductionContext(
+  testFiles: Record<string, string>,
+  prodFiles: Record<string, string>,
+  requirements?: string,
+  conventions?: string,
+): boolean {
+  if (Object.keys(prodFiles).length === 0) return false;
+  let total = utf8BytesOfFiles(testFiles) + utf8BytesOfFiles(prodFiles);
+  if (requirements !== undefined) total += Buffer.byteLength(requirements, 'utf8');
+  if (conventions !== undefined) total += Buffer.byteLength(conventions, 'utf8');
+  return total <= MAX_INPUT_BYTES;
+}
+
 export async function runPerFileJudge(
   options: JudgeRunOptions,
   backend: JudgeBackend,
   passThreshold: number | null,
   defaultConcurrency: number,
-  scoreFile: (
-    request: CodeRequest,
-    body: string,
-    fileDir?: string,
-  ) => Promise<{ model: string; checks: Record<string, Judgment>; retries?: number }>,
+  scoreFile: ScoreRequestFn,
+  classifyTest?: TestClassifierFn,
 ): Promise<JudgeResult> {
-  const files = options.files ?? {};
-  const fileNames = Object.keys(files).sort((a, b) => a.localeCompare(b));
+  const { isUnified, prodRubric, testRubric, candidateRubric } = resolvePartitionRubrics(options);
+  const prodFiles = options.files ?? {};
+  const testFiles = isUnified ? (options.testFiles ?? {}) : {};
   const ignoredPatterns = [...new Set(options.ignore ?? [])];
 
-  if (fileNames.length === 0) {
+  interface FileWorkItem {
+    file: string;
+    content: string;
+    partition: 'production' | 'test';
+  }
+  const workItems: FileWorkItem[] = [
+    ...Object.entries(prodFiles).map(([file, content]) => ({ file, content, partition: 'production' as const })),
+    ...Object.entries(testFiles).map(([file, content]) => ({ file, content, partition: 'test' as const })),
+  ].sort((a, b) => a.file.localeCompare(b.file));
+
+  if (workItems.length === 0) {
     if (!options.allowEmpty) throw new Error('No files to score');
-    const checkThresholds = overriddenThresholds(thresholdsToScores(options.rubric.thresholds), passThreshold);
+    const checkThresholds = overriddenThresholds(thresholdsToScores(candidateRubric.thresholds), passThreshold);
     const emptyResult: JudgeResult = {
       status: options.dryRun ? 'dry_run' : 'scored',
       backend,
@@ -445,12 +525,12 @@ export async function runPerFileJudge(
       elapsed_ms: 0,
       requested_model: options.model ?? null,
       returned_model: null,
-      rubric: options.rubric.rubric,
-      rubric_groups: options.rubric.groups,
-      ...(options.rubric.excluded.length > 0 ? { excluded_checks: options.rubric.excluded } : {}),
+      rubric: candidateRubric.rubric,
+      rubric_groups: candidateRubric.groups,
+      ...(candidateRubric.excluded.length > 0 ? { excluded_checks: candidateRubric.excluded } : {}),
       ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
-      ...(options.rubric.skippedModuleChecks.length > 0
-        ? { skipped_module_checks: options.rubric.skippedModuleChecks }
+      ...(candidateRubric.skippedModuleChecks.length > 0
+        ? { skipped_module_checks: candidateRubric.skippedModuleChecks }
         : {}),
       pass_threshold: passThreshold,
       ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
@@ -466,74 +546,117 @@ export async function runPerFileJudge(
     return emptyResult;
   }
 
-  const perFileRubrics = new Map<string, ResolvedRubric>();
-  const activeCheckIds = new Set<string>();
-  for (const file of fileNames) {
-    const fileRubric = filterRubricForFiles(options.rubric, { [file]: files[file] });
-    perFileRubrics.set(file, fileRubric);
-    for (const id of Object.keys(fileRubric.questions)) {
-      activeCheckIds.add(id);
-    }
-  }
-  const effectiveRubric = narrowResolvedRubric(options.rubric, activeCheckIds);
-  const skippedNotApplicable = Object.keys(options.rubric.questions).filter((id) => !activeCheckIds.has(id));
-  const activeQuestionIds = Object.keys(effectiveRubric.questions);
-  const checkThresholds = overriddenThresholds(thresholdsToScores(effectiveRubric.thresholds), passThreshold);
-
   const startMs = performance.now();
   let out: string | undefined;
+  let filesOutDirCreated = false;
   if (options.out !== undefined) {
     out = resolve(options.out);
     mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
     mkdirSync(out, { mode: 0o700 });
-    if (activeQuestionIds.length > 0) {
-      mkdirSync(join(out, 'files'), { recursive: true, mode: 0o700 });
-    }
   }
+  const ensureFileDir = (index: number, file: string): { relDir?: string; absDir?: string } => {
+    if (out === undefined) return {};
+    if (!filesOutDirCreated) {
+      mkdirSync(join(out, 'files'), { recursive: true, mode: 0o700 });
+      filesOutDirCreated = true;
+    }
+    const slug = safeFileSlug(index, workItems.length, file);
+    const relDir = `files/${slug}`;
+    const absDir = join(out, relDir);
+    mkdirSync(absDir, { recursive: true, mode: 0o700 });
+    return { relDir, absDir };
+  };
 
   const concurrency = options.concurrency ?? defaultConcurrency;
   let totalRetries = 0;
 
-  const fileResults = await runWithConcurrency(fileNames, concurrency, async (file, index): Promise<FileJudgment> => {
-    const fileStart = performance.now();
-    const fileRubric = perFileRubrics.get(file)!;
-    const fileQuestionIds = Object.keys(fileRubric.questions);
+  interface FileOutcome {
+    entry: FileJudgment;
+    questionIds: string[];
+  }
 
+  const outcomes = await runWithConcurrency(workItems, concurrency, async (item, index): Promise<FileOutcome> => {
+    const fileStart = performance.now();
+    const { file, content, partition } = item;
+
+    let fileRubric: ResolvedRubric;
+    let fileRole: string | undefined;
+    let useTestPayload = !isUnified && options.rubric.target === 'test_code';
+
+    if (!isUnified) {
+      fileRubric = filterRubricForFiles(options.rubric, { [file]: content });
+    } else if (partition === 'production') {
+      fileRubric = prodRubric
+        ? filterRubricForFiles(prodRubric, { [file]: content })
+        : emptyResolvedRubric(candidateRubric);
+    } else {
+      useTestPayload = true;
+      if (!testRubric) {
+        fileRubric = emptyResolvedRubric(candidateRubric);
+      } else if (options.explicitTestSelection) {
+        fileRubric = filterRubricForFiles(testRubric, { [file]: content });
+        fileRole = 'test';
+      } else if (options.dryRun) {
+        const preview = previewTestFileRubric({ filePath: file, content }, testRubric);
+        fileRubric = preview.rubric;
+        fileRole = preview.fileRole;
+      } else {
+        if (!classifyTest) {
+          throw new Error('Test classifier is required for automatic test-file linting');
+        }
+        try {
+          const classification = await classifyTest(file, content);
+          totalRetries += classification.retries;
+          fileRole = classification.fileRole;
+          fileRubric = routeTestRubrics(classification, testRubric);
+        } catch (error) {
+          const entry: FileJudgment = {
+            file,
+            file_role: 'test',
+            status: 'error',
+            returned_model: null,
+            elapsed_ms: Math.round(performance.now() - fileStart),
+            pass_rate: null,
+            checks: null,
+            error: error instanceof Error ? error.message : 'Test classification failed',
+          };
+          return { entry, questionIds: [] };
+        }
+      }
+    }
+
+    const fileQuestionIds = Object.keys(fileRubric.questions);
     if (fileQuestionIds.length === 0) {
       return {
-        file,
-        status: 'skipped',
-        skip_reason: 'not_applicable',
-        returned_model: null,
-        elapsed_ms: 0,
-        pass_rate: null,
-        checks: null,
+        entry: {
+          file,
+          ...(fileRole ? { file_role: fileRole } : {}),
+          status: 'skipped',
+          skip_reason: 'not_applicable',
+          returned_model: null,
+          elapsed_ms: Math.round(performance.now() - fileStart),
+          pass_rate: null,
+          checks: null,
+        },
+        questionIds: [],
       };
     }
 
-    let relDir: string | undefined;
-    let absDir: string | undefined;
-    if (out !== undefined) {
-      const slug = safeFileSlug(index, fileNames.length, file);
-      relDir = `files/${slug}`;
-      absDir = join(out, relDir);
-      mkdirSync(absDir, { recursive: true, mode: 0o700 });
-    }
-
-    const isTestCode = options.rubric.target === 'test_code';
-    const hasProductionContext = options.productionContext !== undefined
+    const { relDir, absDir } = ensureFileDir(index, file);
+    const hasProductionContext = !isUnified
+      && options.productionContext !== undefined
       && Object.keys(options.productionContext).length > 0;
     const request: CodeRequest = {
       model: options.model ?? `${backend}-default`,
       state: {
         ...(options.requirements !== undefined ? { requirement: options.requirements } : {}),
         ...(options.conventions !== undefined ? { conventions: options.conventions } : {}),
-        ...(isTestCode
+        ...(useTestPayload
           ? {
-            test_files: numbered({ [file]: files[file] }),
+            test_files: numbered({ [file]: content }),
             ...(hasProductionContext ? { production_files_context: numbered(options.productionContext!) } : {}),
           }
-          : { production_files: numbered({ [file]: files[file] }) }),
+          : { production_files: numbered({ [file]: content }) }),
       },
       questions: fileRubric.questions,
     };
@@ -543,19 +666,19 @@ export async function runPerFileJudge(
 
     const entry: FileJudgment = {
       file,
+      ...(fileRole ? { file_role: fileRole } : {}),
       status: options.dryRun ? 'dry_run' : 'scored',
       returned_model: null,
       elapsed_ms: 0,
       pass_rate: null,
       checks: null,
-      ...(fileQuestionIds.length < activeQuestionIds.length ? { applicable_checks: fileQuestionIds } : {}),
       ...(relDir !== undefined ? { result_dir: relDir } : {}),
     };
 
     if (options.dryRun) {
       entry.elapsed_ms = Math.round(performance.now() - fileStart);
       if (absDir !== undefined) saveJson(join(absDir, 'result.json'), entry);
-      return entry;
+      return { entry, questionIds: fileQuestionIds };
     }
 
     try {
@@ -571,6 +694,22 @@ export async function runPerFileJudge(
     }
     entry.elapsed_ms = Math.round(performance.now() - fileStart);
     if (absDir !== undefined) saveJson(join(absDir, 'result.json'), entry);
+    return { entry, questionIds: fileQuestionIds };
+  });
+
+  const activeCheckIds = new Set<string>();
+  for (const outcome of outcomes) {
+    for (const id of outcome.questionIds) activeCheckIds.add(id);
+  }
+  const effectiveRubric = narrowResolvedRubric(candidateRubric, activeCheckIds);
+  const skippedNotApplicable = Object.keys(candidateRubric.questions).filter((id) => !activeCheckIds.has(id));
+  const activeQuestionIds = Object.keys(effectiveRubric.questions);
+  const checkThresholds = overriddenThresholds(thresholdsToScores(effectiveRubric.thresholds), passThreshold);
+
+  const fileResults = outcomes.map(({ entry, questionIds }) => {
+    if (questionIds.length > 0 && questionIds.length < activeQuestionIds.length) {
+      return { ...entry, applicable_checks: questionIds };
+    }
     return entry;
   });
 
@@ -582,7 +721,7 @@ export async function runPerFileJudge(
     status: options.dryRun ? 'dry_run' : errored.length > 0 ? 'error' : 'scored',
     backend,
     mode: 'file',
-    file_count: fileNames.length,
+    file_count: workItems.length,
     elapsed_ms: elapsedMs,
     ...(totalRetries > 0 ? { retries: totalRetries } : {}),
     requested_model: options.model ?? null,
@@ -612,124 +751,267 @@ export async function runPerFileJudge(
   return result;
 }
 
+interface ModuleEvalOutcome {
+  entry: ModuleJudgment;
+  questionIds: string[];
+  retries: number;
+}
+
+async function evaluateModuleBundle(
+  mod: ModuleInput,
+  options: JudgeRunOptions,
+  backend: JudgeBackend,
+  concurrency: number,
+  scoreModule: ScoreRequestFn,
+  classifyTest: TestClassifierFn | undefined,
+  absDir: string | undefined,
+  relDir: string | undefined,
+): Promise<ModuleEvalOutcome> {
+  const modStart = performance.now();
+  const { isUnified, prodRubric, testRubric, candidateRubric } = resolvePartitionRubrics(options);
+  const prodFiles = mod.files;
+  const testFiles = isUnified ? (mod.testFiles ?? {}) : {};
+  const prodCount = Object.keys(prodFiles).length;
+  const testCount = Object.keys(testFiles).length;
+  const totalFileCount = prodCount + testCount;
+  const requirements = mod.requirements ?? options.requirements;
+  const conventions = mod.conventions ?? options.conventions;
+
+  let retries = 0;
+
+  const activeProdRubric = prodCount > 0 && prodRubric
+    ? filterRubricForFiles(prodRubric, prodFiles)
+    : emptyResolvedRubric(candidateRubric);
+  const hasProdPass = Object.keys(activeProdRubric.questions).length > 0;
+
+  let activeTestRubric = emptyResolvedRubric(candidateRubric);
+  if (testCount > 0 && testRubric) {
+    if (options.explicitTestSelection) {
+      activeTestRubric = filterRubricForFiles(testRubric, testFiles);
+    } else if (options.dryRun) {
+      activeTestRubric = previewTestBundleRubric(testFiles, testRubric);
+    } else {
+      if (!classifyTest) {
+        throw new Error('Test classifier is required for automatic test-file module linting');
+      }
+      const testEntries = Object.entries(testFiles).sort(([a], [b]) => a.localeCompare(b));
+      try {
+        const classifications = await runWithConcurrency(
+          testEntries,
+          concurrency,
+          async ([filePath, content]) => classifyTest(filePath, content),
+        );
+        for (const c of classifications) retries += c.retries;
+        activeTestRubric = routeTestBundleRubrics(classifications, testRubric);
+      } catch (error) {
+        return {
+          entry: {
+            module: mod.name,
+            status: 'error',
+            file_count: totalFileCount,
+            returned_model: null,
+            elapsed_ms: Math.round(performance.now() - modStart),
+            pass_rate: null,
+            checks: null,
+            ...(relDir !== undefined ? { result_dir: relDir } : {}),
+            error: error instanceof Error ? error.message : 'Test classification failed',
+          },
+          questionIds: [],
+          retries,
+        };
+      }
+    }
+    if (hasProdPass && CONVENTIONS_CHECK_ID in activeProdRubric.questions) {
+      activeTestRubric = withoutConventionsCheck(activeTestRubric);
+    }
+  }
+  const hasTestPass = Object.keys(activeTestRubric.questions).length > 0;
+
+  const questionIds = [
+    ...Object.keys(activeProdRubric.questions),
+    ...Object.keys(activeTestRubric.questions),
+  ];
+
+  if (!hasProdPass && !hasTestPass) {
+    return {
+      entry: {
+        module: mod.name,
+        status: 'skipped',
+        skip_reason: 'not_applicable',
+        file_count: totalFileCount,
+        returned_model: null,
+        elapsed_ms: Math.round(performance.now() - modStart),
+        pass_rate: null,
+        checks: null,
+      },
+      questionIds: [],
+      retries,
+    };
+  }
+
+  if (absDir !== undefined) {
+    mkdirSync(absDir, { recursive: true, mode: 0o700 });
+  }
+
+  const prodRequest: CodeRequest | undefined = hasProdPass
+    ? {
+      model: options.model ?? `${backend}-default`,
+      state: {
+        ...(requirements !== undefined ? { requirement: requirements } : {}),
+        ...(conventions !== undefined ? { conventions } : {}),
+        production_files: numbered(prodFiles),
+      },
+      questions: activeProdRubric.questions,
+    }
+    : undefined;
+
+  const includeProdContext = hasTestPass
+    && fitsProductionContext(testFiles, prodFiles, requirements, conventions);
+  const testRequest: CodeRequest | undefined = hasTestPass
+    ? {
+      model: options.model ?? `${backend}-default`,
+      state: {
+        ...(requirements !== undefined ? { requirement: requirements } : {}),
+        ...(conventions !== undefined ? { conventions } : {}),
+        test_files: numbered(testFiles),
+        ...(includeProdContext ? { production_files_context: numbered(prodFiles) } : {}),
+      },
+      questions: activeTestRubric.questions,
+    }
+    : undefined;
+
+  const prodBody = prodRequest
+    ? (absDir !== undefined
+      ? saveJson(join(absDir, 'request.json'), prodRequest)
+      : `${JSON.stringify(prodRequest, null, 2)}\n`)
+    : undefined;
+  const testReqFilename = hasProdPass ? 'test-request.json' : 'request.json';
+  const testBody = testRequest
+    ? (absDir !== undefined
+      ? saveJson(join(absDir, testReqFilename), testRequest)
+      : `${JSON.stringify(testRequest, null, 2)}\n`)
+    : undefined;
+
+  const entry: ModuleJudgment = {
+    module: mod.name,
+    status: options.dryRun ? 'dry_run' : 'scored',
+    file_count: totalFileCount,
+    returned_model: null,
+    elapsed_ms: 0,
+    pass_rate: null,
+    checks: null,
+    ...(relDir !== undefined ? { result_dir: relDir } : {}),
+  };
+
+  if (options.dryRun) {
+    entry.elapsed_ms = Math.round(performance.now() - modStart);
+    if (absDir !== undefined) saveJson(join(absDir, 'result.json'), entry);
+    return { entry, questionIds, retries };
+  }
+
+  try {
+    const models: string[] = [];
+    const mergedChecks: Record<string, Judgment> = {};
+    const tasks: Array<Promise<void>> = [];
+
+    if (prodRequest && prodBody !== undefined) {
+      tasks.push((async () => {
+        const judged = await scoreModule(prodRequest, prodBody, absDir);
+        retries += judged.retries ?? 0;
+        models.push(judged.model);
+        Object.assign(mergedChecks, judged.checks);
+      })());
+    }
+    if (testRequest && testBody !== undefined) {
+      const testArtifactDir = absDir !== undefined && hasProdPass ? join(absDir, 'tests') : absDir;
+      if (testArtifactDir !== undefined && testArtifactDir !== absDir) {
+        mkdirSync(testArtifactDir, { recursive: true, mode: 0o700 });
+      }
+      tasks.push((async () => {
+        const judged = await scoreModule(testRequest, testBody, testArtifactDir);
+        retries += judged.retries ?? 0;
+        models.push(judged.model);
+        Object.assign(mergedChecks, judged.checks);
+      })());
+    }
+
+    await Promise.all(tasks);
+    entry.status = 'scored';
+    entry.returned_model = [...new Set(models)].join(', ') || null;
+    entry.checks = mergedChecks;
+    entry.pass_rate = passRate(mergedChecks);
+  } catch (error) {
+    entry.status = 'error';
+    entry.error = error instanceof Error ? error.message : 'Judging failed';
+  }
+
+  entry.elapsed_ms = Math.round(performance.now() - modStart);
+  if (absDir !== undefined) saveJson(join(absDir, 'result.json'), entry);
+  return { entry, questionIds, retries };
+}
+
 export async function runMultiModuleJudge(
   options: JudgeRunOptions,
   backend: JudgeBackend,
   passThreshold: number | null,
   defaultConcurrency: number,
-  scoreModule: (
-    request: CodeRequest,
-    body: string,
-    moduleDir?: string,
-  ) => Promise<{ model: string; checks: Record<string, Judgment>; retries?: number }>,
+  scoreModule: ScoreRequestFn,
+  classifyTest?: TestClassifierFn,
 ): Promise<JudgeResult> {
   const modules = options.modules ?? [];
   if (modules.length === 0) throw new Error('No modules to score');
 
-  const perModuleRubrics = modules.map((mod) => filterRubricForFiles(options.rubric, mod.files));
-  const activeCheckIds = new Set<string>();
-  for (const modRubric of perModuleRubrics) {
-    for (const id of Object.keys(modRubric.questions)) {
-      activeCheckIds.add(id);
-    }
-  }
-  const effectiveRubric = narrowResolvedRubric(options.rubric, activeCheckIds);
-  const skippedNotApplicable = Object.keys(options.rubric.questions).filter((id) => !activeCheckIds.has(id));
-  const activeQuestionIds = Object.keys(effectiveRubric.questions);
-
+  const { candidateRubric } = resolvePartitionRubrics(options);
   const startMs = performance.now();
   let out: string | undefined;
+  let modulesOutCreated = false;
   if (options.out !== undefined) {
     out = resolve(options.out);
     mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
     mkdirSync(out, { mode: 0o700 });
-    if (activeQuestionIds.length > 0) {
-      mkdirSync(join(out, 'modules'), { recursive: true, mode: 0o700 });
-    }
   }
 
   const concurrency = options.concurrency ?? defaultConcurrency;
   let totalRetries = 0;
 
-  const moduleResults = await runWithConcurrency(modules, concurrency, async (mod, index): Promise<ModuleJudgment> => {
-    const modStart = performance.now();
-    const modRubric = perModuleRubrics[index];
-    const modQuestionIds = Object.keys(modRubric.questions);
-
-    if (modQuestionIds.length === 0) {
-      return {
-        module: mod.name,
-        status: 'skipped',
-        skip_reason: 'not_applicable',
-        file_count: Object.keys(mod.files).length,
-        returned_model: null,
-        elapsed_ms: 0,
-        pass_rate: null,
-        checks: null,
-      };
-    }
-
+  const outcomes = await runWithConcurrency(modules, concurrency, async (mod, index) => {
     let relDir: string | undefined;
     let absDir: string | undefined;
     if (out !== undefined) {
+      if (!modulesOutCreated) {
+        mkdirSync(join(out, 'modules'), { recursive: true, mode: 0o700 });
+        modulesOutCreated = true;
+      }
       const slug = safeFileSlug(index, modules.length, mod.name);
       relDir = `modules/${slug}`;
       absDir = join(out, relDir);
-      mkdirSync(absDir, { recursive: true, mode: 0o700 });
     }
+    const outcome = await evaluateModuleBundle(
+      mod,
+      options,
+      backend,
+      concurrency,
+      scoreModule,
+      classifyTest,
+      absDir,
+      relDir,
+    );
+    totalRetries += outcome.retries;
+    return outcome;
+  });
 
-    const request: CodeRequest = {
-      model: options.model ?? `${backend}-default`,
-      state: {
-        ...(mod.requirements !== undefined
-          ? { requirement: mod.requirements }
-          : options.requirements !== undefined
-            ? { requirement: options.requirements }
-            : {}),
-        ...(mod.conventions !== undefined
-          ? { conventions: mod.conventions }
-          : options.conventions !== undefined
-            ? { conventions: options.conventions }
-            : {}),
-        production_files: numbered(mod.files),
-      },
-      questions: modRubric.questions,
-    };
-    const body = absDir !== undefined
-      ? saveJson(join(absDir, 'request.json'), request)
-      : `${JSON.stringify(request, null, 2)}\n`;
+  const activeCheckIds = new Set<string>();
+  for (const outcome of outcomes) {
+    for (const id of outcome.questionIds) activeCheckIds.add(id);
+  }
+  const effectiveRubric = narrowResolvedRubric(candidateRubric, activeCheckIds);
+  const skippedNotApplicable = Object.keys(candidateRubric.questions).filter((id) => !activeCheckIds.has(id));
+  const activeQuestionIds = Object.keys(effectiveRubric.questions);
 
-    const entry: ModuleJudgment = {
-      module: mod.name,
-      status: options.dryRun ? 'dry_run' : 'scored',
-      file_count: Object.keys(mod.files).length,
-      returned_model: null,
-      elapsed_ms: 0,
-      pass_rate: null,
-      checks: null,
-      ...(modQuestionIds.length < activeQuestionIds.length ? { applicable_checks: modQuestionIds } : {}),
-      ...(relDir !== undefined ? { result_dir: relDir } : {}),
-    };
-
-    if (options.dryRun) {
-      entry.elapsed_ms = Math.round(performance.now() - modStart);
-      if (absDir !== undefined) saveJson(join(absDir, 'result.json'), entry);
-      return entry;
+  const moduleResults = outcomes.map(({ entry, questionIds }) => {
+    if (questionIds.length > 0 && questionIds.length < activeQuestionIds.length) {
+      return { ...entry, applicable_checks: questionIds };
     }
-
-    try {
-      const judged = await scoreModule(request, body, absDir);
-      totalRetries += judged.retries ?? 0;
-      entry.status = 'scored';
-      entry.returned_model = judged.model;
-      entry.checks = judged.checks;
-      entry.pass_rate = passRate(judged.checks);
-    } catch (error) {
-      entry.status = 'error';
-      entry.error = error instanceof Error ? error.message : 'Judging failed';
-    }
-    entry.elapsed_ms = Math.round(performance.now() - modStart);
-    if (absDir !== undefined) saveJson(join(absDir, 'result.json'), entry);
     return entry;
   });
 
@@ -765,6 +1047,101 @@ export async function runMultiModuleJudge(
         error: `${errored.length} of ${moduleResults.length} module(s) failed: ${errored[0].module}: ${errored[0].error}`,
       }
       : {}),
+  };
+
+  if (out !== undefined) saveJson(join(out, 'result.json'), result);
+  return result;
+}
+
+export async function runSingleTargetJudge(
+  options: JudgeRunOptions,
+  backend: JudgeBackend,
+  passThreshold: number | null,
+  defaultConcurrency: number,
+  scoreTarget: ScoreRequestFn,
+  classifyTest?: TestClassifierFn,
+): Promise<JudgeResult> {
+  const { isUnified, candidateRubric } = resolvePartitionRubrics(options);
+  if (options.rubric.target === 'project_structure' || !isUnified) {
+    const startMs = performance.now();
+    const { out, request, body, result } = prepareJudgeRun(options, backend, passThreshold);
+    if (!options.dryRun && Object.keys(request.questions).length > 0) {
+      try {
+        const judged = await scoreTarget(request, body, out);
+        if (judged.retries && judged.retries > 0) result.retries = judged.retries;
+        result.returned_model = judged.model;
+        result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
+      } catch (error) {
+        result.status = 'error';
+        result.error = error instanceof Error ? error.message : 'Judging failed';
+      }
+    }
+    result.elapsed_ms = Math.round(performance.now() - startMs);
+    if (out !== undefined) saveJson(join(out, 'result.json'), result);
+    return result;
+  }
+
+  const prodFiles = options.files ?? {};
+  const testFiles = options.testFiles ?? {};
+  const totalFileCount = Object.keys(prodFiles).length + Object.keys(testFiles).length;
+  if (totalFileCount === 0) throw new Error('No files to score');
+
+  const startMs = performance.now();
+  let out: string | undefined;
+  if (options.out !== undefined) {
+    out = resolve(options.out);
+    mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
+    mkdirSync(out, { mode: 0o700 });
+  }
+
+  const concurrency = options.concurrency ?? defaultConcurrency;
+  const outcome = await evaluateModuleBundle(
+    {
+      name: options.target ?? 'module',
+      files: prodFiles,
+      testFiles,
+      requirements: options.requirements,
+      conventions: options.conventions,
+    },
+    options,
+    backend,
+    concurrency,
+    scoreTarget,
+    classifyTest,
+    out,
+    undefined,
+  );
+
+  const activeCheckIds = new Set(outcome.questionIds);
+  const effectiveRubric = narrowResolvedRubric(candidateRubric, activeCheckIds);
+  const skippedNotApplicable = Object.keys(candidateRubric.questions).filter((id) => !activeCheckIds.has(id));
+  const checkThresholds = overriddenThresholds(thresholdsToScores(effectiveRubric.thresholds), passThreshold);
+  const ignoredPatterns = [...new Set(options.ignore ?? [])];
+
+  const isError = outcome.entry.status === 'error';
+  const result: JudgeResult = {
+    status: options.dryRun ? 'dry_run' : isError ? 'error' : 'scored',
+    backend,
+    mode: 'code',
+    ...(options.target ? { target: options.target } : {}),
+    file_count: totalFileCount,
+    elapsed_ms: Math.round(performance.now() - startMs),
+    ...(outcome.retries > 0 ? { retries: outcome.retries } : {}),
+    requested_model: options.model ?? null,
+    returned_model: outcome.entry.returned_model,
+    rubric: effectiveRubric.rubric,
+    rubric_groups: effectiveRubric.groups,
+    ...(effectiveRubric.excluded.length > 0 ? { excluded_checks: effectiveRubric.excluded } : {}),
+    ...(ignoredPatterns.length > 0 ? { ignored_patterns: ignoredPatterns } : {}),
+    ...(skippedNotApplicable.length > 0 ? { skipped_not_applicable_checks: skippedNotApplicable } : {}),
+    pass_threshold: passThreshold,
+    ...(checkThresholds ? { check_thresholds: checkThresholds } : {}),
+    quality: options.dryRun || isError
+      ? null
+      : outcome.entry.checks
+        ? { pass_rate: outcome.entry.pass_rate ?? passRate(outcome.entry.checks), checks: outcome.entry.checks }
+        : { pass_rate: 1, checks: {} },
+    ...(isError ? { error: outcome.entry.error } : {}),
   };
 
   if (out !== undefined) saveJson(join(out, 'result.json'), result);
@@ -958,21 +1335,61 @@ export function readAnswers(
 
 function hasAnyApplicableRequest(options: JudgeRunOptions): boolean {
   if (options.rubric.target === 'project_structure') return true;
+  const { isUnified, prodRubric, testRubric } = resolvePartitionRubrics(options);
+  if (!isUnified) {
+    if (options.mode === 'file') {
+      const files = options.files ?? {};
+      return Object.entries(files).some(
+        ([file, content]) => Object.keys(filterRubricForFiles(options.rubric, { [file]: content }).questions).length > 0,
+      );
+    }
+    if (options.modules && options.modules.length > 0) {
+      return options.modules.some(
+        (mod) => Object.keys(filterRubricForFiles(options.rubric, mod.files).questions).length > 0,
+      );
+    }
+    return Object.keys(filterRubricForFiles(options.rubric, options.files ?? {}).questions).length > 0;
+  }
+
+  const testFileApplicable = (file: string, content: string): boolean => {
+    if (!testRubric) return false;
+    if (options.explicitTestSelection) {
+      return Object.keys(filterRubricForFiles(testRubric, { [file]: content }).questions).length > 0;
+    }
+    return Object.keys(previewTestFileRubric({ filePath: file, content }, testRubric).rubric.questions).length > 0;
+  };
+  const testBundleApplicable = (testFiles: Record<string, string>): boolean => {
+    if (!testRubric || Object.keys(testFiles).length === 0) return false;
+    if (options.explicitTestSelection) {
+      return Object.keys(filterRubricForFiles(testRubric, testFiles).questions).length > 0;
+    }
+    return Object.keys(previewTestBundleRubric(testFiles, testRubric).questions).length > 0;
+  };
+
   if (options.mode === 'file') {
-    const files = options.files ?? {};
-    return Object.entries(files).some(
-      ([file, content]) => Object.keys(filterRubricForFiles(options.rubric, { [file]: content }).questions).length > 0,
+    const prodMatch = prodRubric !== undefined && Object.entries(options.files ?? {}).some(
+      ([file, content]) => Object.keys(filterRubricForFiles(prodRubric, { [file]: content }).questions).length > 0,
     );
+    const testMatch = Object.entries(options.testFiles ?? {}).some(([file, content]) => testFileApplicable(file, content));
+    return prodMatch || testMatch;
   }
   if (options.modules && options.modules.length > 0) {
-    return options.modules.some(
-      (mod) => Object.keys(filterRubricForFiles(options.rubric, mod.files).questions).length > 0,
-    );
+    return options.modules.some((mod) => {
+      const prodMatch = prodRubric !== undefined
+        && Object.keys(mod.files).length > 0
+        && Object.keys(filterRubricForFiles(prodRubric, mod.files).questions).length > 0;
+      const testMatch = testBundleApplicable(mod.testFiles ?? {});
+      return prodMatch || testMatch;
+    });
   }
-  return Object.keys(filterRubricForFiles(options.rubric, options.files ?? {}).questions).length > 0;
+  const prodMatch = prodRubric !== undefined
+    && Object.keys(options.files ?? {}).length > 0
+    && Object.keys(filterRubricForFiles(prodRubric, options.files ?? {}).questions).length > 0;
+  const testMatch = testBundleApplicable(options.testFiles ?? {});
+  return prodMatch || testMatch;
 }
 
-/** Score a production file scan, module bundle(s), or project structure manifest through OpenRouter's Decisions API. */
+/** Score a file scan, module bundle(s), or project structure manifest through OpenRouter's Decisions API. */
 export async function runDecisionJudge(
   options: JudgeRunOptions,
   transport: typeof fetch = fetch,
@@ -985,18 +1402,28 @@ export async function runDecisionJudge(
     throw new Error('Set OPENROUTER_API_KEY before judging (or pass --backend codex / --backend claude)');
   }
 
+  const { candidateRubric } = resolvePartitionRubrics(options);
+  const scoreOpenRouter: ScoreRequestFn = async (request, body, artifactDir) => {
+    const responsePath = artifactDir !== undefined ? join(artifactDir, 'response.txt') : undefined;
+    const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
+    const judged = readAnswers(raw, request.questions, candidateRubric.thresholds);
+    return { ...judged, retries };
+  };
+  const classifyOpenRouter: TestClassifierFn = (filePath, content) =>
+    classifyTestFile({
+      filePath,
+      content,
+      invokeOpenRouter: (body) => postDecisions(body, key, undefined, transport, retry),
+    });
+
   if (options.mode === 'file') {
     return runPerFileJudge(
       options,
       'openrouter',
       DEFAULT_PASS_SCORE,
       DEFAULT_OPENROUTER_CONCURRENCY,
-      async (request, body, fileDir) => {
-        const responsePath = fileDir !== undefined ? join(fileDir, 'response.txt') : undefined;
-        const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
-        const judged = readAnswers(raw, request.questions, options.rubric.thresholds);
-        return { ...judged, retries };
-      },
+      scoreOpenRouter,
+      classifyOpenRouter,
     );
   }
 
@@ -1006,33 +1433,17 @@ export async function runDecisionJudge(
       'openrouter',
       DEFAULT_PASS_SCORE,
       DEFAULT_OPENROUTER_CONCURRENCY,
-      async (request, body, moduleDir) => {
-        const responsePath = moduleDir !== undefined ? join(moduleDir, 'response.txt') : undefined;
-        const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
-        const judged = readAnswers(raw, request.questions, options.rubric.thresholds);
-        return { ...judged, retries };
-      },
+      scoreOpenRouter,
+      classifyOpenRouter,
     );
   }
 
-  const startMs = performance.now();
-  const { out, request, body, result } = prepareJudgeRun(options, 'openrouter', DEFAULT_PASS_SCORE);
-
-  if (!options.dryRun && Object.keys(request.questions).length > 0) {
-    try {
-      const responsePath = out !== undefined ? join(out, 'response.txt') : undefined;
-      const { raw, retries } = await postDecisions(body, key, responsePath, transport, retry);
-      const judged = readAnswers(raw, request.questions, options.rubric.thresholds);
-      if (retries > 0) result.retries = retries;
-      result.returned_model = judged.model;
-      result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
-    } catch (error) {
-      result.status = 'error';
-      result.error = error instanceof Error ? error.message : 'Judging failed';
-    }
-  }
-
-  result.elapsed_ms = Math.round(performance.now() - startMs);
-  if (out !== undefined) saveJson(join(out, 'result.json'), result);
-  return result;
+  return runSingleTargetJudge(
+    options,
+    'openrouter',
+    DEFAULT_PASS_SCORE,
+    DEFAULT_OPENROUTER_CONCURRENCY,
+    scoreOpenRouter,
+    classifyOpenRouter,
+  );
 }

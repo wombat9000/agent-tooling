@@ -4,14 +4,14 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-const MAX_INPUT_BYTES = 128 * 1024;
+export const MAX_INPUT_BYTES = 128 * 1024;
 export const ALLOWED_DOT_DIRS = new Set(['.server', '.client']);
 export const SKIP_DIRS = new Set([
   'node_modules', 'vendor', 'build', 'dist', 'out', 'target', 'coverage', 'generated',
 ]);
 export const TEST_SUPPORT_DIRS = new Set([
   'test', 'tests', 'testing', '__tests__', '__mocks__', '__fixtures__', 'testfixtures',
-  'fixtures', 'androidtest',
+  'fixtures', 'androidtest', 'e2e',
 ]);
 const SENSITIVE_CONTENT = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
@@ -30,6 +30,8 @@ export interface ReadInputsOptions {
   conventions?: string;
   allowCredentials?: boolean;
   allowEmpty?: boolean;
+  includeProduction?: boolean;
+  includeTests?: boolean;
 }
 
 export interface IgnoreMatcher {
@@ -40,6 +42,7 @@ export interface IgnoreMatcher {
 
 export interface LoadedInputs {
   files: Record<string, string>;
+  testFiles?: Record<string, string>;
   requirements?: string;
   conventions?: string;
   out?: string;
@@ -52,12 +55,17 @@ export interface DocReadContext {
   consumeBudget: (bytes: number, label: string) => void;
 }
 
+export function isPlaywrightConfigFilename(fileName: string): boolean {
+  return /^playwright\.config\.[cm]?[jt]s$/i.test(fileName);
+}
+
 export function isTestOrSupportDirName(dirName: string): boolean {
   return TEST_SUPPORT_DIRS.has(dirName.toLowerCase());
 }
 
 export function isTestOrSupportFilename(fileName: string): boolean {
   const lower = fileName.toLowerCase();
+  if (isPlaywrightConfigFilename(fileName)) return true;
   if (lower === 'conftest.py' || /^test_[^/]+\.py$/.test(lower)) return true;
   if (/\.(?:test|spec|mock)\.[^.]+$/i.test(fileName)) return true;
   if (/_(?:test|spec)\.[^.]+$/i.test(fileName)) return true;
@@ -244,13 +252,27 @@ export function compileIgnoreMatcher(rawPatterns: readonly string[] = []): Ignor
   };
 }
 
-export function isProductionSource(relPath: string): boolean {
-  const name = basename(relPath);
+function isSupportedCodeFilename(name: string): boolean {
   if (name.startsWith('.')) return false;
-  if (isTestOrSupportPath(relPath)) return false;
   if (name.endsWith('.kt')) return true;
   const isTs = /\.(?:tsx?|[cm]ts)$/.test(name) && !/\.d\.[cm]?ts$/.test(name);
-  return isTs && !/\.(?:config|generated)\.[cm]?tsx?$/i.test(name);
+  return isTs && !/\.generated\.[cm]?tsx?$/i.test(name);
+}
+
+export function isProductionSource(relPath: string): boolean {
+  const name = basename(relPath);
+  if (!isSupportedCodeFilename(name)) return false;
+  if (isTestOrSupportPath(relPath)) return false;
+  return !/\.config\.[cm]?tsx?$/i.test(name);
+}
+
+export function isTestSource(relPath: string, insideTestRoot = false): boolean {
+  const name = basename(relPath);
+  if (name.startsWith('.')) return false;
+  if (isPlaywrightConfigFilename(name)) return true;
+  if (!isSupportedCodeFilename(name)) return false;
+  if (/\.config\.[cm]?tsx?$/i.test(name)) return false;
+  return insideTestRoot || isTestOrSupportPath(relPath);
 }
 
 /** Resolve existing parent aliases before deciding whether the output overlaps the source. */
@@ -369,26 +391,32 @@ function toPosixRelative(fromDir: string, absPath: string): string | null {
   return rel.split(sep).join('/');
 }
 
-function isSkippedDirPath(relPath: string): boolean {
+function isSkippedDirPath(relPath: string, includeTests: boolean): boolean {
   const parts = relPath.replaceAll('\\', '/').split('/');
   for (let i = 0; i < parts.length - 1; i += 1) {
     const seg = parts[i];
     if (seg.startsWith('.') && !ALLOWED_DOT_DIRS.has(seg)) return true;
-    if (SKIP_DIRS.has(seg.toLowerCase()) || isTestOrSupportDirName(seg)) return true;
+    if (SKIP_DIRS.has(seg.toLowerCase())) return true;
+    if (!includeTests && isTestOrSupportDirName(seg)) return true;
   }
   return false;
 }
 
-function collectProductionFiles(
+type FilePartition = 'production' | 'test';
+
+function collectPartitionedFiles(
   entries: ResolvedSourceEntry[],
   options: {
     displayBaseDir?: string;
     ignoreMatcher: IgnoreMatcher;
     allowEmpty?: boolean;
+    includeProduction: boolean;
+    includeTests: boolean;
   },
-  readFile: (path: string, label: string) => string,
-): Record<string, string> {
-  const files: Record<string, string> = {};
+  readFile: (path: string, label: string, partition: FilePartition) => string,
+): { productionFiles: Record<string, string>; testFiles: Record<string, string> } {
+  const productionFiles: Record<string, string> = {};
+  const testFiles: Record<string, string> = {};
   const seenCanonical = new Set<string>();
   const canonicalDisplayBase = options.displayBaseDir
     ? (() => {
@@ -408,7 +436,7 @@ function collectProductionFiles(
     return fallbackRel;
   };
 
-  const addFile = (absFile: string, relInSource: string, isSingleFile: boolean) => {
+  const addFile = (absFile: string, relInSource: string, isSingleFile: boolean, insideTestRoot: boolean) => {
     const canonical = realpathSync(absFile);
     if (seenCanonical.has(canonical)) return;
     const displayKey = displayKeyFor(canonical, relInSource);
@@ -416,18 +444,36 @@ function collectProductionFiles(
     if (matchTargets.some((t) => options.ignoreMatcher.isIgnoredFile(t))) {
       return;
     }
-    // Check source-relative (or display-relative for single files) paths for test/support or skipped dirs.
     const checkRel = isSingleFile ? displayKey : relInSource;
-    if (isSingleFile && isSkippedDirPath(checkRel)) return;
-    if (!isProductionSource(checkRel)) return;
+    if (isSingleFile && isSkippedDirPath(checkRel, options.includeTests)) return;
+
+    const isTest = insideTestRoot
+      || isTestOrSupportPath(checkRel)
+      || (displayKey !== checkRel && isTestOrSupportPath(displayKey));
+
+    let partition: FilePartition | null = null;
+    if (isTest) {
+      if (options.includeTests && isTestSource(checkRel, insideTestRoot || isTestOrSupportPath(displayKey))) {
+        partition = 'test';
+      }
+    } else if (options.includeProduction && isProductionSource(checkRel)) {
+      partition = 'production';
+    }
+    if (!partition) return;
+
     seenCanonical.add(canonical);
     const label = isSingleFile && entries.length === 1 && !canonicalDisplayBase
       ? 'the selected source file'
       : `source file ${displayKey}`;
-    files[displayKey] = readFile(canonical, label);
+    const text = readFile(canonical, label, partition);
+    if (partition === 'test') {
+      testFiles[displayKey] = text;
+    } else {
+      productionFiles[displayKey] = text;
+    }
   };
 
-  function collectDir(rootDir: string, dir: string, prefix = '') {
+  function collectDir(rootDir: string, dir: string, insideTestRoot: boolean, prefix = '') {
     const dirEntries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of dirEntries) {
       const isAllowedDot = entry.isDirectory() && ALLOWED_DOT_DIRS.has(entry.name);
@@ -438,79 +484,122 @@ function collectProductionFiles(
         const displayDir = canonicalDisplayBase ? toPosixRelative(canonicalDisplayBase, fullPath) : null;
         if (
           SKIP_DIRS.has(entry.name.toLowerCase())
-          || isTestOrSupportDirName(entry.name)
+          || (!options.includeTests && isTestOrSupportDirName(entry.name))
           || options.ignoreMatcher.isIgnoredDir(relName)
           || (displayDir !== null && options.ignoreMatcher.isIgnoredDir(displayDir))
         ) {
           continue;
         }
-        collectDir(rootDir, fullPath, relName);
+        collectDir(rootDir, fullPath, insideTestRoot || isTestOrSupportDirName(entry.name), relName);
       } else if (entry.isFile()) {
-        addFile(fullPath, relName, false);
+        addFile(fullPath, relName, false, insideTestRoot);
       }
     }
   }
 
   for (const entry of entries) {
     if (entry.isDirectory) {
-      collectDir(entry.path, entry.path);
+      const rootIsTestDir = isTestOrSupportDirName(basename(entry.path));
+      if (!options.includeTests && rootIsTestDir) {
+        continue;
+      }
+      collectDir(entry.path, entry.path, rootIsTestDir);
     } else {
-      addFile(entry.path, basename(entry.path), true);
+      addFile(entry.path, basename(entry.path), true, false);
     }
   }
 
-  if (Object.keys(files).length === 0 && !options.allowEmpty) {
-    throw new Error('No supported production Kotlin or TypeScript files found');
+  const totalCount = Object.keys(productionFiles).length + Object.keys(testFiles).length;
+  if (totalCount === 0 && !options.allowEmpty) {
+    if (options.includeProduction && !options.includeTests) {
+      throw new Error('No supported production Kotlin or TypeScript files found');
+    }
+    if (!options.includeProduction && options.includeTests) {
+      throw new Error('No supported Kotlin or TypeScript test files found');
+    }
+    throw new Error('No supported Kotlin or TypeScript files found');
   }
-  return files;
+  return { productionFiles, testFiles };
 }
 
 export function readInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
-  let remaining = MAX_INPUT_BYTES;
-  const ctx: DocReadContext = {
+  const includeProduction = options.includeProduction ?? true;
+  const includeTests = options.includeTests ?? false;
+
+  let docsBytes = 0;
+  const docCtx: DocReadContext = {
     allowCredentials: options.allowCredentials,
     key,
     consumeBudget(bytes) {
-      if (bytes > remaining) throw new Error('Selected inputs exceed 128 KiB');
-      remaining -= bytes;
+      if (docsBytes + bytes > MAX_INPUT_BYTES) throw new Error('Selected inputs exceed 128 KiB');
+      docsBytes += bytes;
     },
   };
 
   const { entries, out } = resolveSourcesAndOut(options);
 
   const requirements = options.requirements !== undefined
-    ? readOptionalDoc(options.requirements, '--requirements', 'the requirements document', ctx)
+    ? readOptionalDoc(options.requirements, '--requirements', 'the requirements document', docCtx)
     : undefined;
   const conventions = options.conventions !== undefined
-    ? readOptionalDoc(options.conventions, '--conventions', 'the conventions document', ctx)
+    ? readOptionalDoc(options.conventions, '--conventions', 'the conventions document', docCtx)
     : undefined;
 
-  const files = collectProductionFiles(
+  let prodRemaining = MAX_INPUT_BYTES - docsBytes;
+  let testRemaining = MAX_INPUT_BYTES - docsBytes;
+  const prodCtx: DocReadContext = {
+    allowCredentials: options.allowCredentials,
+    key,
+    consumeBudget(bytes) {
+      if (bytes > prodRemaining) throw new Error('Selected inputs exceed 128 KiB');
+      prodRemaining -= bytes;
+    },
+  };
+  const testCtx: DocReadContext = {
+    allowCredentials: options.allowCredentials,
+    key,
+    consumeBudget(bytes) {
+      if (bytes > testRemaining) throw new Error('Selected inputs exceed 128 KiB');
+      testRemaining -= bytes;
+    },
+  };
+
+  const { productionFiles, testFiles } = collectPartitionedFiles(
     entries,
     {
       displayBaseDir: options.displayBaseDir,
       ignoreMatcher,
       allowEmpty: options.allowEmpty,
+      includeProduction,
+      includeTests,
     },
-    (path, label) => readUtf8File(path, label, ctx),
+    (path, label, partition) => readUtf8File(path, label, partition === 'test' ? testCtx : prodCtx),
   );
 
-  if (key && Object.keys(files).some((path) => path.includes(key))) {
+  if (key && [...Object.keys(productionFiles), ...Object.keys(testFiles)].some((path) => path.includes(key))) {
     throw new Error('OPENROUTER_API_KEY appears in a selected source path');
   }
 
-  return { files, requirements, conventions, out };
+  return {
+    files: productionFiles,
+    ...(includeTests ? { testFiles } : {}),
+    requirements,
+    conventions,
+    out,
+  };
 }
 
 /**
- * Read production files for file-by-file linting, applying the 128 KiB budget per individual file + optional docs.
+ * Read source (and optionally test) files for file-by-file linting, applying the 128 KiB budget per individual file + optional docs.
  * Validates all selected files up front so oversized, binary, or credential-bearing files fail before any live request.
  */
 export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
   const key = process.env.OPENROUTER_API_KEY?.trim();
   const ignoreMatcher = compileIgnoreMatcher(options.ignore);
+  const includeProduction = options.includeProduction ?? true;
+  const includeTests = options.includeTests ?? false;
   const { entries, out } = resolveSourcesAndOut(options);
 
   let docsBytes = 0;
@@ -533,12 +622,14 @@ export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
     : undefined;
 
   const perFileBudget = MAX_INPUT_BYTES - docsBytes;
-  const files = collectProductionFiles(
+  const { productionFiles, testFiles } = collectPartitionedFiles(
     entries,
     {
       displayBaseDir: options.displayBaseDir,
       ignoreMatcher,
       allowEmpty: options.allowEmpty,
+      includeProduction,
+      includeTests,
     },
     (path, label) => {
       const fileCtx: DocReadContext = {
@@ -556,9 +647,15 @@ export function readPerFileInputs(options: ReadInputsOptions): LoadedInputs {
     },
   );
 
-  if (key && Object.keys(files).some((path) => path.includes(key))) {
+  if (key && [...Object.keys(productionFiles), ...Object.keys(testFiles)].some((path) => path.includes(key))) {
     throw new Error('OPENROUTER_API_KEY appears in a selected source path');
   }
 
-  return { files, requirements, conventions, out };
+  return {
+    files: productionFiles,
+    ...(includeTests ? { testFiles } : {}),
+    requirements,
+    conventions,
+    out,
+  };
 }

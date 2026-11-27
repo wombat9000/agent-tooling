@@ -2,23 +2,23 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { classifyTestFile } from './classifier.mts';
 import {
   DEFAULT_CLI_CONCURRENCY,
   DEFAULT_PASS_SCORE,
   ERROR_SCORE_THRESHOLD,
-  passRate,
-  prepareJudgeRun,
   probabilityToScore,
   runMultiModuleJudge,
   runPerFileJudge,
-  saveJson,
+  runSingleTargetJudge,
   type CodeRequest,
   type FindingSeverity,
   type JudgeResult,
   type JudgeRunOptions,
   type Judgment,
+  type TestClassifierFn,
 } from './decisions.mts';
-import { object, type JudgeMode } from './rubrics.mts';
+import { mergeResolvedRubrics, object, type JudgeMode } from './rubrics.mts';
 
 export type CliBackend = 'codex' | 'claude';
 export const CODEX_MODEL = 'gpt-6-luna';
@@ -246,6 +246,7 @@ async function invokeClaude(
   schema: unknown,
   model: string,
   responsePath: string | undefined,
+  systemPrompt: string = SYSTEM_PROMPT,
 ): Promise<{ rawChecks: unknown; returnedModel: string }> {
   const scratch = mkdtempSync(join(tmpdir(), 'judge-code-claude-'));
   try {
@@ -258,7 +259,7 @@ async function invokeClaude(
       '--restricted',
       '--strict-mcp-config',
       '--setting-sources', '',
-      '--system-prompt', SYSTEM_PROMPT,
+      '--system-prompt', systemPrompt,
       '--tools', '',
       '--no-session-persistence',
       '--disable-slash-commands',
@@ -315,6 +316,10 @@ async function invokeClaude(
 export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend): Promise<JudgeResult> {
   const mode: JudgeMode = options.mode ?? (options.rubric.target === 'project_structure' ? 'structure' : 'code');
   const model = options.model ?? defaultCliModel(backend, mode);
+  const classifierModel = backend === 'codex' ? CODEX_MODEL : CLAUDE_FILE_MODEL;
+  const mergedThresholds = options.testRubric
+    ? mergeResolvedRubrics([options.rubric, options.testRubric]).thresholds
+    : options.rubric.thresholds;
 
   const invoke = async (request: CodeRequest, artifactDir?: string) => {
     const reqQuestionIds = Object.keys(request.questions);
@@ -323,9 +328,21 @@ export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend)
     const invoked = backend === 'codex'
       ? await invokeCodex(buildPrompt(request), schema, model, responsePath)
       : await invokeClaude(buildPayload(request), schema, model, responsePath);
-    const checks = adaptCliChecks(invoked.rawChecks, reqQuestionIds, options.rubric.thresholds);
+    const checks = adaptCliChecks(invoked.rawChecks, reqQuestionIds, mergedThresholds);
     return { model: invoked.returnedModel, checks };
   };
+
+  const classifyCli: TestClassifierFn = (filePath, content) =>
+    classifyTestFile({
+      filePath,
+      content,
+      invokeCli: async (call) => {
+        const invoked = backend === 'codex'
+          ? await invokeCodex(call.prompt, call.schema, classifierModel, undefined)
+          : await invokeClaude(call.payload, call.schema, classifierModel, undefined, call.systemPrompt);
+        return { raw: invoked.rawChecks, returnedModel: invoked.returnedModel };
+      },
+    });
 
   if (options.mode === 'file') {
     return runPerFileJudge(
@@ -334,6 +351,7 @@ export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend)
       DEFAULT_PASS_SCORE,
       DEFAULT_CLI_CONCURRENCY,
       (request, _body, fileDir) => invoke(request, fileDir),
+      classifyCli,
     );
   }
 
@@ -344,24 +362,16 @@ export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend)
       DEFAULT_PASS_SCORE,
       DEFAULT_CLI_CONCURRENCY,
       (request, _body, moduleDir) => invoke(request, moduleDir),
+      classifyCli,
     );
   }
 
-  const startMs = performance.now();
-  const { out, request, result } = prepareJudgeRun({ ...options, model }, backend, DEFAULT_PASS_SCORE);
-
-  if (!options.dryRun && Object.keys(request.questions).length > 0) {
-    try {
-      const judged = await invoke(request, out);
-      result.returned_model = judged.model;
-      result.quality = { pass_rate: passRate(judged.checks), checks: judged.checks };
-    } catch (error) {
-      result.status = 'error';
-      result.error = error instanceof Error ? error.message : 'CLI judging failed';
-    }
-  }
-
-  result.elapsed_ms = Math.round(performance.now() - startMs);
-  if (out !== undefined) saveJson(join(out, 'result.json'), result);
-  return result;
+  return runSingleTargetJudge(
+    { ...options, model },
+    backend,
+    DEFAULT_PASS_SCORE,
+    DEFAULT_CLI_CONCURRENCY,
+    (request, _body, artifactDir) => invoke(request, artifactDir),
+    classifyCli,
+  );
 }

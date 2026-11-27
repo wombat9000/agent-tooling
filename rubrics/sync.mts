@@ -11,12 +11,12 @@ import { parseArgs } from 'node:util';
 
 export const AUTHORITATIVE_RUBRICS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const SKILL_RUBRICS_DIR = fileURLToPath(new URL('../skills/judge-code/rubrics', import.meta.url));
-export const SHIPPED_TARGETS = new Set(['production_code', 'project_structure']);
+export const SHIPPED_TARGETS = new Set(['production_code', 'project_structure', 'test_code']);
 const KNOWN_TARGETS = new Set(['production_code', 'project_structure', 'test_code', 'review']);
 
 const USAGE = `Usage: node rubrics/sync.mts [--check]
 
-Synchronize shipped rubrics (target: production_code or project_structure) from
+Synchronize shipped rubrics (target: production_code, project_structure, or test_code) from
 top-level rubrics/ into skills/judge-code/rubrics/, removing any stale copies.
 
   --check     Verify exact file set and SHA-256 parity without modifying files
