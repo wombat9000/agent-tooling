@@ -1,0 +1,8 @@
+{
+  "id": "web-first-and-race-free-bad",
+  "description": "Specs use waitForTimeout, networkidle crutches, one-shot DOM snapshots, legacy ElementHandle APIs, force clicks, unawaited assertions, and action-before-listener races",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_web_first_and_race_free": "fail"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "strict-scoped-locators-good",
+  "description": "Specs locate controls via accessible roles, labels, placeholders, and semantic row/dialog container scoping, using .first()/.last() only for sort-order verification and getByTestId only for a non-semantic canvas chart",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_strict_scoped_locators": "pass"
+  }
+}

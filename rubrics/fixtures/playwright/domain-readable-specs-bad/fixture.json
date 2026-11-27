@@ -1,0 +1,8 @@
+{
+  "id": "domain-readable-specs-bad",
+  "description": "Suite builds a speculative BasePage inheritance hierarchy, hides assertions inside opaque Page Object methods, and drowns multi-step specs in repeated raw Playwright plumbing",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_domain_readable_specs": "fail"
+  }
+}

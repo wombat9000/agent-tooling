@@ -1,0 +1,8 @@
+{
+  "id": "domain-readable-specs-good",
+  "description": "Multi-step Playwright specs read in domain vocabulary using a small injected driver fixture while keeping expect assertions visible in the spec alongside a direct short smoke test",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_domain_readable_specs": "pass"
+  }
+}
