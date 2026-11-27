@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isPlaywrightConfigFilename } from './inputs.mts';
 
 const RUBRICS_DIR = fileURLToPath(new URL('../rubrics', import.meta.url));
 export const CONVENTIONS_CHECK_ID = 'follows_repo_conventions';
@@ -59,12 +60,35 @@ export interface ResolvedRubric {
 
 export interface ResolveRubricsOptions {
   mode?: JudgeMode;
+  target?: RubricTarget;
   rubrics?: string[];
   rules?: string[];
   exclude?: string[];
   hasRequirements: boolean;
   hasConventions: boolean;
   allowTestCode?: boolean;
+}
+
+export interface ResolveUnifiedRubricsOptions {
+  mode: JudgeMode;
+  rubrics?: string[];
+  rules?: string[];
+  exclude?: string[];
+  hasRequirements: boolean;
+  hasConventions: boolean;
+}
+
+export interface UnifiedResolvedRubrics {
+  production?: ResolvedRubric;
+  test?: ResolvedRubric;
+  structure?: ResolvedRubric;
+  explicitTestSelection: boolean;
+  combinedCriteria: {
+    questions: Record<string, ChoiceQuestion>;
+    scopes: Record<string, CheckScope>;
+    thresholds: Record<string, number>;
+    groups: Record<string, string[]>;
+  };
 }
 
 interface ParsedRubricFile {
@@ -89,11 +113,10 @@ export function nonempty(value: unknown, label: string): string {
   return value;
 }
 
-function parseTarget(value: unknown, fallback: RubricTarget, allowTestCode = false): RubricTarget {
+function parseTarget(value: unknown, fallback: RubricTarget, _allowTestCode = true): RubricTarget {
   if (value === undefined) return fallback;
-  if (value === 'production_code' || value === 'project_structure') return value;
-  if (allowTestCode && value === 'test_code') return value;
-  throw new Error(`Unsupported rubric target: ${String(value)}. Expected production_code or project_structure.`);
+  if (value === 'production_code' || value === 'project_structure' || value === 'test_code') return value;
+  throw new Error(`Unsupported rubric target: ${String(value)}. Expected production_code, project_structure, or test_code.`);
 }
 
 function modeToTarget(mode: JudgeMode): RubricTarget {
@@ -348,8 +371,16 @@ export function matchesFileApplicability(
   if (appliesTo.extensions?.some((ext) => lower.endsWith(ext))) {
     return true;
   }
-  if (appliesTo.runtime_imports?.length && /\.(?:tsx?|[cm]ts)$/.test(lower)) {
-    return hasRuntimeImport(content, appliesTo.runtime_imports);
+  if (appliesTo.runtime_imports?.length) {
+    if (
+      isPlaywrightConfigFilename(basename(filePath))
+      && appliesTo.runtime_imports.some((pkg) => pkg === '@playwright/test' || pkg === 'playwright')
+    ) {
+      return true;
+    }
+    if (/\.(?:tsx?|[cm]ts)$/.test(lower)) {
+      return hasRuntimeImport(content, appliesTo.runtime_imports);
+    }
   }
   return false;
 }
@@ -613,7 +644,7 @@ export function explainRules(ruleIds: string[], rubricSpecs: string[] = []): Rul
 }
 
 export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
-  const explicitTarget = options.mode ? modeToTarget(options.mode) : undefined;
+  const explicitTarget = options.target ?? (options.mode ? modeToTarget(options.mode) : undefined);
   const requestedRubrics = options.rubrics ?? [];
   const parsedSources: ParsedRubricFile[] = [];
 
@@ -626,7 +657,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     }
   } else {
     parsedSources.push(
-      ...loadRubricSpecs(requestedRubrics, explicitTarget ?? 'production_code', Boolean(options.allowTestCode)),
+      ...loadRubricSpecs(requestedRubrics, explicitTarget ?? 'production_code', options.allowTestCode ?? true),
     );
   }
 
@@ -636,7 +667,7 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
       if (explicitTarget) {
         const hint = parsed.target === 'project_structure'
           ? ' Use `judge-code structure <path>` for project_structure rubrics.'
-          : ' Use `judge-code <path>` or `judge-code module <path>` for production_code rubrics.';
+          : ' Use `judge-code <path>` or `judge-code module <path>` for production_code or test_code rubrics.';
         throw new Error(`Rubric ${parsed.id} targets ${parsed.target}, which is incompatible with ${options.mode} mode.${hint}`);
       }
       throw new Error(`Cannot mix ${resolvedTarget} and ${parsed.target} rubrics in one run (${parsed.id})`);
@@ -794,5 +825,210 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     groupRubricIds,
     excluded: appliedExcluded,
     skippedModuleChecks,
+  };
+}
+
+/** Merge two or more resolved rubrics (for unified production + test file/module runs). */
+export function mergeResolvedRubrics(rubrics: readonly ResolvedRubric[]): ResolvedRubric {
+  const nonEmpty = rubrics.filter((r) => Object.keys(r.questions).length > 0);
+  if (nonEmpty.length === 1) return nonEmpty[0];
+  const baseTarget: RubricTarget = nonEmpty[0]?.target ?? rubrics[0]?.target ?? 'production_code';
+  const questions: Record<string, ChoiceQuestion> = {};
+  const scopes: Record<string, CheckScope> = {};
+  const thresholds: Record<string, number> = {};
+  const appliesTo: Record<string, RubricApplicability> = {};
+  const groups: Record<string, string[]> = {};
+  const groupRubricIds: Record<string, string> = {};
+  const activeRubricIds: string[] = [];
+  const excluded: string[] = [];
+  const skippedModuleChecks: string[] = [];
+
+  for (const r of rubrics) {
+    for (const id of r.excluded) {
+      if (!excluded.includes(id)) excluded.push(id);
+    }
+    for (const id of r.skippedModuleChecks) {
+      if (!skippedModuleChecks.includes(id)) skippedModuleChecks.push(id);
+    }
+    for (const [id, q] of Object.entries(r.questions)) {
+      if (!(id in questions)) {
+        questions[id] = q;
+        scopes[id] = r.scopes[id];
+        thresholds[id] = r.thresholds[id];
+        if (r.appliesTo?.[id]) appliesTo[id] = r.appliesTo[id];
+      }
+    }
+    for (const [group, ids] of Object.entries(r.groups)) {
+      if (!groups[group]) groups[group] = [];
+      for (const id of ids) {
+        if (!groups[group].includes(id)) groups[group].push(id);
+      }
+      const rubricId = r.groupRubricIds?.[group] ?? (group === 'conventions' ? 'repo-conventions' : group);
+      if (!groupRubricIds[group]) groupRubricIds[group] = rubricId;
+      if (ids.length > 0 && !activeRubricIds.includes(rubricId)) activeRubricIds.push(rubricId);
+    }
+  }
+
+  return {
+    rubric: activeRubricIds.join('+'),
+    target: baseTarget,
+    questions,
+    scopes,
+    thresholds,
+    ...(Object.keys(appliesTo).length > 0 ? { appliesTo } : {}),
+    groups,
+    ...(Object.keys(groupRubricIds).length > 0 ? { groupRubricIds } : {}),
+    excluded,
+    skippedModuleChecks,
+  };
+}
+
+function collectKnownCheckIds(sources: readonly ParsedRubricFile[], hasConventions: boolean): Set<string> {
+  const ids = new Set<string>();
+  for (const parsed of sources) {
+    for (const id of Object.keys(parsed.questions)) ids.add(id);
+  }
+  if (hasConventions) ids.add(CONVENTIONS_CHECK_ID);
+  return ids;
+}
+
+function buildCombinedCriteria(rubrics: readonly (ResolvedRubric | undefined)[]) {
+  const present = rubrics.filter((r): r is ResolvedRubric => r !== undefined);
+  const merged = mergeResolvedRubrics(present);
+  return {
+    questions: merged.questions,
+    scopes: merged.scopes,
+    thresholds: merged.thresholds,
+    groups: merged.groups,
+  };
+}
+
+/**
+ * Resolve rubrics for CLI commands (`file`, `code`/module, and `structure`).
+ * In `file` and `code` modes with no explicit `--rubric`/`--rule`, resolves both bundled
+ * `production_code` and `test_code` rubrics so production and test files lint seamlessly together.
+ */
+export function resolveUnifiedRubrics(options: ResolveUnifiedRubricsOptions): UnifiedResolvedRubrics {
+  if (options.mode === 'structure') {
+    const structure = resolveRubrics({
+      mode: 'structure',
+      rubrics: options.rubrics,
+      rules: options.rules,
+      exclude: options.exclude,
+      hasRequirements: options.hasRequirements,
+      hasConventions: options.hasConventions,
+    });
+    return {
+      structure,
+      explicitTestSelection: false,
+      combinedCriteria: buildCombinedCriteria([structure]),
+    };
+  }
+
+  const requestedRubrics = options.rubrics ?? [];
+  const requestedRules = [...new Set(options.rules ?? [])];
+  const requestedExcludes = [...new Set(options.exclude ?? [])];
+
+  // Partition explicit --rubric specs (or all bundled prod + test rubrics when omitted).
+  const prodSpecs: string[] = [];
+  const testSpecs: string[] = [];
+  const prodParsed: ParsedRubricFile[] = [];
+  const testParsed: ParsedRubricFile[] = [];
+
+  if (requestedRubrics.length === 0) {
+    for (const slug of bundledSlugs()) {
+      const parsed = loadBundledRubric(slug);
+      if (parsed.target === 'production_code') {
+        prodSpecs.push(slug);
+        prodParsed.push(parsed);
+      } else if (parsed.target === 'test_code') {
+        testSpecs.push(slug);
+        testParsed.push(parsed);
+      }
+    }
+  } else {
+    const loaded = loadRubricSpecs(requestedRubrics, 'production_code', true);
+    for (let i = 0; i < loaded.length; i += 1) {
+      const parsed = loaded[i];
+      const spec = requestedRubrics[i];
+      if (parsed.target === 'project_structure') {
+        throw new Error(
+          `Rubric ${parsed.id} targets project_structure, which is incompatible with ${options.mode} mode. `
+          + 'Use `judge-code structure <path>` for project_structure rubrics.',
+        );
+      }
+      if (parsed.target === 'production_code') {
+        prodSpecs.push(spec);
+        prodParsed.push(parsed);
+      } else {
+        testSpecs.push(spec);
+        testParsed.push(parsed);
+      }
+    }
+  }
+
+  const prodKnown = collectKnownCheckIds(prodParsed, options.hasConventions && prodSpecs.length > 0);
+  const testKnown = collectKnownCheckIds(testParsed, options.hasConventions && testSpecs.length > 0);
+
+  // Partition explicit --rule IDs across production vs test targets.
+  const prodRules: string[] = [];
+  const testRules: string[] = [];
+  for (const id of requestedRules) {
+    const inProd = prodKnown.has(id);
+    const inTest = testKnown.has(id);
+    if (!inProd && !inTest) {
+      throw new Error(`Unknown check ID in --rule: ${id}. Run \`judge-code list\` to see available checks.`);
+    }
+    if (inProd) prodRules.push(id);
+    if (inTest) testRules.push(id);
+  }
+
+  // Validate --exclude IDs against the active target(s).
+  const wantProd = prodSpecs.length > 0 && (requestedRules.length === 0 || prodRules.length > 0);
+  const wantTest = testSpecs.length > 0 && (requestedRules.length === 0 || testRules.length > 0);
+  const prodExclude: string[] = [];
+  const testExclude: string[] = [];
+  for (const id of requestedExcludes) {
+    const inProd = wantProd && prodKnown.has(id);
+    const inTest = wantTest && testKnown.has(id);
+    if (!inProd && !inTest) {
+      throw new Error(`Unknown check ID in --exclude: ${id}`);
+    }
+    if (inProd) prodExclude.push(id);
+    if (inTest) testExclude.push(id);
+  }
+
+  const production = wantProd
+    ? resolveRubrics({
+      mode: options.mode,
+      target: 'production_code',
+      rubrics: prodSpecs,
+      rules: prodRules.length > 0 ? prodRules : undefined,
+      exclude: prodExclude.length > 0 ? prodExclude : undefined,
+      hasRequirements: options.hasRequirements,
+      hasConventions: options.hasConventions,
+    })
+    : undefined;
+
+  const test = wantTest
+    ? resolveRubrics({
+      mode: options.mode,
+      target: 'test_code',
+      rubrics: testSpecs,
+      rules: testRules.length > 0 ? testRules : undefined,
+      exclude: testExclude.length > 0 ? testExclude : undefined,
+      hasRequirements: options.hasRequirements,
+      hasConventions: options.hasConventions,
+      allowTestCode: true,
+    })
+    : undefined;
+
+  const explicitTestSelection = Boolean(test) && (requestedRubrics.length > 0 || requestedRules.length > 0);
+
+  return {
+    ...(production ? { production } : {}),
+    ...(test ? { test } : {}),
+    explicitTestSelection,
+    combinedCriteria: buildCombinedCriteria([production, test]),
   };
 }

@@ -1,0 +1,42 @@
+{
+  "rubric": "testing-core-v1",
+  "target": "test_code",
+  "questions": {
+    "independent_requirement_coverage": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Do the tests derive expected outcomes independently from the task requirements and cover the key contracts, boundary conditions, and failure modes with genuine failure-detecting assertions?",
+      "criteria": {
+        "pass": "Expected outcomes are derived independently from the task specification rather than computed by invoking the production logic under test or tautologically comparing values to themselves. Every test has a genuine failure condition that catches a plausible wrong implementation, and the suite covers the core required behaviors, boundary conditions, and rejection/error cases defined in the specification.",
+        "fail": "Tests compute expected values using the production logic under test, perform tautological self-comparisons or assertion-free probes (such as only checking that a call does not throw or returns non-null), rely on negative tests that pass for an unrelated reason, OR omit substantial required behaviors, boundary conditions, or rejection/error paths stated in the task specification."
+      }
+    },
+    "no_redundant_duplication": {
+      "type": "choice",
+      "scope": "module",
+      "instructions": "Does the test suite give each rule or matrix one primary test owner and consolidate repetitive input/outcome cases concisely rather than copy-pasting?",
+      "criteria": {
+        "pass": "Each domain rule or validation matrix has one primary test owner rather than being exhaustively echoed across multiple test layers, and three or more near-identical input/expected cases are expressed concisely (such as via parameterized tests, table-driven loops, or shared helpers) rather than copy-pasted as repetitive test methods or cloned test files. Covering a thin representative happy/failure slice at a higher layer while lower-level unit tests own the full matrix is acceptable.",
+        "fail": "The suite exhaustively echoes the same validation or state-transition matrix across multiple test layers (for example, duplicating full field-by-field validation matrices or identical transition rejections in both unit tests and heavyweight integration tests), OR copy-pastes three or more near-identical test methods or cloned test files that differ only in input/expected values instead of consolidating them."
+      }
+    },
+    "observable_diagnostic_assertions": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Do the tests verify meaningful observable contract outcomes using typed deserialization or structured, diagnostic assertions rather than raw untyped tree lookups, thin status/length checks, or brittle assertions?",
+      "criteria": {
+        "pass": "Assertions verify meaningful observable outcomes—key returned contract fields (not merely status codes or collection lengths), observable state, specific error types or codes where defined, and state preservation after rejected mutations—using typed deserialization or concise structured matchers rather than repeated raw untyped tree parsing, stable key/identifier lookup or full expected-collection matching rather than brittle hardcoded array positions, and direct diagnostic assertions (equality, type checks) rather than lossy boolean wrappers (`assert(a == b) == true`) or exact internal exception-message prose. Simple value-, text-, or UI-output tests that directly assert complete observable outcomes pass.",
+        "fail": "Tests repeatedly parse structured API/JSON responses through raw untyped tree lookups (such as repeated raw node/field extraction) instead of typed deserialization or concise structured matchers; OR check only status codes or collection lengths on mutation or query responses without verifying key contract fields or confirming that rejected mutations preserve state; OR index multi-item collection responses by brittle hardcoded array positions; OR use lossy boolean-wrapped assertions (such as asserting that an equality or type comparison equals true/false) or couple tightly to exact internal exception wording."
+      }
+    },
+    "owner_boundary_no_seams": {
+      "type": "choice",
+      "scope": "file",
+      "instructions": "Do the tests exercise real public or module boundaries without relying on test-only production seams, test-only flags, or widened visibility solely to reach private helpers?",
+      "criteria": {
+        "pass": "Tests exercise real public or module boundaries so internal reorganization does not require rewriting tests, without introducing test-only production hooks, test-only flags, or widened visibility solely to reach private helpers.",
+        "fail": "Tests rely on test-only production seams, test-only flags or branches, internal implementation hooks, or visibility widened solely to invoke private helpers directly."
+      }
+    }
+  }
+}

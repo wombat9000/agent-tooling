@@ -239,6 +239,7 @@ export function formatRubricList(
   const formatTags = (rubric: BundledRubricSummary): string => {
     const tags: string[] = [];
     if (rubric.target === 'project_structure') tags.push('[structure]');
+    if (rubric.target === 'test_code') tags.push('[test]');
     if (rubric.appliesTo) tags.push(`[applies: ${formatApplicability(rubric.appliesTo)}]`);
     return tags.length > 0 ? ` ${tags.join(' ')}` : '';
   };
@@ -327,9 +328,11 @@ export function formatLinterOutput(result: JudgeResult, options: FormatLinterOpt
     lines.push(`Checks (${checks.length}): ${checkLabels.length > 0 ? checkLabels.join(', ') : '(none applicable)'}`);
     if (result.file_results && result.file_results.length > 0) {
       if (activeFiles.length > 0) {
-        const preview = activeFiles.slice(0, 20).map((f) =>
-          f.applicable_checks ? `${f.file} (${f.applicable_checks.length}/${checks.length})` : f.file,
-        ).join(', ');
+        const preview = activeFiles.slice(0, 20).map((f) => {
+          const roleNote = f.file_role ? ` [${f.file_role}]` : '';
+          const checkNote = f.applicable_checks ? ` (${f.applicable_checks.length}/${checks.length})` : '';
+          return `${f.file}${roleNote}${checkNote}`;
+        }).join(', ');
         const suffix = activeFiles.length > 20 ? `, ... (+${activeFiles.length - 20} more)` : '';
         lines.push(`Files (${activeFiles.length}): ${preview}${suffix}`);
       }

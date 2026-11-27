@@ -40,7 +40,48 @@ globalThis.fetch = async (endpoint, init) => {
   if (mode === 'key-echo') return new Response('echo fixture-api-key', { status: 500 });
 
   const json = JSON.parse(init.body);
-  const fileNames = Object.keys(json.state.production_files ?? {});
+  if (json.questions?.test_kind && Object.keys(json.questions).length === 1) {
+    const filePath = String(json.state?.file_path ?? '');
+    const content = String(json.state?.file_content ?? '');
+    let choice = 'unit';
+    const probs = { unit: 0, integration: 0, e2e_browser: 0, test_support: 0, other: 0 };
+    if (filePath.includes('mixed-split')) {
+      choice = 'unit';
+      probs.unit = 0.72;
+      probs.integration = 0.25;
+      probs.e2e_browser = 0.01;
+      probs.test_support = 0.01;
+      probs.other = 0.01;
+    } else if (filePath.includes('other-script')) {
+      choice = 'other';
+      probs.other = 1;
+    } else if (filePath.includes('helper') || filePath.includes('driver') || filePath.includes('Fixture')) {
+      choice = 'test_support';
+      probs.test_support = 1;
+    } else if (filePath.includes('e2e') || filePath.endsWith('.spec.ts') || filePath.endsWith('.spec.tsx') || content.includes('page.goto')) {
+      choice = 'e2e_browser';
+      probs.e2e_browser = 1;
+    } else if (filePath.includes('integration') || content.includes('createServer')) {
+      choice = 'integration';
+      probs.integration = 1;
+    } else {
+      choice = 'unit';
+      probs.unit = 1;
+    }
+    return Response.json({
+      model: json.model + '-mock',
+      answers: {
+        test_kind: {
+          type: 'choice',
+          choice,
+          probabilities: probs,
+          confidence: 0.95,
+        },
+      },
+    });
+  }
+
+  const fileNames = Object.keys(json.state.production_files ?? json.state.test_files ?? {});
   const singleFile = isFileCmd && fileNames.length === 1 ? fileNames[0] : null;
   if (mode === 'partial-400' && singleFile?.endsWith('Room.kt')) {
     return new Response(
@@ -167,9 +208,12 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
     assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[file\]/);
     assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
     assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
+    assert.match(proc.stdout, /playwright \(playwright-v1\) \[test\] \[applies: imports: @playwright\/test, playwright\]:/);
     assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]: react_effect_lifecycle \[file, >=70\]/);
     assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=60\]/);
     assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file, >=65\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
+    assert.match(proc.stdout, /testing-core \(testing-core-v1\) \[test\]: independent_requirement_coverage \[module\], no_redundant_duplication \[module\], observable_diagnostic_assertions \[file\], owner_boundary_no_seams \[file\]/);
+    assert.match(proc.stdout, /testing-unit \(testing-unit-v1\) \[test\]: unit_single_behavior_aaa \[file\], disciplined_test_doubles \[file\]/);
   }
 
   const badList = run('reject', ['list', 'extra-arg']);
@@ -180,11 +224,12 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
 test('default file-by-file linter accepts positional paths, runs all file-scoped checks with jev-1.14, needs no --out, and rejects legacy flags', (t) => {
   const { run, root } = setup(t);
 
-  // Default dry-run without --out writes no files and runs all 18 bundled file-scoped checks with typesafe/jev-1.14
+  // Default dry-run without --out writes no files and runs all file-scoped checks across both prod (4) and test (3) files with typesafe/jev-1.14
   const dryText = run('preview', ['booking', '--dry-run']);
   assert.equal(dryText.status, 0, dryText.stderr);
-  assert.match(dryText.stdout, /DRY RUN \(file\): 4 files, 18 checks \[openrouter: typesafe\/jev-1\.14\]/);
+  assert.match(dryText.stdout, /DRY RUN \(file\): 7 files, 27 checks \[openrouter: typesafe\/jev-1\.14\]/);
   assert.match(dryText.stdout, /booking\/Booking\.kt/);
+  assert.match(dryText.stdout, /booking\/BookingTest\.kt \[test:auto\]/);
   assert.doesNotMatch(dryText.stdout, /Artifacts:/);
 
   // Same call with --json returns full structured JudgeResult without --out
@@ -194,15 +239,25 @@ test('default file-by-file linter accepts positional paths, runs all file-scoped
   assert.equal(res.status, 'dry_run');
   assert.equal(res.mode, 'file');
   assert.equal(res.requested_model, 'typesafe/jev-1.14');
-  assert.equal(res.file_count, 4);
+  assert.equal(res.file_count, 7);
   assert.deepEqual(
     res.file_results.map((entry: { file: string }) => entry.file),
-    ['booking/Booking.kt', 'booking/env.ts', 'booking/password.ts', 'booking/Room.kt'].sort((a, b) => a.localeCompare(b)),
+    [
+      'booking/Booking.kt',
+      'booking/BookingTest.kt',
+      'booking/env.ts',
+      'booking/fixture.spec.tsx',
+      'booking/password.ts',
+      'booking/Room.kt',
+      'booking/tests/Fixture.kt',
+    ].sort((a, b) => a.localeCompare(b)),
   );
   assert.equal('result_dir' in res.file_results[0], false);
-  assert.equal(Object.values(res.rubric_groups).flat().length, 18);
+  assert.equal(Object.values(res.rubric_groups).flat().length, 27);
   assert.ok(res.rubric_groups.solid.includes('single_responsibility'));
+  assert.ok(res.rubric_groups['testing-unit'].includes('unit_single_behavior_aaa'));
   assert.ok(res.skipped_module_checks.includes('dependency_inversion'));
+  assert.ok(res.skipped_module_checks.includes('independent_requirement_coverage'));
   assert.equal(res.pass_threshold, 80);
   assert.deepEqual(res.check_thresholds, {
     no_primitive_obsession: 60,
@@ -479,15 +534,15 @@ test('--changed resolves modified, staged, and untracked files vs main or HEAD f
   const branchRes = JSON.parse(branchChanged.stdout);
   assert.deepEqual(
     branchRes.file_results.map((f: { file: string }) => f.file),
-    ['src/a/one.ts', 'src/b/new-file.ts'],
+    ['src/a/one.ts', 'src/b/new-file.test.ts', 'src/b/new-file.ts'],
   );
 
-  // Explicit base ref `--changed HEAD` only sees working tree changes (new-file.ts), not committed one.ts
+  // Explicit base ref `--changed HEAD` only sees working tree changes (new-file.ts + new-file.test.ts), not committed one.ts
   const headChanged = run('preview', ['--changed', 'HEAD', '--dry-run', '--json'], {}, gitRepo);
   assert.equal(headChanged.status, 0, headChanged.stderr);
   assert.deepEqual(
     JSON.parse(headChanged.stdout).file_results.map((f: { file: string }) => f.file),
-    ['src/b/new-file.ts'],
+    ['src/b/new-file.test.ts', 'src/b/new-file.ts'],
   );
 
   // `--changed=HEAD` form also works
@@ -495,7 +550,7 @@ test('--changed resolves modified, staged, and untracked files vs main or HEAD f
   assert.equal(eqChanged.status, 0, eqChanged.stderr);
   assert.deepEqual(
     JSON.parse(eqChanged.stdout).file_results.map((f: { file: string }) => f.file),
-    ['src/b/new-file.ts'],
+    ['src/b/new-file.test.ts', 'src/b/new-file.ts'],
   );
 
   // Positional path filter narrows `--changed` to that directory
@@ -541,7 +596,7 @@ test('--changed resolves modified, staged, and untracked files vs main or HEAD f
 test('module subcommand runs file + module checks with liquid/d1.2-ultra across single and multi-directory bundles', (t) => {
   const { run, root, project } = setup(t);
 
-  // Single module directory defaults to liquid/d1.2-ultra and includes both file and module checks
+  // Single module directory defaults to liquid/d1.2-ultra and includes both file and module checks across prod + test files
   const out = join(root, 'mod-single');
   const proc = run('preview', ['module', 'booking', '--out', out, '--dry-run', '--json']);
   assert.equal(proc.status, 0, proc.stderr);
@@ -549,9 +604,10 @@ test('module subcommand runs file + module checks with liquid/d1.2-ultra across 
   assert.equal(res.mode, 'code');
   assert.equal(res.target, 'booking');
   assert.equal(res.requested_model, 'liquid/d1.2-ultra');
-  assert.equal(res.file_count, 4);
+  assert.equal(res.file_count, 7);
   assert.ok(res.rubric_groups.solid.includes('single_responsibility'));
   assert.ok(res.rubric_groups.readability.includes('direct_readability'));
+  assert.ok(res.rubric_groups['testing-core'].includes('independent_requirement_coverage'));
 
   // Live single-module run formats ESLint-style punch list and exits 1 on errors
   const liveProc = run('scored', ['module', 'booking', '--rubric', 'readability', '--rubric', 'module-design']);
@@ -724,7 +780,8 @@ test('per-file budget allows >128 KiB directories while rejecting any single fil
     [['booking', '--rubric', 'solid-v999', '--dry-run'], /version unavailable/],
     [['booking', '--rubric', 'readability', '--exclude', 'nope', '--dry-run'], /Unknown check ID/],
     [['booking', '--rubric', 'module-design', '--dry-run'], /No file-scoped checks remain/],
-    [['booking/BookingTest.kt', '--dry-run'], /No supported production/],
+    [['booking/BookingTest.kt', '--rubric', 'readability', '--dry-run'], /No supported production/],
+    [['booking/types.d.ts', '--dry-run'], /No supported Kotlin or TypeScript files/],
     [['booking/Link.kt', '--dry-run'], /regular source file or directory/],
     [['booking', '--requirements', requirementsLink, '--dry-run'], /regular Markdown or text/],
     [['booking', '--out', join(alias, 'nested', 'scores'), '--dry-run'], /outside the selected source directory/],
@@ -1579,4 +1636,491 @@ test('rubric applicability filtering activates react only on matching files/modu
   assert.equal(multiModRes.module_results.find((m: { module: string }) => m.module === 'server-only').status, 'skipped');
   const webModReq = JSON.parse(readFileSync(join(multiModOut, multiModRes.module_results[0].result_dir, 'request.json'), 'utf8'));
   assert.ok('react_state_authority' in webModReq.questions);
+});
+
+test('Stage 1 test_kind classifier routes unit, integration, e2e (Playwright vs non-Playwright), test_support, other, and >=0.20 mixed splits', async () => {
+  const {
+    CLASSIFIER_OPENROUTER_MODEL,
+    classifyTestFile,
+    detectPlaywrightSignals,
+    extractActiveKinds,
+    formatTestFileRole,
+    parseCliTestKind,
+    parseOpenRouterTestKind,
+    routeTestBundleRubrics,
+    routeTestRubrics,
+  } = await import('../scripts/classifier.mts');
+  const { resolveRubrics } = await import('../scripts/rubrics.mts');
+
+  const fileTestRubric = resolveRubrics({
+    mode: 'file',
+    target: 'test_code',
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  const moduleTestRubric = resolveRubrics({
+    mode: 'code',
+    target: 'test_code',
+    hasRequirements: false,
+    hasConventions: false,
+  });
+
+  // Stage 0 Playwright detection
+  assert.deepEqual(detectPlaywrightSignals({ filePath: 'playwright.config.ts', content: 'export default {};' }), {
+    isPlaywright: true,
+    isPlaywrightConfig: true,
+  });
+  assert.deepEqual(
+    detectPlaywrightSignals({ filePath: 'e2e/login.spec.ts', content: "import { test, expect } from '@playwright/test';\n" }),
+    { isPlaywright: true, isPlaywrightConfig: false },
+  );
+  assert.deepEqual(
+    detectPlaywrightSignals({ filePath: 'e2e/cypress.spec.ts', content: "cy.visit('/login');\n" }),
+    { isPlaywright: false, isPlaywrightConfig: false },
+  );
+
+  // Stage 0 short-circuits playwright.config.* with zero API calls
+  let openRouterCalls = 0;
+  const configClass = await classifyTestFile({
+    filePath: 'playwright.config.ts',
+    content: 'export default { retries: 0 };',
+    invokeOpenRouter: async () => {
+      openRouterCalls += 1;
+      throw new Error('should not call API for playwright.config.*');
+    },
+  });
+  assert.equal(openRouterCalls, 0);
+  assert.equal(configClass.primary, 'test_support');
+  assert.equal(configClass.isPlaywrightConfig, true);
+  assert.equal(configClass.fileRole, 'test_support_playwright');
+  assert.deepEqual(Object.keys(routeTestRubrics(configClass, fileTestRubric).questions), []);
+  assert.deepEqual(
+    Object.keys(routeTestRubrics(configClass, moduleTestRubric).questions),
+    ['playwright_suite_and_config_diagnostics'],
+  );
+
+  // Routing table checks
+  const unitChecks = Object.keys(routeTestRubrics(
+    { activeKinds: ['unit'], isPlaywright: false, isPlaywrightConfig: false },
+    fileTestRubric,
+  ).questions).sort();
+  assert.deepEqual(unitChecks, [
+    'disciplined_test_doubles',
+    'observable_diagnostic_assertions',
+    'owner_boundary_no_seams',
+    'unit_single_behavior_aaa',
+  ]);
+
+  const intChecks = Object.keys(routeTestRubrics(
+    { activeKinds: ['integration'], isPlaywright: false, isPlaywrightConfig: false },
+    fileTestRubric,
+  ).questions).sort();
+  assert.deepEqual(intChecks, [
+    'integration_cohesive_scope',
+    'observable_diagnostic_assertions',
+    'owner_boundary_no_seams',
+    'real_internal_wiring',
+  ]);
+
+  // e2e_browser + Playwright -> testing-core + playwright (skips generic testing-e2e!)
+  const pwE2eChecks = Object.keys(routeTestRubrics(
+    { activeKinds: ['e2e_browser'], isPlaywright: true, isPlaywrightConfig: false },
+    fileTestRubric,
+  ).questions).sort();
+  assert.deepEqual(pwE2eChecks, [
+    'observable_diagnostic_assertions',
+    'owner_boundary_no_seams',
+    'playwright_honest_app_boundaries',
+    'playwright_strict_scoped_locators',
+    'playwright_web_first_and_race_free',
+  ]);
+
+  // e2e_browser (non-Playwright) -> testing-core + testing-e2e
+  const genericE2eChecks = Object.keys(routeTestRubrics(
+    { activeKinds: ['e2e_browser'], isPlaywright: false, isPlaywrightConfig: false },
+    fileTestRubric,
+  ).questions).sort();
+  assert.deepEqual(genericE2eChecks, [
+    'deterministic_e2e_waiting_and_isolation',
+    'focused_user_journeys',
+    'observable_diagnostic_assertions',
+    'owner_boundary_no_seams',
+    'resilient_user_visible_locators',
+  ]);
+
+  // test_support + Playwright helper -> playwright helper-applicable checks only (no testing-core / honest_app_boundaries)
+  const pwSupportFileChecks = Object.keys(routeTestRubrics(
+    { activeKinds: ['test_support'], isPlaywright: true, isPlaywrightConfig: false },
+    fileTestRubric,
+  ).questions).sort();
+  assert.deepEqual(pwSupportFileChecks, [
+    'playwright_strict_scoped_locators',
+    'playwright_web_first_and_race_free',
+  ]);
+
+  // test_support (non-Playwright) and other -> empty (skip cleanly)
+  assert.deepEqual(
+    Object.keys(routeTestRubrics({ activeKinds: ['test_support'], isPlaywright: false, isPlaywrightConfig: false }, fileTestRubric).questions),
+    [],
+  );
+  assert.deepEqual(
+    Object.keys(routeTestRubrics({ activeKinds: ['other'], isPlaywright: false, isPlaywrightConfig: false }, fileTestRubric).questions),
+    [],
+  );
+
+  // Mixed probability split >= 0.20 activates both primary and secondary roles (ignoring other)
+  const splitProbs = { unit: 0.72, integration: 0.25, e2e_browser: 0.01, test_support: 0.01, other: 0.01 };
+  const splitActive = extractActiveKinds('unit', splitProbs);
+  assert.deepEqual(splitActive, ['unit', 'integration']);
+  assert.equal(formatTestFileRole(splitActive, { isPlaywright: false, isPlaywrightConfig: false }), 'unit+integration');
+  const splitChecks = Object.keys(routeTestRubrics(
+    { activeKinds: splitActive, isPlaywright: false, isPlaywrightConfig: false },
+    fileTestRubric,
+  ).questions);
+  assert.ok(splitChecks.includes('unit_single_behavior_aaa'));
+  assert.ok(splitChecks.includes('integration_cohesive_scope'));
+
+  // Bundle routing unions checks across test files
+  const bundleRubric = routeTestBundleRubrics([
+    { activeKinds: ['e2e_browser'], isPlaywright: true, isPlaywrightConfig: false },
+    { activeKinds: ['test_support'], isPlaywright: true, isPlaywrightConfig: true },
+  ], moduleTestRubric);
+  assert.ok('playwright_domain_readable_specs' in bundleRubric.questions);
+  assert.ok('playwright_suite_and_config_diagnostics' in bundleRubric.questions);
+  assert.ok('independent_requirement_coverage' in bundleRubric.questions);
+  assert.equal('resilient_user_visible_locators' in bundleRubric.questions, false);
+
+  // OpenRouter + CLI response parsers validate strictly
+  assert.equal(CLASSIFIER_OPENROUTER_MODEL, 'typesafe/jev-1.14');
+  const parsedOr = parseOpenRouterTestKind({
+    model: 'typesafe/jev-1.14',
+    answers: {
+      test_kind: {
+        type: 'choice',
+        choice: 'integration',
+        probabilities: { unit: 0.05, integration: 0.9, e2e_browser: 0.02, test_support: 0.02, other: 0.01 },
+      },
+    },
+  });
+  assert.equal(parsedOr.primary, 'integration');
+  assert.equal(parseCliTestKind({ test_kind: 'e2e_browser', reason: 'Playwright browser test' }).primary, 'e2e_browser');
+  assert.throws(() => parseCliTestKind({ test_kind: 'unknown', reason: 'bad' }), /invalid test_kind/);
+});
+
+test('unified file mode & --changed lint mixed prod + test files, route via Stage 1 jev-1.14 even with --deep, and skip non-Playwright support files', async (t) => {
+  const { run, root, project } = setup(t);
+  const { runDecisionJudge } = await import('../scripts/decisions.mts');
+  const { resolveUnifiedRubrics } = await import('../scripts/rubrics.mts');
+
+  const mixed = join(project, 'mixed-app');
+  mkdirSync(join(mixed, 'src'), { recursive: true });
+  mkdirSync(join(mixed, 'e2e'), { recursive: true });
+  mkdirSync(join(mixed, 'tests'), { recursive: true });
+
+  writeFileSync(join(mixed, 'src/calc.ts'), 'export function add(a: number, b: number) { return a + b; }\n');
+  writeFileSync(join(mixed, 'src/calc.test.ts'), 'import { add } from "./calc"; if (add(1, 2) !== 3) throw new Error();\n');
+  writeFileSync(join(mixed, 'tests/api.integration.test.ts'), 'import { createServer } from "node:http"; export const s = createServer;\n');
+  writeFileSync(join(mixed, 'tests/test-helper.ts'), 'export function makeUser() { return { id: "u1" }; }\n');
+  writeFileSync(join(mixed, 'tests/mixed-split.test.ts'), 'export const hybrid = true;\n');
+  writeFileSync(join(mixed, 'e2e/checkout.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('ok', async ({ page }) => { await page.goto('/'); });\n");
+  writeFileSync(join(mixed, 'e2e/driver.ts'), "import type { Page } from '@playwright/test';\nimport { expect } from '@playwright/test';\nexport const check = (p: Page) => expect(p).toBeTruthy();\n");
+  writeFileSync(join(mixed, 'playwright.config.ts'), "import { defineConfig } from '@playwright/test';\nexport default defineConfig({ retries: 0 });\n");
+
+  // 1. Dry-run makes zero network calls and previews both prod and test files cleanly
+  const dryProc = run('preview', ['mixed-app', '--dry-run', '--json']);
+  assert.equal(dryProc.status, 0, dryProc.stderr);
+  const dryRes = JSON.parse(dryProc.stdout);
+  assert.equal(dryRes.status, 'dry_run');
+  assert.equal(dryRes.file_count, 8);
+  const dryByFile = new Map<string, { status: string; file_role?: string; skip_reason?: string }>(
+    dryRes.file_results.map((f: { file: string; status: string; file_role?: string; skip_reason?: string }) => [f.file, f]),
+  );
+  assert.equal(dryByFile.get('mixed-app/playwright.config.ts')?.status, 'skipped');
+  assert.equal(dryByFile.get('mixed-app/playwright.config.ts')?.file_role, 'test_support_playwright');
+  assert.equal(dryByFile.get('mixed-app/e2e/checkout.spec.ts')?.file_role, 'test:playwright_auto');
+  assert.equal(dryByFile.get('mixed-app/src/calc.test.ts')?.file_role, 'test:auto');
+
+  // 2. Live run with --deep: verify Stage 1 classifier STILL uses typesafe/jev-1.14 while Stage 2 uses liquid/d1.2-ultra!
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'unit-test-key';
+  t.after(() => {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  });
+
+  const capturedStage1: Array<{ model: string; file: string }> = [];
+  const capturedStage2: Array<{ model: string; isTest: boolean; file: string; questions: string[] }> = [];
+  const unified = resolveUnifiedRubrics({ mode: 'file', hasRequirements: false, hasConventions: false });
+  const liveRes = await runDecisionJudge(
+    {
+      mode: 'file',
+      files: { 'src/calc.ts': 'export const add = (a: number, b: number) => a + b;\n' },
+      testFiles: {
+        'src/calc.test.ts': 'export const unitTest = true;\n',
+        'tests/helper.ts': 'export const factory = () => ({});\n',
+        'e2e/checkout.spec.ts': "import { test } from '@playwright/test';\ntest('pay', async ({ page }) => { await page.goto('/'); });\n",
+        'e2e/driver.ts': "import { expect } from '@playwright/test';\nexport const ok = expect;\n",
+        'playwright.config.ts': "import { defineConfig } from '@playwright/test';\nexport default defineConfig({});\n",
+      },
+      rubric: unified.production!,
+      testRubric: unified.test,
+      explicitTestSelection: false,
+      model: 'liquid/d1.2-ultra',
+      concurrency: 2,
+    },
+    (async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        model: string;
+        state: {
+          file_path?: string;
+          production_files?: Record<string, string>;
+          test_files?: Record<string, string>;
+        };
+        questions: Record<string, unknown>;
+      };
+      if (body.questions.test_kind) {
+        const filePath = body.state.file_path ?? '';
+        capturedStage1.push({ model: body.model, file: filePath });
+        const kind = filePath.includes('helper') || filePath.includes('driver')
+          ? 'test_support'
+          : filePath.includes('checkout')
+            ? 'e2e_browser'
+            : 'unit';
+        const probs = { unit: 0, integration: 0, e2e_browser: 0, test_support: 0, other: 0, [kind]: 1 };
+        return Response.json({
+          model: body.model,
+          answers: { test_kind: { type: 'choice', choice: kind, probabilities: probs } },
+        });
+      }
+      const isTest = body.state.test_files !== undefined;
+      const file = Object.keys(isTest ? body.state.test_files! : body.state.production_files!)[0];
+      const questionIds = Object.keys(body.questions).sort();
+      capturedStage2.push({ model: body.model, isTest, file, questions: questionIds });
+      const answers = Object.fromEntries(questionIds.map((id) => {
+        const fail = file === 'e2e/checkout.spec.ts' && id === 'playwright_web_first_and_race_free';
+        return [id, {
+          type: 'choice',
+          choice: fail ? 'fail' : 'pass',
+          probabilities: { pass: fail ? 0.12 : 0.94, fail: fail ? 0.88 : 0.06 },
+        }];
+      }));
+      return Response.json({ model: body.model, answers });
+    }) as typeof fetch,
+  );
+
+  // Stage 1 always ran on typesafe/jev-1.14 (and skipped playwright.config.ts deterministically!)
+  assert.ok(capturedStage1.every((req) => req.model === 'typesafe/jev-1.14'));
+  assert.ok(!capturedStage1.some((req) => req.file === 'playwright.config.ts'));
+
+  // Stage 2 ran on liquid/d1.2-ultra; tests/helper.ts (non-Playwright test_support) and playwright.config.ts had ZERO Stage 2 calls!
+  assert.ok(capturedStage2.every((req) => req.model === 'liquid/d1.2-ultra'));
+  assert.ok(!capturedStage2.some((req) => req.file === 'tests/helper.ts'));
+  assert.ok(!capturedStage2.some((req) => req.file === 'playwright.config.ts'));
+
+  const pwStage2 = capturedStage2.find((r) => r.file === 'e2e/checkout.spec.ts')!;
+  assert.ok(pwStage2.isTest);
+  assert.ok(pwStage2.questions.includes('playwright_web_first_and_race_free'));
+  assert.equal(pwStage2.questions.includes('resilient_user_visible_locators'), false);
+
+  const driverStage2 = capturedStage2.find((r) => r.file === 'e2e/driver.ts')!;
+  assert.deepEqual(driverStage2.questions, ['playwright_strict_scoped_locators', 'playwright_web_first_and_race_free']);
+
+  const liveByFile = new Map(liveRes.file_results!.map((f) => [f.file, f]));
+  assert.equal(liveByFile.get('tests/helper.ts')?.status, 'skipped');
+  assert.equal(liveByFile.get('tests/helper.ts')?.skip_reason, 'not_applicable');
+  assert.equal(liveByFile.get('tests/helper.ts')?.file_role, 'test_support');
+  assert.equal(liveByFile.get('e2e/checkout.spec.ts')?.file_role, 'e2e_playwright');
+  assert.equal(liveByFile.get('e2e/checkout.spec.ts')?.checks?.playwright_web_first_and_race_free?.choice, 'fail');
+
+  // 3. Explicit --rubric testing-unit and --rubric playwright honored cleanly without touching unrelated files
+  const explicitUnit = run('pass', ['mixed-app', '--rubric', 'testing-unit', '--json']);
+  assert.equal(explicitUnit.status, 0, explicitUnit.stderr);
+  const explicitUnitRes = JSON.parse(explicitUnit.stdout);
+  assert.ok(!explicitUnitRes.file_results.some((f: { file: string }) => f.file.endsWith('src/calc.ts')));
+  assert.ok(explicitUnitRes.file_results.some((f: { file: string }) => f.file.endsWith('src/calc.test.ts')));
+  assert.deepEqual(Object.keys(explicitUnitRes.rubric_groups), ['testing-unit']);
+
+  const explicitPw = run('pass', ['mixed-app', '--rubric', 'playwright', '--json']);
+  assert.equal(explicitPw.status, 0, explicitPw.stderr);
+  const explicitPwRes = JSON.parse(explicitPw.stdout);
+  const pwScored = explicitPwRes.file_results.filter((f: { status: string }) => f.status === 'scored').map((f: { file: string }) => f.file);
+  assert.deepEqual(pwScored, ['mixed-app/e2e/checkout.spec.ts', 'mixed-app/e2e/driver.ts', 'mixed-app/playwright.config.ts']);
+
+  // 4. Unified CLI run produces one punch list & Rule criteria legend covering test findings too
+  const cliMixed = run('pass', ['mixed-app', '--json']);
+  assert.equal(cliMixed.status, 0, cliMixed.stderr);
+  const cliMixedRes = JSON.parse(cliMixed.stdout);
+  assert.equal(cliMixedRes.file_count, 8);
+  const cliByFile = new Map<string, { status: string; file_role?: string }>(
+    cliMixedRes.file_results.map((f: { file: string; status: string; file_role?: string }) => [f.file, f]),
+  );
+  assert.equal(cliByFile.get('mixed-app/tests/test-helper.ts')?.status, 'skipped');
+  assert.equal(cliByFile.get('mixed-app/tests/mixed-split.test.ts')?.file_role, 'unit+integration');
+});
+
+test('module mode lints mixed prod+test modules (with production_files_context within 128 KiB) and test-only e2e/ directories', async (t) => {
+  const { run, root, project } = setup(t);
+
+  // Test-only e2e/ directory works seamlessly with zero "No files to score" error!
+  const e2eDir = join(project, 'e2e');
+  mkdirSync(e2eDir, { recursive: true });
+  writeFileSync(join(e2eDir, 'login.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('login', async ({ page }) => { await page.goto('/login'); });\n");
+  writeFileSync(join(e2eDir, 'playwright.config.ts'), "import { defineConfig } from '@playwright/test';\nexport default defineConfig({ forbidOnly: !!process.env.CI });\n");
+
+  const e2eDry = run('preview', ['module', 'e2e', '--dry-run', '--json']);
+  assert.equal(e2eDry.status, 0, e2eDry.stderr);
+  const e2eDryRes = JSON.parse(e2eDry.stdout);
+  assert.equal(e2eDryRes.status, 'dry_run');
+  assert.equal(e2eDryRes.file_count, 2);
+  assert.ok(e2eDryRes.rubric_groups.playwright.includes('playwright_suite_and_config_diagnostics'));
+
+  const e2eOut = join(root, 'e2e-mod-live');
+  const e2eLive = run('pass', ['module', 'e2e', '--out', e2eOut, '--json']);
+  assert.equal(e2eLive.status, 0, e2eLive.stderr);
+  const e2eLiveRes = JSON.parse(e2eLive.stdout);
+  assert.equal(e2eLiveRes.status, 'scored');
+  assert.equal(e2eLiveRes.file_count, 2);
+  assert.ok('playwright_domain_readable_specs' in e2eLiveRes.quality.checks);
+  assert.ok('playwright_suite_and_config_diagnostics' in e2eLiveRes.quality.checks);
+  assert.equal('resilient_user_visible_locators' in e2eLiveRes.quality.checks, false);
+  const e2eReq = JSON.parse(readFileSync(join(e2eOut, 'request.json'), 'utf8'));
+  assert.ok('login.spec.ts' in e2eReq.state.test_files);
+  assert.ok('playwright.config.ts' in e2eReq.state.test_files);
+  assert.equal('production_files_context' in e2eReq.state, false);
+
+  // Mixed prod + test module sends production_files on prod pass AND test_files + production_files_context on test pass
+  const feature = join(project, 'billing-mod');
+  mkdirSync(feature, { recursive: true });
+  writeFileSync(join(feature, 'invoice.ts'), 'export function total(items: number[]) { return items.reduce((a, b) => a + b, 0); }\n');
+  writeFileSync(join(feature, 'invoice.test.ts'), 'import { total } from "./invoice"; if (total([1, 2]) !== 3) throw new Error();\n');
+  writeFileSync(join(project, 'AGENTS.md'), '# Repo Conventions\nKeep pure helpers deterministic.\n');
+
+  const mixedModOut = join(root, 'mixed-mod-live');
+  const mixedModLive = run('pass', ['module', 'billing-mod', '--out', mixedModOut, '--json']);
+  assert.equal(mixedModLive.status, 0, mixedModLive.stderr);
+  const mixedModRes = JSON.parse(mixedModLive.stdout);
+  assert.equal(mixedModRes.status, 'scored');
+  assert.equal(mixedModRes.file_count, 2);
+  assert.ok('direct_readability' in mixedModRes.quality.checks);
+  assert.ok('unit_single_behavior_aaa' in mixedModRes.quality.checks);
+  assert.ok('follows_repo_conventions' in mixedModRes.quality.checks);
+
+  const prodReq = JSON.parse(readFileSync(join(mixedModOut, 'request.json'), 'utf8'));
+  const testReq = JSON.parse(readFileSync(join(mixedModOut, 'test-request.json'), 'utf8'));
+  assert.ok('invoice.ts' in prodReq.state.production_files);
+  assert.ok('follows_repo_conventions' in prodReq.questions);
+  assert.ok('invoice.test.ts' in testReq.state.test_files);
+  assert.ok('invoice.ts' in testReq.state.production_files_context);
+  // Deduplicated: follows_repo_conventions runs once on production pass, while state.conventions stays present on test pass
+  assert.equal('follows_repo_conventions' in testReq.questions, false);
+  assert.match(testReq.state.conventions, /Keep pure helpers deterministic/);
+
+  // Oversize combined prod+test (>128 KiB combined, each <=128 KiB): omits production_files_context instead of failing!
+  const bigMod = join(project, 'big-mod');
+  mkdirSync(bigMod, { recursive: true });
+  const chunk = 'export const data = "0123456789abcdef";\n'.repeat(1800); // ~72 KiB each
+  writeFileSync(join(bigMod, 'core.ts'), chunk);
+  writeFileSync(join(bigMod, 'core.test.ts'), chunk);
+  const bigOut = join(root, 'big-mod-out');
+  const bigRes = run('pass', ['module', 'big-mod', '--out', bigOut, '--json']);
+  assert.equal(bigRes.status, 0, bigRes.stderr);
+  const bigTestReq = JSON.parse(readFileSync(join(bigOut, 'test-request.json'), 'utf8'));
+  assert.ok('core.test.ts' in bigTestReq.state.test_files);
+  assert.equal('production_files_context' in bigTestReq.state, false);
+});
+
+test('CLI backends (claude and codex) run Stage 1 test_kind classification on haiku / gpt-6-luna with full parity', (t) => {
+  const { run, root, project } = setup(t);
+  const fakeBin = join(root, 'fake-cli-bin');
+  mkdirSync(fakeBin, { recursive: true });
+
+  const suite = join(project, 'cli-tests');
+  mkdirSync(suite, { recursive: true });
+  writeFileSync(join(suite, 'math.ts'), 'export const add = (a: number, b: number) => a + b;\n');
+  writeFileSync(join(suite, 'math.test.ts'), 'import { add } from "./math"; if (add(1, 2) !== 3) throw new Error();\n');
+
+  const claudeLog = join(root, 'claude-calls.jsonl');
+  const fakeClaude = join(fakeBin, 'claude');
+  writeFileSync(
+    fakeClaude,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const model = args[args.indexOf('--model') + 1];
+const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]);
+let stdin = '';
+process.stdin.on('data', (c) => { stdin += c; });
+process.stdin.on('end', () => {
+  const isClassify = Boolean(schema.properties && schema.properties.test_kind);
+  fs.appendFileSync(${JSON.stringify(claudeLog)}, JSON.stringify({ model, isClassify }) + '\\n');
+  if (isClassify) {
+    console.log(JSON.stringify({
+      type: 'result',
+      is_error: false,
+      model,
+      structured_output: { test_kind: 'unit', reason: 'In-memory unit test.' },
+    }));
+  } else {
+    const ids = schema.properties.checks.items.properties.id.enum;
+    console.log(JSON.stringify({
+      type: 'result',
+      is_error: false,
+      model,
+      structured_output: { checks: ids.map((id) => ({ id, note: 'Clean.', score: 92 })) },
+    }));
+  }
+});
+`,
+    { mode: 0o755 },
+  );
+  chmodSync(fakeClaude, 0o755);
+
+  const codexLog = join(root, 'codex-calls.jsonl');
+  const fakeCodex = join(fakeBin, 'codex');
+  writeFileSync(
+    fakeCodex,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const model = args[args.indexOf('-m') + 1];
+const schemaPath = args[args.indexOf('--output-schema') + 1];
+const outPath = args[args.indexOf('-o') + 1];
+const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+const isClassify = Boolean(schema.properties && schema.properties.test_kind);
+fs.appendFileSync(${JSON.stringify(codexLog)}, JSON.stringify({ model, isClassify }) + '\\n');
+if (isClassify) {
+  fs.writeFileSync(outPath, JSON.stringify({ test_kind: 'unit', reason: 'In-memory unit test.' }));
+} else {
+  const ids = schema.properties.checks.items.properties.id.enum;
+  fs.writeFileSync(outPath, JSON.stringify({ checks: ids.map((id) => ({ id, note: 'Clean.', score: 91 })) }));
+}
+`,
+    { mode: 0o755 },
+  );
+  chmodSync(fakeCodex, 0o755);
+
+  const pathEnv = { PATH: `${fakeBin}:${process.env.PATH ?? ''}` };
+
+  // Claude --deep: Stage 1 classifier MUST still use haiku while Stage 2 uses sonnet!
+  const claudeProc = run('preview', ['cli-tests', '--backend', 'claude', '--deep', '--json'], pathEnv);
+  assert.equal(claudeProc.status, 0, claudeProc.stderr);
+  const claudeRes = JSON.parse(claudeProc.stdout);
+  assert.equal(claudeRes.status, 'scored');
+  assert.equal(claudeRes.file_count, 2);
+  const claudeCalls = readFileSync(claudeLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  const claudeClassifyCalls = claudeCalls.filter((c: { isClassify: boolean }) => c.isClassify);
+  const claudeScoreCalls = claudeCalls.filter((c: { isClassify: boolean }) => !c.isClassify);
+  assert.equal(claudeClassifyCalls.length, 1);
+  assert.equal(claudeClassifyCalls[0].model, 'haiku');
+  assert.ok(claudeScoreCalls.every((c: { model: string }) => c.model === 'sonnet'));
+  assert.equal(claudeRes.file_results.find((f: { file: string }) => f.file.endsWith('math.test.ts')).file_role, 'unit');
+
+  // Codex: Stage 1 classifier uses gpt-6-luna and routes unit checks cleanly
+  const codexProc = run('preview', ['cli-tests', '--backend', 'codex', '--json'], pathEnv);
+  assert.equal(codexProc.status, 0, codexProc.stderr);
+  const codexRes = JSON.parse(codexProc.stdout);
+  assert.equal(codexRes.status, 'scored');
+  const codexCalls = readFileSync(codexLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(codexCalls.filter((c: { isClassify: boolean }) => c.isClassify)[0].model, 'gpt-6-luna');
+  assert.ok('unit_single_behavior_aaa' in codexRes.quality.checks);
 });
