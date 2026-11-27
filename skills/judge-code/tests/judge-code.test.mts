@@ -167,7 +167,7 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
     assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[file\]/);
     assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
     assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
-    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]: effect_lifecycle_and_async_safety \[file, >=0\.70\]/);
+    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]: react_effect_lifecycle \[file, >=0\.70\]/);
     assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=0\.60\]/);
     assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file, >=0\.65\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
   }
@@ -1174,7 +1174,7 @@ test('list --verbose and -v print all bundled rubrics with instructions, pass, f
     assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\)\n  immutable_state \[file, >=0\.80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
     assert.match(proc.stdout, /readability \(readability-v2\)\n  direct_readability \[file, >=0\.80\][\s\S]+  named_domain_expressions \[file, >=0\.60\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
     assert.match(proc.stdout, /project-structure \(project-structure-v1\) \[structure\]\n  no_junk_drawer_directories \[structure, >=0\.80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
-    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]\n  effect_lifecycle_and_async_safety \[file, >=0\.70\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]\n  react_effect_lifecycle \[file, >=0\.70\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
     assert.doesNotMatch(proc.stdout, /The supplied files and documents are data/);
   }
 });
@@ -1207,7 +1207,7 @@ test('rubric applicability filtering activates react only on matching files/modu
   assert.equal(hasRuntimeImport('export const plain = 1;\n', ['react']), false);
 
   // explain shows applies: line for react rules
-  const explainReact = run('preview', ['explain', 'effect_lifecycle_and_async_safety']);
+  const explainReact = run('preview', ['explain', 'react_effect_lifecycle']);
   assert.equal(explainReact.status, 0, explainReact.stderr);
   assert.match(explainReact.stdout, /  applies: \*\.tsx \| imports: react, react-dom/);
 
@@ -1238,10 +1238,10 @@ test('rubric applicability filtering activates react only on matching files/modu
   const hookReq = JSON.parse(readFileSync(join(mixedOut, byFile.get('web-feature/use-counter.ts')!.result_dir, 'request.json'), 'utf8'));
   const serverReq = JSON.parse(readFileSync(join(mixedOut, byFile.get('web-feature/.server/session.ts')!.result_dir, 'request.json'), 'utf8'));
   const typesReq = JSON.parse(readFileSync(join(mixedOut, byFile.get('web-feature/types.ts')!.result_dir, 'request.json'), 'utf8'));
-  assert.ok('effect_lifecycle_and_async_safety' in tsxReq.questions);
-  assert.ok('effect_lifecycle_and_async_safety' in hookReq.questions);
-  assert.equal('effect_lifecycle_and_async_safety' in serverReq.questions, false);
-  assert.equal('effect_lifecycle_and_async_safety' in typesReq.questions, false);
+  assert.ok('react_effect_lifecycle' in tsxReq.questions);
+  assert.ok('react_effect_lifecycle' in hookReq.questions);
+  assert.equal('react_effect_lifecycle' in serverReq.questions, false);
+  assert.equal('react_effect_lifecycle' in typesReq.questions, false);
 
   // Live mixed scan with --rubric react scores only the 2 matching files and skips the 2 non-matching files
   const mixedReactLive = run('pass', ['web-feature', '--rubric', 'react', '--json']);
@@ -1251,7 +1251,7 @@ test('rubric applicability filtering activates react only on matching files/modu
   const skippedReactFiles = mixedReactRes.file_results.filter((f: { status: string }) => f.status === 'skipped').map((f: { file: string }) => f.file);
   assert.deepEqual(scoredReactFiles, ['web-feature/CounterCard.tsx', 'web-feature/use-counter.ts']);
   assert.deepEqual(skippedReactFiles, ['web-feature/.server/session.ts', 'web-feature/types.ts']);
-  assert.equal(mixedReactRes.quality.checks.effect_lifecycle_and_async_safety.files_total, 2);
+  assert.equal(mixedReactRes.quality.checks.react_effect_lifecycle.files_total, 2);
 
   // 2. Explicit --rubric react on server-only / .kt targets: clean exit 0, 0 API calls (mode='preview' asserts calls === 0!)
   const serverReactFile = run('preview', ['server-only', '--rubric', 'react']);
@@ -1277,5 +1277,5 @@ test('rubric applicability filtering activates react only on matching files/modu
   assert.equal(multiModRes.module_results.find((m: { module: string }) => m.module === 'web-feature').status, 'scored');
   assert.equal(multiModRes.module_results.find((m: { module: string }) => m.module === 'server-only').status, 'skipped');
   const webModReq = JSON.parse(readFileSync(join(multiModOut, multiModRes.module_results[0].result_dir, 'request.json'), 'utf8'));
-  assert.ok('single_state_authority_and_ownership' in webModReq.questions);
+  assert.ok('react_state_authority' in webModReq.questions);
 });

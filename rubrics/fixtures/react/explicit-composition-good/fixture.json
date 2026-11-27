@@ -3,6 +3,6 @@
   "description": "Composes an account settings screen from focused section components across small files while keeping simple headings and actions inline",
   "rubric": "react",
   "expect": {
-    "explicit_component_composition": "pass"
+    "react_component_composition": "pass"
   }
 }

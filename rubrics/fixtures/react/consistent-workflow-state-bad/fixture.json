@@ -3,6 +3,6 @@
   "description": "Leaves contradictory boolean flags across async transitions and silently swallows mutation failures while clearing input and reporting success",
   "rubric": "react",
   "expect": {
-    "consistent_workflow_state": "fail"
+    "react_workflow_state": "fail"
   }
 }

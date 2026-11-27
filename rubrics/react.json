@@ -11,7 +11,7 @@
     ]
   },
   "questions": {
-    "effect_lifecycle_and_async_safety": {
+    "react_effect_lifecycle": {
       "type": "choice",
       "scope": "file",
       "pass_threshold": 0.7,
@@ -21,17 +21,17 @@
         "fail": "An effect registers a subscription, event listener, repeating timer, observer, or persistent connection without releasing that same resource in a cleanup function (or via an identifiable delegated disposer); OR an async fetch or request inside `useEffect` can overwrite newer state with stale out-of-order results because it lacks a visible cancellation or stale-result guard; OR user-initiated event logic is routed through `useEffect` watching a flag or state instead of running directly in the event handler."
       }
     },
-    "explicit_component_composition": {
+    "react_component_composition": {
       "type": "choice",
       "scope": "file",
-      "pass_threshold": 0.7,
+      "pass_threshold": 0.6,
       "instructions": "Does the supplied React code express screen and substantial section structure through explicit, cohesive component composition rather than burying structure inside a monolithic component?",
       "criteria": {
-        "pass": "Focused composition components arrange meaningful child sections and hide individual control internals, including decomposing complex screens into small focused component files. Small or cohesive screens, forms, cards, dialogs, or sections where inline markup expresses structure clearly, genuinely nested declarative UI markup, and implementation components owning local control details all pass. Files that do not define React components or JSX (such as custom hook modules or helper files) also pass. Do NOT fail on line count alone or demand pointless pass-through wrappers.",
+        "pass": "Focused composition components arrange meaningful child sections and hide individual control internals, including decomposing complex screens into small focused component files. Small or cohesive single-purpose screens, forms, cards, boards, dialogs, or sections where inline markup expresses structure clearly, genuinely nested declarative UI markup, and implementation components owning local control details all pass. Files that do not define React components or JSX (such as custom hook modules or helper files) also pass. Do NOT fail on line count alone or demand pointless pass-through wrappers.",
         "fail": "A monolithic React component buries high-level screen or section structure inside dense inline control markup, multiple unrelated layout regions or sections, deep conditional JSX branching, and tangled unrelated local states or handlers where extracting meaningful section or control boundaries is warranted. Do NOT fail files that contain no React components or JSX, or fail on line count alone."
       }
     },
-    "focused_component_interfaces": {
+    "react_component_interfaces": {
       "type": "choice",
       "scope": "file",
       "pass_threshold": 0.7,
@@ -41,7 +41,7 @@
         "fail": "Component props exhibit boolean-flag mode explosions with conflicting or mutually exclusive combinations or tangled conditional branches (such as combining `isCompact`, `isEditing`, `hideHeader`, and `showFooter` to morph modes), kitchen-sink prop bags serving unrelated modes or responsibilities, unrestricted catch-all `onAction` callbacks, or leaked child initialization, reset, or persistence mechanics hoisted into parent props."
       }
     },
-    "cohesive_custom_hooks": {
+    "react_cohesive_hooks": {
       "type": "choice",
       "scope": "file",
       "pass_threshold": 0.65,
@@ -51,17 +51,17 @@
         "fail": "A god hook (such as `usePageController`, `useScreenState`, or a screen-wide dumping ground) packs unrelated stateful concerns, independent effects, and unrelated handlers into one hook just to shrink component JSX; OR a custom hook embeds substantial pure domain policy calculations or raw HTTP/transport retry mechanics directly alongside unrelated DOM or UI side effects (such as toasts, focus management, or navigation) so those concerns cannot evolve independently."
       }
     },
-    "consistent_workflow_state": {
+    "react_workflow_state": {
       "type": "choice",
       "scope": "file",
       "pass_threshold": 0.7,
       "instructions": "Do components and hooks model async and multi-stage UI workflow states consistently without contradictory flag combinations or silent failure-as-success paths?",
       "criteria": {
-        "pass": "Mutually exclusive async or UI workflow stages owned by the file use single-status or discriminated-union state modeling (or strictly synchronized transitions that cannot leave contradictory flags), and visible async mutations handle failure paths without falsely reporting success. Genuinely independent orthogonal flags, intentional stale-data-plus-loading states (`data` + `isRefreshing`), delegated router/error-boundary handling, presentational components that merely read status props without owning workflow state transitions, and files without async or multi-stage workflow state all pass.",
-        "fail": "A component or hook models mutually exclusive async or UI workflow stages with multiple independently updated boolean flags where a visible transition leaves or can leave contradictory states (such as `isSubmitting` left `true` on error, or `isSuccess` and `isError` coexisting); OR a visible user-initiated async mutation unconditionally reports success, clears user input, or navigates along a rejection path (or catches errors and silently presents success)."
+        "pass": "Mutually exclusive async or UI workflow stages owned by the file use single-status or discriminated-union state modeling (or strictly synchronized transitions that cannot leave contradictory flags), and visible async mutations do not falsely report success on failure. Letting a rejected `onSave` or mutation promise propagate to the caller or an error boundary passes when pending state is properly cleaned up (for example via `finally`) and success status, input clearing, or navigation only runs after `await` succeeds—do NOT require a local `catch` block on every async handler. Genuinely independent orthogonal flags, intentional stale-data-plus-loading states (`data` + `isRefreshing`), delegated router/error-boundary handling, presentational components that merely read status props without owning workflow state transitions, and files without async or multi-stage workflow state all pass.",
+        "fail": "A component or hook models mutually exclusive async or UI workflow stages with multiple independently updated boolean flags where a visible transition leaves or can leave contradictory states (such as `isSubmitting` left `true` on error, or `isSuccess` and `isError` coexisting); OR a visible user-initiated async mutation unconditionally reports success, clears user input, or navigates along a rejection path (including catching an error and silently continuing as if it succeeded). Do NOT fail solely because an async handler omits a local `catch` block and lets rejections propagate to its caller or an error boundary after cleaning up pending state in `finally`."
       }
     },
-    "single_state_authority_and_ownership": {
+    "react_state_authority": {
       "type": "choice",
       "scope": "module",
       "instructions": "Does the React module preserve a single source of truth for URL/route/loader data and keep UI state owned near its consumers without needless hoisting and pass-through prop drilling?",
