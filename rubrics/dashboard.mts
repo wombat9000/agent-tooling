@@ -118,6 +118,10 @@ export interface TrendPoint {
   check_count: number;
   findings: FindingCounts;
   affected_targets: number;
+  scored_targets: number;
+  clean_targets: number;
+  errors_per_100: number;
+  clean_target_rate: number;
   delta_findings: number | null;
   delta_hard_fails: number | null;
   calibrated_pass_rate: number;
@@ -498,6 +502,16 @@ export function buildDashboardModel(options: {
         const modulesScored = modules.filter((m) => m.status === 'scored').length;
         const modulesSkipped = modules.filter((m) => m.status === 'skipped').length;
         const modulesErrored = modules.filter((m) => m.status === 'error').length;
+        const histMetrics = computeHistoryPointMetrics({
+          mode,
+          hard_fails: findings.hard,
+          target_count: snap.metrics.target_count,
+          file_count: snap.metrics.file_count,
+          files: sortedFiles,
+          modules,
+          checks: snap.checks,
+          raw_pass_rate: snap.metrics.raw_pass_rate,
+        });
 
         return {
           id: `${repoName}::${mode}::${idx}`,
@@ -512,6 +526,10 @@ export function buildDashboardModel(options: {
           check_count: snap.metrics.check_count,
           findings,
           affected_targets: affectedTargets,
+          scored_targets: histMetrics.scored_targets,
+          clean_targets: histMetrics.clean_targets,
+          errors_per_100: histMetrics.errors_per_100,
+          clean_target_rate: histMetrics.clean_target_rate,
           delta_findings: deltaFindings,
           delta_hard_fails: deltaHardFails,
           calibrated_pass_rate: snap.metrics.calibrated_pass_rate,
@@ -864,13 +882,55 @@ export function computeNiceAxisTicks(maxVal: number): { max: number; ticks: numb
   return { max: top, ticks };
 }
 
-export function computeNiceRateAxis(minVal: number): { min: number; max: number; ticks: number[] } {
-  const safeMin = Number.isFinite(minVal) ? Math.max(0, Math.min(1, minVal)) : 0;
-  if (safeMin >= 0.8) return { min: 0.8, max: 1, ticks: [0.8, 0.85, 0.9, 0.95, 1] };
-  if (safeMin >= 0.6) return { min: 0.6, max: 1, ticks: [0.6, 0.7, 0.8, 0.9, 1] };
-  if (safeMin >= 0.4) return { min: 0.4, max: 1, ticks: [0.4, 0.55, 0.7, 0.85, 1] };
-  if (safeMin >= 0.25) return { min: 0.25, max: 1, ticks: [0.25, 0.5, 0.75, 1] };
-  return { min: 0, max: 1, ticks: [0, 0.25, 0.5, 0.75, 1] };
+export interface HistoryPointMetrics {
+  scored_targets: number;
+  clean_targets: number;
+  errors_per_100: number;
+  clean_target_rate: number;
+}
+
+export function computeHistoryPointMetrics(input: {
+  mode: JudgeMode;
+  hard_fails: number;
+  target_count: number;
+  file_count: number;
+  files: readonly SnapshotFileEntry[];
+  modules: readonly DashboardModuleView[];
+  checks: Record<string, SnapshotCheckSummary>;
+  raw_pass_rate: number;
+}): HistoryPointMetrics {
+  const { mode, hard_fails, target_count, file_count, files, modules, checks, raw_pass_rate } = input;
+  if (mode === 'code' && modules.length > 0) {
+    const scored = modules.filter((m) => m.status === 'scored');
+    const denom = scored.length > 0 ? scored.length : Math.max(0, target_count);
+    const clean = scored.filter((m) => m.hard_fail_count === 0).length;
+    return {
+      scored_targets: denom,
+      clean_targets: clean,
+      errors_per_100: denom > 0 ? Number(((hard_fails / denom) * 100).toFixed(2)) : 0,
+      clean_target_rate: scored.length > 0 ? clean / scored.length : Math.max(0, Math.min(1, raw_pass_rate)),
+    };
+  }
+  if (files.length > 0) {
+    const denom = files.length;
+    const clean = files.filter((f) => countChecksFindings(f.checks ?? {}).hard === 0).length;
+    return {
+      scored_targets: denom,
+      clean_targets: clean,
+      errors_per_100: Number(((hard_fails / denom) * 100).toFixed(2)),
+      clean_target_rate: clean / denom,
+    };
+  }
+  const checkValues = Object.values(checks ?? {});
+  const checkTotal = checkValues.reduce((sum, c) => sum + c.total, 0);
+  const checkRawPassed = checkValues.reduce((sum, c) => sum + c.raw_passed, 0);
+  const denom = target_count > 0 ? target_count : (file_count > 0 ? file_count : checkTotal);
+  return {
+    scored_targets: denom,
+    clean_targets: checkTotal > 0 ? checkRawPassed : 0,
+    errors_per_100: denom > 0 ? Number(((hard_fails / denom) * 100).toFixed(2)) : 0,
+    clean_target_rate: checkTotal > 0 ? checkRawPassed / checkTotal : Math.max(0, Math.min(1, raw_pass_rate)),
+  };
 }
 
 export function formatVersionDeltaLabel(prevVersion: string | null, currVersion: string): string {
@@ -1174,13 +1234,20 @@ const CLIENT_SCRIPT = `
     for (let v = 0; v <= top; v += step) ticks.push(v);
     return { max: top, ticks };
   }
-  function computeNiceRateAxis(minVal) {
-    const safeMin = Number.isFinite(minVal) ? Math.max(0, Math.min(1, minVal)) : 0;
-    if (safeMin >= 0.8) return { min: 0.8, max: 1, ticks: [0.8, 0.85, 0.9, 0.95, 1] };
-    if (safeMin >= 0.6) return { min: 0.6, max: 1, ticks: [0.6, 0.7, 0.8, 0.9, 1] };
-    if (safeMin >= 0.4) return { min: 0.4, max: 1, ticks: [0.4, 0.55, 0.7, 0.85, 1] };
-    if (safeMin >= 0.25) return { min: 0.25, max: 1, ticks: [0.25, 0.5, 0.75, 1] };
-    return { min: 0, max: 1, ticks: [0, 0.25, 0.5, 0.75, 1] };
+  function historyUnitLabel(mode) {
+    if (mode === 'file') return 'files';
+    if (mode === 'code') return 'modules';
+    return 'targets';
+  }
+  function pointDensity(p) {
+    if (typeof p.errors_per_100 === 'number' && Number.isFinite(p.errors_per_100)) return p.errors_per_100;
+    const denom = p.scored_targets || (p.files && p.files.length) || p.target_count || p.file_count || 0;
+    const hard = p.findings ? p.findings.hard : 0;
+    return denom > 0 ? (hard / denom) * 100 : 0;
+  }
+  function pointCleanRate(p) {
+    if (typeof p.clean_target_rate === 'number' && Number.isFinite(p.clean_target_rate)) return p.clean_target_rate;
+    return typeof p.raw_pass_rate === 'number' && Number.isFinite(p.raw_pass_rate) ? p.raw_pass_rate : 0;
   }
   const REPO_PALETTE = [
     '#2563eb',
@@ -1286,7 +1353,7 @@ const CLIENT_SCRIPT = `
   let selectedMode = null;
   let selectedRunIdx = null;
   let historyMode = defaultHistoryMode();
-  let historyMetric = 'errors';
+  let historyMetric = 'density';
   let heatmapMode = DATA.modes_present && DATA.modes_present.length > 0 ? DATA.modes_present[0] : 'file';
   let activeRule = '';
   let fileSearch = '';
@@ -1378,11 +1445,12 @@ const CLIENT_SCRIPT = `
   }
 
   function renderMultiRepoHistorySvg(seriesList, metric) {
-    const W = 1160, H = 200, padL = 54, padR = 66, padT = 24, padB = 30;
+    const W = 1160, H = 200, padL = 54, padR = 72, padT = 24, padB = 30;
     const innerPadX = 24;
     const xMin = padL + innerPadX;
     const xMax = W - padR - innerPadX;
     const plotH = H - padT - padB;
+    const unit = historyUnitLabel(historyMode);
 
     const allPoints = [];
     for (const s of seriesList) {
@@ -1407,14 +1475,24 @@ const CLIENT_SCRIPT = `
     let yAt;
     let formatTick;
     let valOf;
-    if (metric === 'rate') {
-      const minRate = Math.min(...allPoints.map((p) => typeof p.calibrated_pass_rate === 'number' ? p.calibrated_pass_rate : 1), 1);
-      const axis = computeNiceRateAxis(minRate);
-      yTicks = axis.ticks;
-      const span = Math.max(1e-6, axis.max - axis.min);
-      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, (v - axis.min) / span))) * plotH;
+    let formatEndVal;
+    let ariaVal;
+    if (metric === 'clean') {
+      yTicks = [0, 0.25, 0.5, 0.75, 1];
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
       formatTick = (g) => Math.round(g * 100) + '%';
-      valOf = (p) => typeof p.calibrated_pass_rate === 'number' ? p.calibrated_pass_rate : 0;
+      valOf = (p) => pointCleanRate(p);
+      formatEndVal = (v) => pct(v, 1);
+      ariaVal = (v) => pct(v, 1) + ' clean';
+    } else if (metric === 'density') {
+      const maxDensity = Math.max(...allPoints.map((p) => pointDensity(p)), 1);
+      const axis = computeNiceTicks(maxDensity);
+      yTicks = axis.ticks;
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / axis.max))) * plotH;
+      formatTick = (g) => String(g);
+      valOf = (p) => pointDensity(p);
+      formatEndVal = (v) => v.toFixed(1);
+      ariaVal = (v) => v.toFixed(1) + ' errors per 100 ' + unit;
     } else {
       const maxErr = Math.max(...allPoints.map((p) => p.findings ? p.findings.hard : 0), 1);
       const axis = computeNiceTicks(maxErr);
@@ -1422,6 +1500,8 @@ const CLIENT_SCRIPT = `
       yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / axis.max))) * plotH;
       formatTick = (g) => String(g);
       valOf = (p) => p.findings ? p.findings.hard : 0;
+      formatEndVal = (v) => String(v);
+      ariaVal = (v) => v + ' errors';
     }
 
     const gridLines = yTicks.map((g, idx) => {
@@ -1499,20 +1579,24 @@ const CLIENT_SCRIPT = `
           isSelected,
           x: last.x + 10,
           y: last.y,
-          text: metric === 'rate' ? pct(valOf(last.p), 0) : String(valOf(last.p)),
+          text: formatEndVal(valOf(last.p)),
         });
       }
 
       const dots = coords.map((pt) => {
         const isInspected = isSelected && historyMode === selectedMode && pt.i === selectedRunIdx;
         const r = isInspected ? 5.8 : (isSelected ? 5 : 4.2);
+        const densityVal = pointDensity(pt.p);
+        const cleanVal = pointCleanRate(pt.p);
+        const targetDenom = pt.p.scored_targets || pt.p.target_count || pt.p.file_count || 0;
         const tip = esc(
           s.repo + ' · ' + shortDate(pt.p.timestamp) + ' · ' + pt.p.commit_short + (pt.p.dirty ? ' (dirty)' : '')
+          + '\\nErrors / 100 ' + unit + ': ' + densityVal.toFixed(1) + ' (' + pt.p.findings.hard + ' across ' + targetDenom + ' ' + unit + ')'
           + '\\nErrors (raw FAIL): ' + pt.p.findings.hard + ' (+' + pt.p.findings.borderline + ' borderline)'
-          + '\\nCalibrated pass: ' + pct(pt.p.calibrated_pass_rate) + ' | Raw pass: ' + pct(pt.p.raw_pass_rate)
+          + '\\nClean ' + unit + ': ' + pct(cleanVal) + (targetDenom > 0 ? ' (' + pt.p.clean_targets + '/' + targetDenom + ')' : '')
           + (pt.p.version_changed ? '\\nChange: ' + pt.p.change_reasons.join('; ') : '')
         );
-        return '<g class="chart-point" role="button" tabindex="0" data-history-point="1" data-history-repo="' + esc(s.repo) + '" data-history-run-idx="' + pt.i + '" aria-label="' + esc(s.repo + ' ' + isoDay(pt.p.timestamp) + ' ' + (metric === 'rate' ? pct(valOf(pt.p)) : valOf(pt.p) + ' errors')) + '">'
+        return '<g class="chart-point" role="button" tabindex="0" data-history-point="1" data-history-repo="' + esc(s.repo) + '" data-history-run-idx="' + pt.i + '" aria-label="' + esc(s.repo + ' ' + isoDay(pt.p.timestamp) + ' ' + ariaVal(valOf(pt.p))) + '">'
           + '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="11" fill="transparent"><title>' + tip + '</title></circle>'
           + (isInspected ? '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="8.5" fill="none" stroke="' + s.color + '" stroke-opacity="0.32" stroke-width="2"/>' : '')
           + '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="' + r + '" fill="' + s.color + '" stroke="#fff" stroke-width="1.6"><title>' + tip + '</title></circle>'
@@ -1608,15 +1692,19 @@ const CLIENT_SCRIPT = `
     const pt = series && series.points ? series.points[runIdx] : null;
     if (!pt) return;
     const color = repoColor(repoName);
+    const unit = historyUnitLabel(historyMode);
+    const densityVal = pointDensity(pt);
+    const cleanVal = pointCleanRate(pt);
+    const targetDenom = pt.scored_targets || pt.target_count || pt.file_count || 0;
     const changeHtml = pt.version_changed
       ? '<div class="chart-tooltip-note">Change: ' + esc(pt.change_reasons.join(' · ')) + '</div>'
       : '';
     tipEl.innerHTML =
       '<div class="chart-tooltip-head"><span class="history-legend-dot" style="background:' + color + '"></span><span>' + esc(repoName) + '</span></div>'
       + '<div class="chart-tooltip-meta">' + esc(shortDate(pt.timestamp)) + ' · ' + esc(pt.commit_short) + (pt.dirty ? ' (dirty)' : '') + ' · ' + esc(pt.judge_version) + '</div>'
+      + '<div class="chart-tooltip-row"><span>Errors / 100 ' + esc(unit) + '</span><strong>' + densityVal.toFixed(1) + '</strong></div>'
       + '<div class="chart-tooltip-row"><span>Errors (raw FAIL)</span><strong>' + pt.findings.hard + ' (+' + pt.findings.borderline + 'w)</strong></div>'
-      + '<div class="chart-tooltip-row"><span>Calibrated pass</span><strong>' + pct(pt.calibrated_pass_rate) + '</strong></div>'
-      + '<div class="chart-tooltip-row"><span>Raw pass</span><span>' + pct(pt.raw_pass_rate) + '</span></div>'
+      + '<div class="chart-tooltip-row"><span>Clean ' + esc(unit) + '</span><strong>' + pct(cleanVal) + (targetDenom > 0 ? ' (' + pt.clean_targets + '/' + targetDenom + ')' : '') + '</strong></div>'
       + changeHtml
       + '<div class="chart-tooltip-hint">Click point to inspect this snapshot</div>';
     tipEl.hidden = false;
@@ -1663,14 +1751,21 @@ const CLIENT_SCRIPT = `
       .filter(Boolean);
 
     const hasTrend = seriesList.some((s) => s.points.length >= 2);
-    const subtitle = historyMetric === 'rate'
-      ? 'All tracked repos · Calibrated pass rate'
-      : 'All tracked repos · Open errors (raw FAIL)';
+    const unit = historyUnitLabel(historyMode);
+    const densitySub = historyMode === 'structure'
+      ? 'All tracked repos · Errors / 100 (lower is better)'
+      : 'All tracked repos · Errors / 100 ' + unit + ' (lower is better)';
+    const subtitle = historyMetric === 'density'
+      ? densitySub
+      : (historyMetric === 'clean'
+        ? 'All tracked repos · Clean ' + unit + ' with 0 errors (higher is better)'
+        : 'All tracked repos · Open errors (raw FAIL, lower is better)');
 
     const metricTabs =
       '<div class="tabs" role="tablist" aria-label="History metric">'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'density' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'density' ? ' active' : '') + '" data-history-metric="density">Errors / 100</button>'
       + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'errors' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'errors' ? ' active' : '') + '" data-history-metric="errors">Errors</button>'
-      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'rate' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'rate' ? ' active' : '') + '" data-history-metric="rate">Pass rate</button>'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'clean' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'clean' ? ' active' : '') + '" data-history-metric="clean">Clean %</button>'
       + '</div>';
 
     const modeTabs =
@@ -1709,12 +1804,23 @@ const CLIENT_SCRIPT = `
       const isSelected = s.repo === selectedRepo;
       let valText;
       let deltaHtml = '';
-      if (historyMetric === 'rate') {
-        valText = pct(s.latest.calibrated_pass_rate);
+      if (historyMetric === 'density') {
+        const curr = pointDensity(s.latest);
+        valText = curr.toFixed(1) + '/100';
         if (s.previous) {
-          const dp = (s.latest.calibrated_pass_rate - s.previous.calibrated_pass_rate) * 100;
+          const dd = curr - pointDensity(s.previous);
+          const cls = dd < -0.05 ? 'tone-good' : dd > 0.05 ? 'tone-bad' : 'muted';
+          const text = Math.abs(dd) < 0.05 ? '±0.0' : (dd > 0 ? '+' + dd.toFixed(1) : dd.toFixed(1));
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + text + '</span>';
+        }
+      } else if (historyMetric === 'clean') {
+        const curr = pointCleanRate(s.latest);
+        valText = pct(curr);
+        if (s.previous) {
+          const dp = (curr - pointCleanRate(s.previous)) * 100;
           const cls = dp > 0.05 ? 'tone-good' : dp < -0.05 ? 'tone-bad' : 'muted';
-          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp</span>';
+          const text = Math.abs(dp) < 0.05 ? '±0.0pp' : (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp';
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + text + '</span>';
         }
       } else {
         valText = s.latest.findings.hard + ' err';

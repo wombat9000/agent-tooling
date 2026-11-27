@@ -18,8 +18,8 @@ import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildDashboardModel,
+  computeHistoryPointMetrics,
   computeNiceAxisTicks,
-  computeNiceRateAxis,
   formatToolingVersion,
   formatVersionDeltaLabel,
   generateDashboard,
@@ -1598,12 +1598,70 @@ test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no
   assert.deepEqual(computeNiceAxisTicks(12), { max: 15, ticks: [0, 5, 10, 15] });
   assert.deepEqual(computeNiceAxisTicks(0), { max: 4, ticks: [0, 2, 4] });
 
-  // 1b. Nice rounded pass-rate Y-axis ticks
-  assert.deepEqual(computeNiceRateAxis(0.864), { min: 0.8, max: 1, ticks: [0.8, 0.85, 0.9, 0.95, 1] });
-  assert.deepEqual(computeNiceRateAxis(0.65), { min: 0.6, max: 1, ticks: [0.6, 0.7, 0.8, 0.9, 1] });
-  assert.deepEqual(computeNiceRateAxis(0.464), { min: 0.4, max: 1, ticks: [0.4, 0.55, 0.7, 0.85, 1] });
-  assert.deepEqual(computeNiceRateAxis(0.3), { min: 0.25, max: 1, ticks: [0.25, 0.5, 0.75, 1] });
-  assert.deepEqual(computeNiceRateAxis(0.1), { min: 0, max: 1, ticks: [0, 0.25, 0.5, 0.75, 1] });
+  // 1b. History point size-normalized metrics (Errors / 100 and Clean %) across file, module, and structure modes
+  const fileMetrics = computeHistoryPointMetrics({
+    mode: 'file',
+    hard_fails: 3,
+    target_count: 4,
+    file_count: 4,
+    files: [
+      { path: 'a.ts', pass_rate: 0, raw_pass_rate: 0, mean_pass_probability: 0.2, min_pass_probability: 0.2, failed_count: 2, checks: { r1: { choice: 'fail', model_choice: 'fail', pass_probability: 0.2, confidence: 0.9 } } },
+      { path: 'b.ts', pass_rate: 0.5, raw_pass_rate: 1, mean_pass_probability: 0.72, min_pass_probability: 0.72, failed_count: 1, checks: { r1: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.8 } } },
+      { path: 'c.ts', pass_rate: 1, raw_pass_rate: 1, mean_pass_probability: 0.95, min_pass_probability: 0.95, failed_count: 0, checks: { r1: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 } } },
+      { path: 'd.ts', pass_rate: 1, raw_pass_rate: 1, mean_pass_probability: 0.92, min_pass_probability: 0.92, failed_count: 0, checks: { r1: { choice: 'pass', model_choice: 'pass', pass_probability: 0.92, confidence: 0.9 } } },
+    ],
+    modules: [],
+    checks: {},
+    raw_pass_rate: 0.75,
+  });
+  // b.ts has only a borderline warning (0 raw FAILs), so 3 of 4 files are clean (75%) and 3/4*100 = 75 errors/100
+  assert.deepEqual(fileMetrics, {
+    scored_targets: 4,
+    clean_targets: 3,
+    errors_per_100: 75,
+    clean_target_rate: 0.75,
+  });
+
+  const moduleMetrics = computeHistoryPointMetrics({
+    mode: 'code',
+    hard_fails: 2,
+    target_count: 2,
+    file_count: 12,
+    files: [],
+    modules: [
+      { name: 'auth', path: 'app/auth', status: 'scored', file_count: 4, failed_count: 1, hard_fail_count: 0, borderline_count: 1, passed_count: 2, total_checks: 3, min_pass_probability: 0.72, failing_checks: [] },
+      { name: 'billing', path: 'app/billing', status: 'scored', file_count: 8, failed_count: 2, hard_fail_count: 2, borderline_count: 0, passed_count: 1, total_checks: 3, min_pass_probability: 0.21, failing_checks: [] },
+      { name: 'huge', path: 'app/huge', status: 'skipped', skip_reason: 'oversize', file_count: 30, failed_count: 0, hard_fail_count: 0, borderline_count: 0, passed_count: 0, total_checks: 0, min_pass_probability: null, failing_checks: [] },
+    ],
+    checks: {},
+    raw_pass_rate: 0.67,
+  });
+  // Skipped modules are excluded from denominator: 2 hard fails across 2 scored modules = 100/100, 1/2 clean = 50%
+  assert.deepEqual(moduleMetrics, {
+    scored_targets: 2,
+    clean_targets: 1,
+    errors_per_100: 100,
+    clean_target_rate: 0.5,
+  });
+
+  const structureFallbackMetrics = computeHistoryPointMetrics({
+    mode: 'structure',
+    hard_fails: 2,
+    target_count: 4,
+    file_count: 40,
+    files: [],
+    modules: [],
+    checks: {
+      c1: { threshold: 0.8, rubric_group: 'project-structure', passed: 2, raw_passed: 3, total: 4, pass_rate: 0.5, raw_pass_rate: 0.75, mean_pass_probability: 0.7, min_pass_probability: 0.3 },
+    },
+    raw_pass_rate: 0.75,
+  });
+  assert.deepEqual(structureFallbackMetrics, {
+    scored_targets: 4,
+    clean_targets: 3,
+    errors_per_100: 50,
+    clean_target_rate: 0.75,
+  });
 
   // 2. Header/footer version deduplication
   assert.equal(formatToolingVersion('v2.2.0', 'v2.2.0'), 'v2.2.0');
@@ -1792,11 +1850,22 @@ test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no
   const scriptBlock = /<script id="dashboard-data" type="application\/json">[\s\S]*?<\/script>\n<script>([\s\S]*?)<\/script>/.exec(htmlNoModules)?.[1] ?? '';
   assert.match(scriptBlock, /function renderHistory\(/);
   assert.match(scriptBlock, /function renderMultiRepoHistorySvg\(/);
-  assert.match(scriptBlock, /data-history-metric/);
+  assert.match(scriptBlock, /let historyMetric = 'density';/, 'Errors / 100 must be the default active history metric');
+  assert.match(scriptBlock, /data-history-metric="density">Errors \/ 100</);
+  assert.match(scriptBlock, /data-history-metric="errors">Errors</);
+  assert.match(scriptBlock, /data-history-metric="clean">Clean %</);
+  assert.doesNotMatch(scriptBlock, /data-history-metric="rate"/, 'Pass rate toggle must be removed from top Score history chart');
+  assert.doesNotMatch(scriptBlock, />Pass rate</, 'Pass rate button label must be removed from top Score history chart');
   assert.match(scriptBlock, /data-history-mode/);
   assert.match(scriptBlock, /data-history-repo/);
   assert.match(scriptBlock, /data-history-point/);
   assert.match(scriptBlock, /history-tooltip/);
+  // TrendPoint model includes precomputed size-normalized density and clean target rate
+  const firstPoint = modelNoModules.repos[0].by_mode.file!.latest;
+  assert.equal(firstPoint.scored_targets, 2);
+  assert.equal(firstPoint.clean_targets, 1);
+  assert.equal(firstPoint.errors_per_100, 50);
+  assert.equal(firstPoint.clean_target_rate, 0.5);
   assert.doesNotMatch(scriptBlock, /data-trend-metric/, 'Duplicate trend chart controls must be removed from repo detail panel');
   assert.doesNotMatch(scriptBlock, /window\.location\.hash\s*=(?!=)/, 'URL hash updates must use history.replaceState to prevent scroll jumps');
   assert.match(scriptBlock, /window\.history\.replaceState\(null, '', next\)/);
