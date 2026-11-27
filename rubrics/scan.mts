@@ -15,36 +15,37 @@ import {
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { runDecisionJudge } from '../skills/judge-code/scripts/engine/openrouter.mts';
+import {
+  findingSeverity,
+  probabilityToScore,
+  runWithConcurrency,
+} from '../skills/judge-code/scripts/engine/scoring.mts';
 import {
   DEFAULT_DECISION_MODEL,
   DEFAULT_FILE_MODE_DECISION_MODEL,
   PASS_THRESHOLD,
-  findingSeverity,
-  probabilityToScore,
-  runDecisionJudge,
-  runWithConcurrency,
   type JudgeResult,
   type Judgment,
-} from '../skills/judge-code/scripts/decisions.mts';
+} from '../skills/judge-code/scripts/engine/types.mts';
 import {
   ALLOWED_DOT_DIRS,
   SKIP_DIRS,
-  compileIgnoreMatcher,
   isTestOrSupportDirName,
   isTestOrSupportPath,
-  readInputs,
-  readPerFileInputs,
-} from '../skills/judge-code/scripts/inputs.mts';
+} from '../skills/judge-code/scripts/inputs/classify-path.mts';
+import { readInputs, readPerFileInputs } from '../skills/judge-code/scripts/inputs/files.mts';
+import { compileIgnoreMatcher } from '../skills/judge-code/scripts/inputs/ignore.mts';
+import { readStructureInputs } from '../skills/judge-code/scripts/inputs/structure.mts';
+import { filterRubricForFiles } from '../skills/judge-code/scripts/rubrics/applicability.mts';
+import { resolveRubrics } from '../skills/judge-code/scripts/rubrics/resolver.mts';
 import {
-  filterRubricForFiles,
   nonempty,
   object,
-  resolveRubrics,
   type JudgeMode,
   type ResolvedRubric,
   type RubricTarget,
-} from '../skills/judge-code/scripts/rubrics.mts';
-import { readStructureInputs } from '../skills/judge-code/scripts/structure.mts';
+} from '../skills/judge-code/scripts/rubrics/types.mts';
 import { generateDashboard } from './dashboard.mts';
 import {
   REPO_ROOT,

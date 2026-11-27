@@ -12,7 +12,7 @@ Run `pnpm eval scorecard --open` to explore this data in the interactive local H
 |---|---|---|
 | [`adr`](../skills/adr/SKILL.md) | No evals yet | — |
 | [`code-change`](../skills/code-change/SKILL.md) | Harbor evals (6/6 tasks recorded) | `canary`, `extend-invoice-disputes`, `implement-mars-rover`, `implement-meeting-room-booking`, `implement-react-router-todo`, `review-seeded-bug` |
-| [`judge-code`](../skills/judge-code/SKILL.md) | Offline unit tests (1 file) | `skills/judge-code/tests/judge-code.test.mts` |
+| [`judge-code`](../skills/judge-code/SKILL.md) | Offline unit & integration tests (6 files) | `skills/judge-code/tests/*.test.mts` |
 | [`node-dependency-management`](../skills/node-dependency-management/SKILL.md) | No evals yet | — |
 | [`renovate`](../skills/renovate/SKILL.md) | No evals yet | — |
 | [`repo-setup`](../skills/repo-setup/SKILL.md) | Offline unit tests (1 file) | `skills/repo-setup/tests/check-directory-size.test.mjs` |

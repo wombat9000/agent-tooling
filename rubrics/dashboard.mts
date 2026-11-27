@@ -9,9 +9,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { DEFAULT_PASS_SCORE } from '../skills/judge-code/scripts/decisions.mts';
-import { formatThreshold } from '../skills/judge-code/scripts/format.mts';
-import type { JudgeMode } from '../skills/judge-code/scripts/rubrics.mts';
+import { formatThreshold } from '../skills/judge-code/scripts/cli/format-summary.mts';
+import { DEFAULT_PASS_SCORE } from '../skills/judge-code/scripts/engine/types.mts';
+import type { JudgeMode } from '../skills/judge-code/scripts/rubrics/types.mts';
 import {
   REPO_ROOT,
   classifyCheckFailure,
