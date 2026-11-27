@@ -118,7 +118,12 @@ export interface TrendPoint {
   check_count: number;
   findings: FindingCounts;
   affected_targets: number;
+  scored_targets: number;
+  clean_targets: number;
+  errors_per_100: number;
+  clean_target_rate: number;
   delta_findings: number | null;
+  delta_hard_fails: number | null;
   calibrated_pass_rate: number;
   raw_pass_rate: number;
   all_files_pass_rate: number | null;
@@ -255,8 +260,8 @@ export interface DashboardModel {
 }
 
 function summarizeVersionChange(
-  prev: { judge_version: string; rubric_hashes: Record<string, string> },
-  curr: { judge_version: string; rubric_hashes: Record<string, string> },
+  prev: { judge_version: string; rubric_hashes: Record<string, string>; scan?: { sources?: string[] } },
+  curr: { judge_version: string; rubric_hashes: Record<string, string>; scan?: { sources?: string[] } },
 ): string[] {
   const reasons: string[] = [];
   if (prev.judge_version !== curr.judge_version) {
@@ -269,6 +274,13 @@ function summarizeVersionChange(
     if (diff.added.length > 0) parts.push(`added ${diff.added.join(', ')}`);
     if (diff.removed.length > 0) parts.push(`removed ${diff.removed.join(', ')}`);
     reasons.push(`rubrics: ${parts.join('; ')}`);
+  }
+  if (Array.isArray(prev.scan?.sources) && Array.isArray(curr.scan?.sources)) {
+    const prevSources = [...prev.scan.sources].sort(compareCodepoint);
+    const currSources = [...curr.scan.sources].sort(compareCodepoint);
+    if (prevSources.join('\0') !== currSources.join('\0')) {
+      reasons.push(`sources: ${prevSources.join(', ') || '(none)'} -> ${currSources.join(', ') || '(none)'}`);
+    }
   }
   return reasons;
 }
@@ -476,6 +488,7 @@ export function buildDashboardModel(options: {
         const findings = computeSnapshotFindings(snap);
         const prevFindings = prev ? computeSnapshotFindings(prev) : null;
         const deltaFindings = prevFindings ? findings.total - prevFindings.total : null;
+        const deltaHardFails = prevFindings ? findings.hard - prevFindings.hard : null;
         const deltaCalibrated = prev
           ? snap.metrics.calibrated_pass_rate - prev.metrics.calibrated_pass_rate
           : null;
@@ -496,6 +509,16 @@ export function buildDashboardModel(options: {
         const modulesScored = modules.filter((m) => m.status === 'scored').length;
         const modulesSkipped = modules.filter((m) => m.status === 'skipped').length;
         const modulesErrored = modules.filter((m) => m.status === 'error').length;
+        const histMetrics = computeHistoryPointMetrics({
+          mode,
+          hard_fails: findings.hard,
+          target_count: snap.metrics.target_count,
+          file_count: snap.metrics.file_count,
+          files: sortedFiles,
+          modules,
+          checks: snap.checks,
+          raw_pass_rate: snap.metrics.raw_pass_rate,
+        });
 
         return {
           id: `${repoName}::${mode}::${idx}`,
@@ -510,7 +533,12 @@ export function buildDashboardModel(options: {
           check_count: snap.metrics.check_count,
           findings,
           affected_targets: affectedTargets,
+          scored_targets: histMetrics.scored_targets,
+          clean_targets: histMetrics.clean_targets,
+          errors_per_100: histMetrics.errors_per_100,
+          clean_target_rate: histMetrics.clean_target_rate,
           delta_findings: deltaFindings,
+          delta_hard_fails: deltaHardFails,
           calibrated_pass_rate: snap.metrics.calibrated_pass_rate,
           raw_pass_rate: snap.metrics.raw_pass_rate,
           all_files_pass_rate: snap.metrics.all_files_pass_rate ?? null,
@@ -821,39 +849,166 @@ function fmtUsd(value: number | null | undefined): string {
   return `$${value.toFixed(3)}`;
 }
 
-function findingsTone(counts: FindingCounts): string {
+function parseSemverTag(tag: string): [number, number, number, boolean] | null {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(tag.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3]), Boolean(m[4])];
+}
+
+export function formatToolingVersion(judgeVersion: string, latestTag: string | null): string {
+  if (!latestTag || judgeVersion === latestTag) return judgeVersion;
+  const curr = parseSemverTag(judgeVersion);
+  const latest = parseSemverTag(latestTag);
+  if (curr && latest) {
+    for (let i = 0; i < 3; i += 1) {
+      if (latest[i] !== curr[i]) {
+        return latest[i] > curr[i]
+          ? `${judgeVersion} · update available: ${latestTag}`
+          : `${judgeVersion} · latest tag: ${latestTag}`;
+      }
+    }
+    if (!latest[3] && curr[3]) {
+      return `${judgeVersion} · latest tag: ${latestTag}`;
+    }
+  }
+  return `${judgeVersion} · latest tag: ${latestTag}`;
+}
+
+export function computeNiceAxisTicks(maxVal: number): { max: number; ticks: number[] } {
+  const safeMax = Number.isFinite(maxVal) && maxVal > 0 ? maxVal : 4;
+  const rawStep = safeMax / 3;
+  const mag = 10 ** Math.floor(Math.log10(rawStep));
+  const norm = rawStep / mag;
+  const niceMult = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  const step = Math.max(1, niceMult * mag);
+  const top = Math.max(step, Math.ceil(safeMax / step) * step);
+  const ticks: number[] = [];
+  for (let v = 0; v <= top; v += step) {
+    ticks.push(v);
+  }
+  return { max: top, ticks };
+}
+
+export interface HistoryPointMetrics {
+  scored_targets: number;
+  clean_targets: number;
+  errors_per_100: number;
+  clean_target_rate: number;
+}
+
+export function computeHistoryPointMetrics(input: {
+  mode: JudgeMode;
+  hard_fails: number;
+  target_count: number;
+  file_count: number;
+  files: readonly SnapshotFileEntry[];
+  modules: readonly DashboardModuleView[];
+  checks: Record<string, SnapshotCheckSummary>;
+  raw_pass_rate: number;
+}): HistoryPointMetrics {
+  const { mode, hard_fails, target_count, file_count, files, modules, checks, raw_pass_rate } = input;
+  if (mode === 'code' && modules.length > 0) {
+    const scored = modules.filter((m) => m.status === 'scored');
+    const denom = scored.length > 0 ? scored.length : Math.max(0, target_count);
+    const clean = scored.filter((m) => m.hard_fail_count === 0).length;
+    return {
+      scored_targets: denom,
+      clean_targets: clean,
+      errors_per_100: denom > 0 ? Number(((hard_fails / denom) * 100).toFixed(2)) : 0,
+      clean_target_rate: scored.length > 0 ? clean / scored.length : Math.max(0, Math.min(1, raw_pass_rate)),
+    };
+  }
+  if (files.length > 0) {
+    const denom = files.length;
+    const clean = files.filter((f) => countChecksFindings(f.checks ?? {}).hard === 0).length;
+    return {
+      scored_targets: denom,
+      clean_targets: clean,
+      errors_per_100: Number(((hard_fails / denom) * 100).toFixed(2)),
+      clean_target_rate: clean / denom,
+    };
+  }
+  const checkValues = Object.values(checks ?? {});
+  const checkTotal = checkValues.reduce((sum, c) => sum + c.total, 0);
+  const checkRawPassed = checkValues.reduce((sum, c) => sum + c.raw_passed, 0);
+  const denom = target_count > 0 ? target_count : (file_count > 0 ? file_count : checkTotal);
+  return {
+    scored_targets: denom,
+    clean_targets: checkTotal > 0 ? checkRawPassed : 0,
+    errors_per_100: denom > 0 ? Number(((hard_fails / denom) * 100).toFixed(2)) : 0,
+    clean_target_rate: checkTotal > 0 ? checkRawPassed / checkTotal : Math.max(0, Math.min(1, raw_pass_rate)),
+  };
+}
+
+export function formatVersionDeltaLabel(prevVersion: string | null, currVersion: string): string {
+  const shorten = (v: string): string => {
+    const clean = v.replace(/-\d+-g[0-9a-f]+$/i, '');
+    const m = /^(v?\d+\.\d+)\.0$/.exec(clean);
+    return m ? m[1] : clean;
+  };
+  if (prevVersion && prevVersion !== currVersion) {
+    const p = shorten(prevVersion);
+    const c = shorten(currVersion);
+    return p !== c ? `${p} → ${c}` : `${prevVersion} → ${currVersion}`;
+  }
+  return 'rubric Δ';
+}
+
+export function stripSharedPathPrefix(paths: readonly string[]): string {
+  if (paths.length < 2) return '';
+  const dirLists = paths.map((p) => {
+    const parts = p.split('/');
+    return parts.length > 1 ? parts.slice(0, -1) : [];
+  });
+  let common = dirLists[0];
+  for (let i = 1; i < dirLists.length && common.length > 0; i += 1) {
+    const next = dirLists[i];
+    let k = 0;
+    while (k < common.length && k < next.length && common[k] === next[k]) k += 1;
+    common = common.slice(0, k);
+  }
+  return common.length > 0 ? `${common.join('/')}/` : '';
+}
+
+export const FIXTURE_NEAR_THRESHOLD_MARGIN = 0.05;
+
+export interface FixtureHealthSummary {
+  status: 'failed' | 'near_threshold' | 'healthy';
+  near_threshold_checks: FixtureCheckSnapshot[];
+  tightest: FixtureCheckSnapshot | null;
+}
+
+export function analyzeFixtureHealth(latest: FixtureTrendPoint): FixtureHealthSummary {
+  const allPassed = latest.status === 'passed' && latest.checks_passed === latest.checks_total;
+  if (!allPassed) {
+    return { status: 'failed', near_threshold_checks: [], tightest: null };
+  }
+  const jitterFloor = typeof latest.max_jitter === 'number' && Number.isFinite(latest.max_jitter)
+    ? latest.max_jitter
+    : null;
+  const near = latest.checks
+    .filter((c) => c.passed && typeof c.margin === 'number' && Number.isFinite(c.margin)
+      && (c.margin < FIXTURE_NEAR_THRESHOLD_MARGIN || (jitterFloor !== null && c.margin < jitterFloor)))
+    .sort((a, b) =>
+      ((a.margin ?? 1) - (b.margin ?? 1))
+      || compareCodepoint(a.fixture_id, b.fixture_id)
+      || compareCodepoint(a.check_id, b.check_id),
+    );
+  const aggregateTight = typeof latest.min_margin === 'number' && Number.isFinite(latest.min_margin)
+    && (latest.min_margin < FIXTURE_NEAR_THRESHOLD_MARGIN || (jitterFloor !== null && latest.min_margin < jitterFloor));
+  if (near.length > 0 || aggregateTight) {
+    return {
+      status: 'near_threshold',
+      near_threshold_checks: near,
+      tightest: near[0] ?? null,
+    };
+  }
+  return { status: 'healthy', near_threshold_checks: [], tightest: null };
+}
+
+function errorsTone(counts: FindingCounts): string {
   if (counts.hard > 0) return ' tone-bad';
-  if (counts.borderline > 0) return ' tone-warn';
   return ' tone-good';
-}
-
-function renderFindingsBadges(counts: FindingCounts): string {
-  if (counts.total === 0) return '<span class="pill pass">0 clean</span>';
-  const parts: string[] = [];
-  if (counts.hard > 0) parts.push(`<span class="pill fail">${counts.hard} ${counts.hard === 1 ? 'error' : 'errors'}</span>`);
-  if (counts.borderline > 0) parts.push(`<span class="pill warn">${counts.borderline} ${counts.borderline === 1 ? 'warning' : 'warnings'}</span>`);
-  return `<div class="badge-row"><strong class="numeric${findingsTone(counts)}">${counts.total}</strong> ${parts.join(' ')}</div>`;
-}
-
-function renderDeltaFindingsBadge(delta: number | null, versionChanged: boolean): string {
-  if (delta === null) return '';
-  const cls = delta < 0 ? 'pass' : delta > 0 ? 'fail' : 'neutral';
-  const label = delta > 0 ? `+${delta}` : String(delta);
-  const title = versionChanged ? 'Crossed rubric/judge change' : 'Change in total findings vs previous run';
-  return `<span class="pill ${cls}" title="${escapeHtml(title)}">${escapeHtml(label)}${versionChanged ? ' *' : ''}</span>`;
-}
-
-function renderInstalledBadge(repo: RepoSummary, latestTag: string | null): string {
-  const inst = repo.installed_judge_code;
-  if (!inst) return '<span class="pill neutral">not tracked</span>';
-  const ref = inst.ref ?? (inst.computed_hash ? inst.computed_hash.slice(0, 8) : 'installed');
-  if (repo.installed_status === 'current') {
-    return `<span class="pill pass" title="Matches latest tag ${escapeHtml(latestTag ?? '')}">${escapeHtml(ref)} (current)</span>`;
-  }
-  if (repo.installed_status === 'outdated') {
-    return `<span class="pill warn" title="Latest agent-tooling tag is ${escapeHtml(latestTag ?? '')}">${escapeHtml(ref)} &rarr; ${escapeHtml(latestTag ?? '')}</span>`;
-  }
-  return `<span class="pill neutral">${escapeHtml(ref)}</span>`;
 }
 
 function renderCatalogPanel(catalog: RubricCatalog): string {
@@ -871,10 +1026,11 @@ function renderCatalogPanel(catalog: RubricCatalog): string {
     </tr>`;
   }).join('');
 
+  const versionLabel = formatToolingVersion(catalog.agent_tooling.judge_version, catalog.agent_tooling.latest_tag);
   return `<details class="panel catalog-panel">
     <summary class="panel-summary">
       <span><strong>Authoritative rubric catalog</strong> (${catalog.rubrics.length} rubrics in <code>rubrics/*.json</code>)</span>
-      <span class="muted numeric">agent-tooling ${escapeHtml(catalog.agent_tooling.judge_version)}${catalog.agent_tooling.latest_tag ? ` · latest tag ${escapeHtml(catalog.agent_tooling.latest_tag)}` : ''}</span>
+      <span class="muted numeric">agent-tooling ${escapeHtml(versionLabel)}</span>
     </summary>
     <div class="table-scroll" style="margin-top:12px">
       <table>
@@ -886,44 +1042,48 @@ function renderCatalogPanel(catalog: RubricCatalog): string {
 }
 
 const STYLE = `
-:root{color-scheme:light;--ink:#16243b;--muted:#5c687b;--line:#dce3ed;--bg:#f4f6fa;--surface:#ffffff;--blue:#3158cf;--teal:#0d9488;--purple:#7c3aed;--green:#116547;--green-bg:#e7f6ee;--amber:#9a3412;--amber-bg:#ffedd5;--red:#b91c1c;--red-bg:#fee2e2}
+:root{color-scheme:light;--ink:#142136;--muted:#5b677a;--line:#dce3ed;--bg:#f4f6fa;--surface:#ffffff;--surface-alt:#f8fafd;--blue:#2563eb;--blue-soft:#eff6ff;--teal:#0d9488;--purple:#7c3aed;--green:#15803d;--green-bg:#dcfce7;--amber:#9a3412;--amber-bg:#ffedd5;--red:#b91c1c;--red-bg:#fee2e2}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-main{max-width:1440px;margin:0 auto;padding:22px 26px 64px}
-header{border-top:3px solid var(--blue);padding:12px 0 18px}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1440px;margin:0 auto;padding:20px 24px 160px;min-width:0}
+header{border-top:3px solid var(--blue);padding:12px 0 16px}
 .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-h1{font-size:1.6rem;line-height:1.2;letter-spacing:-.03em;margin:0}
-h2{font-size:1.1rem;margin:0}
-h3{font-size:.95rem;margin:0}
+h1{font-size:1.55rem;line-height:1.2;letter-spacing:-.03em;margin:0}
+h2{font-size:1.12rem;letter-spacing:-.015em;margin:0}
+h3{font-size:.94rem;letter-spacing:-.01em;margin:0}
 p{margin:6px 0}
-code{font:500 .84em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f1f5f9;padding:1px 5px;border-radius:4px}
+code{font:500 .83em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f1f5f9;padding:1px 5px;border-radius:4px}
 .muted{color:var(--muted)}
 .numeric{font-variant-numeric:tabular-nums;white-space:nowrap}
 .meta-bar{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px;font-size:.82rem;color:var(--muted)}
 .meta-bar strong{color:var(--ink);font-weight:600}
-.kpi-strip,.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px}
-.kpi-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-bottom:18px;overflow:hidden}
-.kpi{padding:14px 16px;border-right:1px solid var(--line)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:4px}
+.kpi-bar{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:14px;margin-bottom:18px;align-items:stretch}
+.kpi-group,.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;min-width:0}
+.kpi-group{display:flex;flex-direction:column;overflow:hidden}
+.kpi-group-tooling{background:var(--surface-alt)}
+.kpi-group-eyebrow{font-size:.69rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:7px 14px 5px;border-bottom:1px solid var(--line);background:#f1f5f9}
+.kpi-grid{display:grid;grid-template-columns:repeat(var(--kpi-cols,2),minmax(0,1fr));flex:1}
+.kpi{padding:14px 16px;border-right:1px solid var(--line);min-width:0}
 .kpi:last-child{border-right:0}
-.kpi-alert{background:#fff8f1}
 .kpi-danger{background:#fef2f2}
-.kpi-label{color:var(--muted);font-size:.73rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
-.kpi-value{font-size:1.5rem;font-weight:700;letter-spacing:-.03em;line-height:1.25;margin:3px 0}
-.kpi-note{font-size:.77rem;color:var(--muted);line-height:1.35}
+.kpi-alert{background:#fff8f1}
+.kpi-label{color:var(--muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.kpi-value{font-size:1.55rem;font-weight:700;letter-spacing:-.03em;line-height:1.2;margin:4px 0 3px;font-variant-numeric:tabular-nums}
+.kpi-value-sm{font-size:1.25rem}
+.kpi-sub{font-size:.79rem;color:var(--muted);line-height:1.35;font-variant-numeric:tabular-nums}
 .tone-good{color:var(--green)}
 .tone-warn{color:var(--amber)}
 .tone-bad{color:var(--red)}
 .panel{padding:18px 20px;margin-bottom:18px}
-.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
-.panel-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;flex-wrap:wrap}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.panel-summary{display:flex;align-items:center;justify-content:flex-start;gap:10px;cursor:pointer;list-style:none;flex-wrap:wrap}
+.panel-summary>:last-child:not(:first-child){margin-left:auto}
 .panel-summary::-webkit-details-marker{display:none}
 .panel-summary::before{content:'+ ';color:var(--blue);font-weight:700}
 details[open]>.panel-summary::before{content:'− '}
-.badge,.pill,.chip{display:inline-flex;align-items:center;gap:4px;border-radius:5px;font-weight:600;white-space:nowrap}
-.badge{padding:2px 8px;font-size:.76rem;line-height:1.4}
-.pill{padding:2px 7px;font-size:.74rem;line-height:1.35}
-.chip{padding:2px 7px;font-size:.74rem;background:#eef2f7;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:500}
-.pill-header{padding:3px 9px;border-radius:999px;font-size:.71rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;background:#e0e7ff;color:#1e40af}
+.pill{display:inline-flex;align-items:center;gap:4px;border-radius:5px;padding:2px 7px;font-size:.72rem;font-weight:600;line-height:1.35;white-space:nowrap}
+.pill-header{padding:3px 9px;border-radius:999px;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;background:#e0e7ff;color:#1e40af}
 .pass{color:var(--green);background:var(--green-bg)}
 .warn{color:var(--amber);background:var(--amber-bg)}
 .fail{color:var(--red);background:var(--red-bg)}
@@ -932,69 +1092,118 @@ details[open]>.panel-summary::before{content:'− '}
 .target-project_structure{background:#f3e8ff;color:#6b21a8}
 .target-test_code{background:#dcfce7;color:#166534}
 .target-review{background:#fef3c7;color:#92400e}
-.badge-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
-.table-scroll{overflow-x:auto}
+.table-scroll{overflow-x:auto;max-width:100%}
 table{width:100%;border-collapse:collapse;text-align:left}
-th{font-size:.76rem;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:1px solid var(--line)}
+th{font-size:.75rem;color:var(--muted);font-weight:600;white-space:nowrap;border-bottom:1px solid var(--line)}
 th,td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
 th:first-child,td:first-child{padding-left:0}
 tbody tr:last-child td{border-bottom:0}
+table.rules-table{table-layout:auto;font-size:.82rem}
+table.rules-table th,table.rules-table td{padding:7px 6px}
+table.rules-table th:first-child,table.rules-table td:first-child{padding-left:0}
+table.rules-table th:last-child,table.rules-table td:last-child{padding-right:2px}
+table.rules-table th.num-col,table.rules-table td.num-col{text-align:right}
+.rule-name-cell{min-width:150px;overflow-wrap:anywhere}
+.rule-slug-sub{display:block;font-size:.71rem;color:var(--muted);line-height:1.25;margin-top:1px}
 .tabs{display:inline-flex;background:#f1f5f9;border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px;flex-wrap:wrap}
-.tab-btn{border:0;background:transparent;color:var(--muted);font:inherit;font-size:.82rem;font-weight:600;padding:5px 11px;border-radius:6px;cursor:pointer}
-.tab-btn:hover{color:var(--ink);background:rgba(255,255,255,.6)}
+.tab-btn{border:0;background:transparent;color:var(--muted);font:inherit;font-size:.8rem;font-weight:600;padding:5px 11px;border-radius:6px;cursor:pointer;font-variant-numeric:tabular-nums}
+.tab-btn:hover{color:var(--ink);background:rgba(255,255,255,.65)}
 .tab-btn.active{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.08)}
+.tab-btn.tab-muted{opacity:.68}
+.mode-control{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.control-label{font-size:.73rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-input[type=search],select{font:inherit;font-size:.84rem;color:var(--ink);background:#fff;border:1px solid #b8c5d8;border-radius:7px;padding:6px 10px;min-height:34px}
-input[type=search]{min-width:210px}
-label.toggle{display:inline-flex;align-items:center;gap:6px;font-size:.82rem;color:var(--muted);cursor:pointer;user-select:none}
-.repo-row{cursor:pointer}
-.repo-row:hover td{background:#f8faff}
-.repo-row.selected td{background:#eff4ff}
-.punch-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
-.punch-tile{border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#fcfdff}
-.punch-tile-label{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-.punch-tile-val{font-size:1.15rem;font-weight:700;margin:2px 0}
-.punch-tile-sub{font-size:.75rem;color:var(--muted)}
-.arch-card{border:1px solid #c7d2fe;border-radius:10px;padding:14px 16px;background:#fafbff;margin-bottom:16px}
-.chart-box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#fcfdff;margin-bottom:16px}
-.chart-legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:.78rem;color:var(--muted);margin-bottom:8px}
+input[type=search],select{font:inherit;font-size:.82rem;color:var(--ink);background:#fff;border:1px solid #b8c5d8;border-radius:7px;padding:5px 10px;min-height:32px;max-width:100%}
+input[type=search]{min-width:180px;width:220px}
+label.toggle{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;color:var(--muted);cursor:pointer;user-select:none}
+.heat-repo-th{vertical-align:top;padding:6px 8px;min-width:155px;white-space:normal}
+.repo-col-btn{display:flex;flex-direction:column;align-items:flex-end;gap:3px;width:100%;border:1px solid transparent;border-radius:8px;background:transparent;padding:7px 9px;text-align:right;cursor:pointer;font:inherit;color:var(--ink);transition:background .12s,border-color .12s}
+.repo-col-btn:hover{background:#f8fafc;border-color:#cbd5e1}
+.repo-col-btn.selected{background:var(--blue-soft);border-color:#93c5fd;box-shadow:inset 0 2px 0 var(--blue)}
+.repo-col-title{display:flex;align-items:baseline;justify-content:flex-end;gap:7px;flex-wrap:wrap;width:100%}
+.repo-col-name{font-size:.86rem;font-weight:700;color:var(--ink)}
+.repo-col-meta{font-size:.71rem;color:var(--muted);line-height:1.35;font-weight:400}
+.heat-cell-btn{display:inline-flex;flex-direction:column;align-items:flex-end;gap:1px;padding:5px 9px;border-radius:6px;min-width:98px;border:1px solid transparent;cursor:pointer;font:inherit;font-variant-numeric:tabular-nums;text-align:right;transition:transform .08s,box-shadow .12s}
+.heat-cell-btn:hover{box-shadow:0 0 0 1px rgba(37,99,235,.45)}
+.heat-cell-btn.heat-cell-active{box-shadow:0 0 0 2px var(--blue);border-color:var(--blue)}
+.heat-cell-btn strong{font-size:.82rem;line-height:1.2}
+.heat-cell-btn span{font-size:.7rem;opacity:.86;line-height:1.2}
+.heat-col-selected{background:#f8fbff}
+.thr-custom{display:inline-flex;align-items:center;gap:5px;color:var(--muted);cursor:help;font-variant-numeric:tabular-nums}
+.thr-dot{width:6px;height:6px;border-radius:999px;background:#64748b;display:inline-block;flex-shrink:0}
+.num-err{color:var(--red);font-weight:700;font-variant-numeric:tabular-nums}
+.num-ok{color:var(--green);font-weight:600;font-variant-numeric:tabular-nums}
+.num-warn{color:var(--amber);font-weight:600;font-variant-numeric:tabular-nums}
+.num-sub{color:var(--muted);font-size:.76rem;font-variant-numeric:tabular-nums;margin-left:4px}
+.filter-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:8px 12px;border-radius:8px;background:var(--blue-soft);border:1px solid #bfdbfe;color:#1e3a8a;font-size:.82rem;margin-bottom:12px}
+.clear-btn,.link-btn{border:1px solid #cbd5e1;background:#fff;color:var(--ink);font:inherit;font-size:.76rem;font-weight:600;padding:3px 9px;border-radius:6px;cursor:pointer}
+.clear-btn:hover,.link-btn:hover{background:#f8fafc;border-color:#94a3b8}
+.single-run-note,.quiet-note{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 13px;border-radius:8px;background:var(--surface-alt);border:1px solid var(--line);color:var(--muted);font-size:.82rem;margin-bottom:14px}
+.quiet-note{margin-top:14px;margin-bottom:0}
+.chart-box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-alt);margin-bottom:14px}
+.history-panel-box{margin-bottom:0}
+.history-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.history-legend{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:10px}
+.history-legend-btn{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit;font-size:.78rem;cursor:pointer;transition:background .12s,border-color .12s,box-shadow .12s}
+.history-legend-btn:hover{border-color:#94a3b8;background:#f8fafc}
+.history-legend-btn.selected{border-color:var(--blue);background:var(--blue-soft);box-shadow:0 0 0 1px rgba(37,99,235,.22)}
+.history-legend-dot{width:9px;height:9px;border-radius:999px;flex-shrink:0}
+.history-legend-name{font-weight:600}
+.history-legend-val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.75rem}
+.history-legend-delta{font-variant-numeric:tabular-nums;font-size:.73rem;font-weight:600}
+.chart-stage{position:relative;width:100%}
+.chart-tooltip{position:absolute;z-index:40;pointer-events:none;min-width:210px;max-width:290px;padding:9px 11px;border-radius:9px;background:rgba(20,33,54,.96);color:#f8fafc;box-shadow:0 10px 24px rgba(15,23,42,.24);font-size:.76rem;line-height:1.45}
+.chart-tooltip-head{display:flex;align-items:center;gap:6px;font-weight:700;margin-bottom:4px;font-size:.8rem}
+.chart-tooltip-meta{color:#cbd5e1;font-size:.72rem;margin-bottom:5px;font-variant-numeric:tabular-nums}
+.chart-tooltip-row{display:flex;justify-content:space-between;gap:12px;font-variant-numeric:tabular-nums}
+.chart-tooltip-note{margin-top:5px;padding-top:5px;border-top:1px solid rgba(148,163,184,.3);color:#fde68a;font-size:.71rem}
+.chart-tooltip-hint{margin-top:4px;color:#94a3b8;font-size:.69rem}
+.chart-legend{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:.78rem;color:var(--muted);margin-bottom:8px}
 .legend-item{display:inline-flex;align-items:center;gap:6px}
 .legend-swatch{display:inline-block;width:16px;height:3px;border-radius:2px}
 .legend-swatch.dashed{background:repeating-linear-gradient(90deg,var(--teal) 0 5px,transparent 5px 8px)}
-.legend-swatch.dashed-red{background:repeating-linear-gradient(90deg,var(--red) 0 5px,transparent 5px 8px)}
+.legend-swatch.dashed-slate{background:repeating-linear-gradient(90deg,#64748b 0 5px,transparent 5px 8px)}
+.legend-swatch.dashed-amber{background:repeating-linear-gradient(90deg,#d97706 0 4px,transparent 4px 7px)}
 .legend-swatch.dotted{background:repeating-linear-gradient(90deg,var(--purple) 0 2px,transparent 2px 5px)}
-.legend-marker{display:inline-block;width:9px;height:9px;transform:rotate(45deg);background:#f59e0b;border:1px solid #b45309}
 .svg-wrap{width:100%;overflow-x:auto}
 svg.trend-svg{display:block;width:100%;max-width:100%;height:auto}
-.chart-point{cursor:pointer}
-.chart-point:hover{stroke-width:3}
-.split-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:16px;align-items:start}
-.sub-card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fcfdff}
-.bar-wrap{display:flex;align-items:center;gap:7px;min-width:108px}
-.bar-track{width:52px;height:7px;background:#e6ecf5;border-radius:999px;overflow:hidden;flex-shrink:0}
-.bar-fill{height:100%;border-radius:999px}
-.heat-cell{display:inline-flex;flex-direction:column;align-items:flex-end;gap:1px;padding:4px 8px;border-radius:6px;min-width:92px;font-variant-numeric:tabular-nums}
-.heat-cell strong{font-size:.82rem;line-height:1.2}
-.heat-cell span{font-size:.71rem;opacity:.88}
-.fail-chips{display:flex;flex-wrap:wrap;gap:4px}
-.fail-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:4px;font-size:.73rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.fail-chip-hard{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;font-weight:600}
-.fail-chip-borderline{background:#fff7ed;color:#9a3412;border:1px solid #fdba74}
-.version-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:.82rem;margin-bottom:12px}
+.chart-point,.history-series-hit{cursor:pointer}
+#repo-detail-panel{min-height:clamp(500px,62vh,760px)}
+.hist-run-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:7px 12px;border-radius:8px;background:#f8fafc;border:1px solid var(--line);color:var(--ink);font-size:.8rem;margin-bottom:12px}
+.split-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px;align-items:start}
+.sub-card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--surface-alt);min-width:0}
+.arch-card{border:1px solid #c7d2fe;border-radius:10px;padding:14px 16px;background:#fafbff;margin-bottom:14px;min-width:0}
+.rule-pick-row{cursor:pointer}
+.rule-pick-row:hover td{background:#f1f5f9}
+.rule-pick-row.active-rule-row td{background:var(--blue-soft)}
+.rule-tags{display:flex;flex-wrap:wrap;gap:4px;max-width:100%}
+.rule-tag{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);background:#fff;color:var(--ink);font:500 .73rem/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:pointer;max-width:100%;overflow-wrap:anywhere;text-align:left}
+.rule-tag:hover{border-color:var(--blue);background:var(--blue-soft)}
+.rule-tag-hard{border-color:#fca5a5;background:#fff5f5;color:#991b1b}
+.rule-tag-borderline{border-color:#e2e8f0;background:#f8fafc;color:var(--muted)}
+.rule-tag-active{border-color:var(--blue);background:var(--blue-soft);color:#1e3a8a;font-weight:700}
+.rule-tag-more{border-style:dashed;color:var(--blue);background:transparent}
+.file-path-cell{overflow-wrap:anywhere;word-break:break-word;min-width:140px}
+.file-dir{color:var(--muted);font:400 .78rem/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.file-name{color:var(--ink);font:600 .8rem/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.hotspot-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+.version-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:.81rem;margin-bottom:12px}
 .warn-banner{padding:10px 14px;border-radius:8px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:.82rem;margin-bottom:14px}
 .run-row{cursor:pointer}
-.run-row:hover td{background:#f8faff}
-.run-row.active-run td{background:#eff4ff}
-.tip-wrap{position:relative;display:inline-flex;align-items:center}
-.tip-trigger{border-bottom:1px dotted #94a3b8;cursor:help}
-.tip-card{display:none;position:absolute;left:0;top:calc(100% + 6px);width:min(440px,74vw);padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 24px rgba(15,23,42,.14);z-index:50;white-space:normal;font-weight:400;line-height:1.4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink)}
+.run-row:hover td{background:#f1f5f9}
+.run-row.active-run td{background:var(--blue-soft)}
+.fixture-details{border:1px solid var(--line);border-radius:10px;padding:10px 14px;background:var(--surface-alt)}
+.tip-wrap{position:relative;display:inline-flex;align-items:center;max-width:100%}
+.tip-trigger{border-bottom:1px dotted #94a3b8;cursor:help;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.82rem}
+.tip-card{display:none;position:absolute;left:0;top:calc(100% + 6px);width:min(420px,74vw);padding:10px 12px;background:#fff;border:1px solid #cbd5e1;border-radius:9px;box-shadow:0 10px 24px rgba(15,23,42,.14);z-index:50;white-space:normal;font-weight:400;line-height:1.4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink)}
 .tip-wrap:hover .tip-card,.tip-wrap:focus-within .tip-card{display:block}
 .tip-pass{background:#f0fdf4;border-left:3px solid #16a34a;padding:5px 8px;border-radius:5px;margin-top:6px;font-size:.77rem}
 .tip-fail{background:#fff7ed;border-left:3px solid #ea580c;padding:5px 8px;border-radius:5px;margin-top:5px;font-size:.77rem}
-.empty-state{padding:24px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px;background:#fafbfd}
+.empty-state{padding:24px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px;background:var(--surface-alt)}
 footer{font-size:.8rem;color:var(--muted);margin-top:24px}
 [hidden]{display:none!important}
-@media(max-width:1024px){.kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{border-bottom:1px solid var(--line)}.punch-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.split-grid{grid-template-columns:1fr}}
+@media(max-width:1080px){.kpi-bar{grid-template-columns:1fr}.split-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:640px){.kpi-grid{grid-template-columns:1fr}.kpi{border-right:0;border-bottom:1px solid var(--line)}.kpi:last-child{border-bottom:0}main{padding:14px 12px 44px}}
 `;
 
 const CLIENT_SCRIPT = `
@@ -1002,6 +1211,8 @@ const CLIENT_SCRIPT = `
   const rawEl = document.getElementById('dashboard-data');
   if (!rawEl) return;
   const DATA = JSON.parse(rawEl.textContent || '{}');
+  const DEFAULT_HOTSPOT_LIMIT = 15;
+  const MAX_VISIBLE_RULE_TAGS = 3;
 
   function esc(v) {
     return String(v ?? '')
@@ -1027,6 +1238,20 @@ const CLIENT_SCRIPT = `
     if (!ts) return '—';
     return ts.replace('T', ' ').slice(0, 16) + 'Z';
   }
+  function isoDay(ts) {
+    return ts ? String(ts).slice(0, 10) : '—';
+  }
+  function modeLabel(m) {
+    return m === 'code' ? 'module' : m;
+  }
+  function modeToHash(m) {
+    return m === 'code' ? 'module' : m;
+  }
+  function hashToMode(m) {
+    if (m === 'module') return 'code';
+    if (m === 'file' || m === 'structure' || m === 'code') return m;
+    return null;
+  }
   function classifyScore(score) {
     if (!score || score.choice !== 'fail') return null;
     if (score.model_choice === 'fail') return 'hard';
@@ -1047,19 +1272,116 @@ const CLIENT_SCRIPT = `
     const hard = Math.max(0, Math.min(total, c.total - c.raw_passed));
     return { total, hard, borderline: Math.max(0, total - hard) };
   }
-  function heatColors(rate) {
-    if (rate >= 0.999) return { bg: '#dcfce7', fg: '#14532d' };
-    if (rate >= 0.85) return { bg: '#ecfccb', fg: '#365314' };
-    if (rate >= 0.7) return { bg: '#fef9c3', fg: '#713f12' };
-    if (rate >= 0.5) return { bg: '#ffedd5', fg: '#9a3412' };
-    return { bg: '#fee2e2', fg: '#991b1b' };
+  function computeNiceTicks(maxVal) {
+    const safeMax = Number.isFinite(maxVal) && maxVal > 0 ? maxVal : 4;
+    const rawStep = safeMax / 3;
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const norm = rawStep / mag;
+    const niceMult = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    const step = Math.max(1, niceMult * mag);
+    const top = Math.max(step, Math.ceil(safeMax / step) * step);
+    const ticks = [];
+    for (let v = 0; v <= top; v += step) ticks.push(v);
+    return { max: top, ticks };
   }
-  function renderFindingsPills(fc) {
-    if (!fc || fc.total === 0) return '<span class="pill pass">0 clean</span>';
-    const parts = [];
-    if (fc.hard > 0) parts.push('<span class="pill fail">' + fc.hard + (fc.hard === 1 ? ' error' : ' errors') + '</span>');
-    if (fc.borderline > 0) parts.push('<span class="pill warn">' + fc.borderline + (fc.borderline === 1 ? ' warning' : ' warnings') + '</span>');
-    return '<div class="badge-row"><strong class="numeric">' + fc.total + '</strong> ' + parts.join(' ') + '</div>';
+  function historyUnitLabel(mode) {
+    if (mode === 'file') return 'files';
+    if (mode === 'code') return 'modules';
+    return 'targets';
+  }
+  function pointDensity(p) {
+    if (typeof p.errors_per_100 === 'number' && Number.isFinite(p.errors_per_100)) return p.errors_per_100;
+    const denom = p.scored_targets || (p.files && p.files.length) || p.target_count || p.file_count || 0;
+    const hard = p.findings ? p.findings.hard : 0;
+    return denom > 0 ? (hard / denom) * 100 : 0;
+  }
+  function pointCleanRate(p) {
+    if (typeof p.clean_target_rate === 'number' && Number.isFinite(p.clean_target_rate)) return p.clean_target_rate;
+    return typeof p.raw_pass_rate === 'number' && Number.isFinite(p.raw_pass_rate) ? p.raw_pass_rate : 0;
+  }
+  const REPO_PALETTE = [
+    '#2563eb',
+    '#0d9488',
+    '#d97706',
+    '#7c3aed',
+    '#dc2626',
+    '#059669',
+    '#db2777',
+    '#475569',
+  ];
+  function repoColor(name) {
+    const idx = (DATA.repos || []).findIndex((r) => r.name === name);
+    return REPO_PALETTE[(idx >= 0 ? idx : 0) % REPO_PALETTE.length];
+  }
+  function preserveViewportAnchor(anchorSelector, fn) {
+    const beforeEl = anchorSelector ? document.querySelector(anchorSelector) : null;
+    const beforeTop = beforeEl ? beforeEl.getBoundingClientRect().top : null;
+    fn();
+    if (beforeTop !== null && anchorSelector) {
+      const afterEl = document.querySelector(anchorSelector);
+      if (afterEl) {
+        const delta = afterEl.getBoundingClientRect().top - beforeTop;
+        if (Math.abs(delta) > 0.5) {
+          window.scrollBy(0, delta);
+        }
+      }
+    }
+  }
+  function formatVersionLabel(prevVersion, currVersion) {
+    const shorten = (v) => {
+      const clean = String(v || '').replace(/-\\d+-g[0-9a-f]+$/i, '');
+      const m = /^(v?\\d+\\.\\d+)\\.0$/.exec(clean);
+      return m ? m[1] : clean;
+    };
+    if (prevVersion && prevVersion !== currVersion) {
+      const p = shorten(prevVersion);
+      const c = shorten(currVersion);
+      return p !== c ? p + ' → ' + c : prevVersion + ' → ' + currVersion;
+    }
+    return 'rubric Δ';
+  }
+  function sharedPathPrefix(paths) {
+    if (!paths || paths.length < 2) return '';
+    const dirLists = paths.map((p) => {
+      const parts = String(p).split('/');
+      return parts.length > 1 ? parts.slice(0, -1) : [];
+    });
+    let common = dirLists[0];
+    for (let i = 1; i < dirLists.length && common.length > 0; i += 1) {
+      const next = dirLists[i];
+      let k = 0;
+      while (k < common.length && k < next.length && common[k] === next[k]) k += 1;
+      common = common.slice(0, k);
+    }
+    return common.length > 0 ? common.join('/') + '/' : '';
+  }
+  function renderShortPath(fullPath, prefix) {
+    const rel = prefix && fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath;
+    const slash = rel.lastIndexOf('/');
+    if (slash === -1) {
+      return '<span class="file-name" title="' + esc(fullPath) + '">' + esc(rel) + '</span>';
+    }
+    return '<span title="' + esc(fullPath) + '"><span class="file-dir">' + esc(rel.slice(0, slash + 1)) + '</span><span class="file-name">' + esc(rel.slice(slash + 1)) + '</span></span>';
+  }
+  function renderThresholdCell(threshold) {
+    const isCustom = Math.abs(threshold - 0.8) > 1e-9;
+    if (!isCustom) return '<span class="muted numeric">&ge;' + threshold.toFixed(2) + '</span>';
+    return '<span class="thr-custom" title="Non-default pass threshold &ge;' + threshold.toFixed(2) + ' (default is 0.80)"><span class="thr-dot" aria-hidden="true"></span>&ge;' + threshold.toFixed(2) + '</span>';
+  }
+  function renderErrorsInline(fc) {
+    if (!fc || fc.total === 0) return '<span class="pill pass">clean</span>';
+    if (fc.hard > 0) {
+      return '<span class="num-err">' + fc.hard + '</span>' + (fc.borderline > 0 ? '<span class="num-sub">+' + fc.borderline + 'w</span>' : '');
+    }
+    return '<span class="muted numeric">0</span><span class="num-sub">+' + fc.borderline + 'w</span>';
+  }
+  function heatCellStyle(c) {
+    if (c.hard_failed === 0 && c.borderline_failed === 0) return { bg: '#ecfdf5', fg: '#14532d' };
+    if (c.hard_failed === 0) return { bg: '#fffbeb', fg: '#78350f' };
+    const hardRate = c.total > 0 ? c.hard_failed / c.total : 1;
+    if (hardRate >= 0.35) return { bg: '#fecdd3', fg: '#881337' };
+    if (hardRate >= 0.15) return { bg: '#ffe4e6', fg: '#9f1239' };
+    return { bg: '#fff1f2', fg: '#991b1b' };
   }
   function checkLabelWithTip(cid) {
     const cat = DATA.catalog && DATA.catalog.checks_by_id ? DATA.catalog.checks_by_id[cid] : null;
@@ -1069,25 +1391,25 @@ const CLIENT_SCRIPT = `
       + '<div class="tip-pass"><strong>Pass:</strong> ' + esc(cat.criteria.pass) + '</div>'
       + '<div class="tip-fail"><strong>Fail:</strong> ' + esc(cat.criteria.fail) + '</div></div></span>';
   }
-  function renderFindingChip(cid, severity, prob, thr) {
-    const cat = DATA.catalog && DATA.catalog.checks_by_id ? DATA.catalog.checks_by_id[cid] : null;
-    const cls = severity === 'hard' ? 'fail-chip fail-chip-hard' : 'fail-chip fail-chip-borderline';
-    const pText = typeof prob === 'number' ? prob.toFixed(2) : 'fail';
-    const detail = severity === 'hard'
-      ? 'error ' + pText
-      : 'warning ' + pText + ' < ' + thr.toFixed(2);
-    const title = (severity === 'hard' ? 'Error (raw model FAIL)' : 'Warning (threshold borderline, P < ' + thr.toFixed(2) + ')')
-      + (cat && cat.instructions ? ' — ' + cat.instructions : '');
-    return '<span class="' + cls + '" title="' + esc(title) + '">' + esc(cid) + ' (' + esc(detail) + ')</span>';
+
+  function defaultHistoryMode() {
+    const modes = DATA.modes_present || [];
+    const repos = DATA.repos || [];
+    const withTrend = modes.find((m) => repos.some((r) => r.by_mode && r.by_mode[m] && r.by_mode[m].points.length >= 2));
+    return withTrend || modes[0] || 'file';
   }
 
   let selectedRepo = DATA.repos && DATA.repos.length > 0 ? DATA.repos[0].name : null;
   let selectedMode = null;
   let selectedRunIdx = null;
-  let trendMetric = 'findings';
+  let historyMode = defaultHistoryMode();
+  let historyMetric = 'density';
   let heatmapMode = DATA.modes_present && DATA.modes_present.length > 0 ? DATA.modes_present[0] : 'file';
+  let activeRule = '';
   let fileSearch = '';
   let failingOnly = true;
+  let showAllFiles = false;
+  let expandedFiles = new Set();
   let moduleSearch = '';
   let moduleFailingOnly = false;
   let heatSearch = '';
@@ -1095,12 +1417,12 @@ const CLIENT_SCRIPT = `
 
   function ensureSelection() {
     if (!DATA.repos || DATA.repos.length === 0) return null;
-    let repoObj = DATA.repos.find((r) => r.name === selectedRepo) || DATA.repos[0];
+    const repoObj = DATA.repos.find((r) => r.name === selectedRepo) || DATA.repos[0];
     selectedRepo = repoObj.name;
-    if (!selectedMode || !repoObj.by_mode[selectedMode]) {
+    if (!selectedMode || (selectedMode !== 'code' && !repoObj.by_mode[selectedMode])) {
       selectedMode = repoObj.modes[0] || null;
     }
-    const series = selectedMode ? repoObj.by_mode[selectedMode] : null;
+    const series = selectedMode ? repoObj.by_mode[selectedMode] || null : null;
     if (!series) return { repoObj, series: null, run: null };
     if (selectedRunIdx === null || selectedRunIdx < 0 || selectedRunIdx >= series.points.length) {
       selectedRunIdx = series.points.length - 1;
@@ -1108,138 +1430,524 @@ const CLIENT_SCRIPT = `
     return { repoObj, series, run: series.points[selectedRunIdx] };
   }
 
-  function renderFindingsTrendSvg(points, activeIdx) {
-    const W = 820, H = 225, padL = 48, padR = 24, padT = 22, padB = 34;
-    const plotW = W - padL - padR;
-    const plotH = H - padT - padB;
-    const maxVal = Math.max(4, ...points.map((p) => p.findings ? p.findings.total : 0));
-    const yMax = Math.ceil(maxVal * 1.15);
-    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
-    const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / yMax))) * plotH;
-
-    const tickVals = [...new Set([0, Math.round(yMax / 2), yMax])];
-    const gridLines = tickVals.map((g) => {
-      const y = yAt(g).toFixed(1);
-      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#e2e8f0" stroke-width="1"/>'
-        + '<text x="' + (padL - 8) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + g + '</text>';
-    }).join('');
-
-    const versionLines = points.map((p, i) => {
-      if (!p.version_changed) return '';
-      const x = xAt(i).toFixed(1);
-      const label = esc(p.change_reasons.join(' | '));
-      return '<g><line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>'
-        + '<polygon points="' + x + ',' + (padT - 7) + ' ' + (Number(x) + 5) + ',' + (padT - 2) + ' ' + x + ',' + (padT + 3) + ' ' + (Number(x) - 5) + ',' + (padT - 2) + '" fill="#f59e0b" stroke="#b45309" stroke-width="1"><title>Rubric / judge change: ' + label + '</title></polygon></g>';
-    }).join('');
-
-    const polyline = (getter, stroke, dash) => {
-      const coords = points.map((p, i) => xAt(i).toFixed(1) + ',' + yAt(getter(p)).toFixed(1));
-      if (coords.length < 2) return '';
-      return '<polyline fill="none" stroke="' + stroke + '" stroke-width="2.2" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
-    };
-
-    const dots = points.map((p, i) => {
-      const x = xAt(i).toFixed(1);
-      const yt = yAt(p.findings.total).toFixed(1);
-      const yh = yAt(p.findings.hard).toFixed(1);
-      const isActive = i === activeIdx;
-      const tip = esc(
-        shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' errors, ' + p.findings.borderline + ' warnings)'
-        + '\\nCalibrated pass: ' + pct(p.calibrated_pass_rate) + ' | Raw pass: ' + pct(p.raw_pass_rate)
-        + (p.version_changed ? '\\nVersion change: ' + p.change_reasons.join('; ') : '')
-      );
-      return '<g class="chart-point" data-select-run="' + i + '">'
-        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#3158cf" stroke-opacity="0.22" stroke-width="10"/>' : '')
-        + '<circle cx="' + x + '" cy="' + yh + '" r="' + (isActive ? 4.8 : 3.5) + '" fill="#b91c1c" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>'
-        + '<circle cx="' + x + '" cy="' + yt + '" r="' + (isActive ? 6 : 4.2) + '" fill="#3158cf" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>'
-        + '</g>';
-    }).join('');
-
-    const step = Math.max(1, Math.ceil(points.length / 6));
-    const xLabels = points.map((p, i) => {
-      if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
-      const x = xAt(i).toFixed(1);
-      return '<text x="' + x + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.commit_short) + '</text>';
-    }).join('');
-
-    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Findings trend chart">'
-      + gridLines + versionLines
-      + polyline((p) => p.findings.hard, '#b91c1c', '6 3')
-      + polyline((p) => p.findings.total, '#3158cf', '')
-      + dots + xLabels + '</svg>';
+  function buildHash() {
+    const params = new URLSearchParams();
+    if (selectedRepo) params.set('repo', selectedRepo);
+    if (selectedMode) params.set('mode', modeToHash(selectedMode));
+    if (activeRule) params.set('rule', activeRule);
+    const s = params.toString();
+    return s ? '#' + s : '';
   }
 
-  function renderRateTrendSvg(points, activeIdx) {
-    const W = 820, H = 225, padL = 48, padR = 24, padT = 22, padB = 34;
-    const plotW = W - padL - padR;
-    const plotH = H - padT - padB;
-    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
-    const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
+  function syncUrlHash() {
+    const next = buildHash();
+    if (!next || window.location.hash === next) return;
+    try {
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', next);
+      }
+    } catch (_) {
+      // Ignore restricted history environments
+    }
+  }
 
-    const gridLines = [0, 0.25, 0.5, 0.75, 1].map((g) => {
-      const y = yAt(g).toFixed(1);
-      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="#e2e8f0" stroke-width="1"/>'
-        + '<text x="' + (padL - 8) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + Math.round(g * 100) + '%</text>';
-    }).join('');
+  function applyHashState() {
+    const raw = (window.location.hash || '').replace(/^#/, '');
+    if (!raw) return;
+    const params = new URLSearchParams(raw);
+    const repoParam = params.get('repo');
+    if (repoParam && DATA.repos && DATA.repos.some((r) => r.name === repoParam)) {
+      selectedRepo = repoParam;
+      selectedRunIdx = null;
+      showAllFiles = false;
+      expandedFiles = new Set();
+    }
+    const modeParam = hashToMode(params.get('mode'));
+    if (modeParam) {
+      selectedMode = modeParam;
+      selectedRunIdx = null;
+      if (DATA.heatmaps && DATA.heatmaps[modeParam]) {
+        heatmapMode = modeParam;
+      }
+    }
+    const ruleParam = (params.get('rule') || '').trim();
+    activeRule = ruleParam;
+    if (selectedMode === 'code') {
+      moduleSearch = ruleParam;
+    } else {
+      fileSearch = ruleParam;
+    }
+  }
 
-    const versionLines = points.map((p, i) => {
+  function renderVersionMarkers(points, xAt, padT, bottomY) {
+    return points.map((p, i) => {
       if (!p.version_changed) return '';
-      const x = xAt(i).toFixed(1);
-      const label = esc(p.change_reasons.join(' | '));
-      return '<g><line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>'
-        + '<polygon points="' + x + ',' + (padT - 7) + ' ' + (Number(x) + 5) + ',' + (padT - 2) + ' ' + x + ',' + (padT + 3) + ' ' + (Number(x) - 5) + ',' + (padT - 2) + '" fill="#f59e0b" stroke="#b45309" stroke-width="1"><title>Rubric / judge change: ' + label + '</title></polygon></g>';
+      const x = xAt(i);
+      const prev = i > 0 ? points[i - 1] : null;
+      const shortLabel = formatVersionLabel(prev ? prev.judge_version : null, p.judge_version);
+      const fullTip = esc(p.change_reasons.join(' | '));
+      const anchor = x > 700 ? 'end' : x < 120 ? 'start' : 'middle';
+      return '<g>'
+        + '<line x1="' + x.toFixed(1) + '" y1="' + padT + '" x2="' + x.toFixed(1) + '" y2="' + bottomY + '" stroke="#d97706" stroke-width="1.3" stroke-dasharray="4 3"/>'
+        + '<text x="' + x.toFixed(1) + '" y="' + (padT - 6) + '" text-anchor="' + anchor + '" font-size="10" font-weight="600" fill="#b45309">' + esc(shortLabel) + '<title>Rubric / judge change: ' + fullTip + '</title></text>'
+        + '</g>';
     }).join('');
+  }
 
-    const polyline = (getter, stroke, dash) => {
-      const coords = points.map((p, i) => {
-        const val = getter(p);
-        return typeof val === 'number' && Number.isFinite(val) ? xAt(i).toFixed(1) + ',' + yAt(val).toFixed(1) : null;
-      }).filter(Boolean);
-      if (coords.length < 2) return '';
-      return '<polyline fill="none" stroke="' + stroke + '" stroke-width="2.2" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
+  function isRubricOrVersionBoundary(prev, curr) {
+    if (!prev || !curr) return false;
+    if (curr.version_changed) return true;
+    if (prev.judge_version !== curr.judge_version) return true;
+    if (prev.rubrics_digest !== curr.rubrics_digest) return true;
+    return false;
+  }
+
+  function renderMultiRepoHistorySvg(seriesList, metric) {
+    const W = 1160, H = 200, padL = 54, padR = 72, padT = 24, padB = 30;
+    const innerPadX = 24;
+    const xMin = padL + innerPadX;
+    const xMax = W - padR - innerPadX;
+    const plotH = H - padT - padB;
+    const unit = historyUnitLabel(historyMode);
+
+    const allPoints = [];
+    for (const s of seriesList) {
+      for (const p of s.points) allPoints.push(p);
+    }
+
+    const timestamps = allPoints.map((p) => Date.parse(p.timestamp)).filter((t) => Number.isFinite(t));
+    const minT = timestamps.length > 0 ? Math.min(...timestamps) : NaN;
+    const maxT = timestamps.length > 0 ? Math.max(...timestamps) : NaN;
+    const hasTimeSpan = Number.isFinite(minT) && Number.isFinite(maxT) && maxT > minT;
+
+    const xFor = (p, idx, len) => {
+      const t = Date.parse(p.timestamp);
+      if (hasTimeSpan && Number.isFinite(t)) {
+        return xMin + ((t - minT) / (maxT - minT)) * (xMax - xMin);
+      }
+      if (len > 1) return xMin + (idx / (len - 1)) * (xMax - xMin);
+      return (xMin + xMax) / 2;
     };
 
-    const dots = points.map((p, i) => {
-      const x = xAt(i).toFixed(1);
-      const yc = yAt(p.calibrated_pass_rate).toFixed(1);
-      const yr = yAt(p.raw_pass_rate).toFixed(1);
-      const ym = typeof p.mean_pass_probability === 'number' ? yAt(p.mean_pass_probability).toFixed(1) : null;
-      const isActive = i === activeIdx;
-      const tip = esc(
-        shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nCalibrated: ' + pct(p.calibrated_pass_rate) + ' | Raw: ' + pct(p.raw_pass_rate)
-        + ' | Mean P(pass): ' + pct(p.mean_pass_probability)
-        + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' errors, ' + p.findings.borderline + ' warnings)'
-      );
-      return '<g class="chart-point" data-select-run="' + i + '">'
-        + (isActive ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#3158cf" stroke-opacity="0.22" stroke-width="10"/>' : '')
-        + '<circle cx="' + x + '" cy="' + yr + '" r="' + (isActive ? 4.5 : 3.2) + '" fill="#0d9488" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>'
-        + (ym !== null ? '<circle cx="' + x + '" cy="' + ym + '" r="' + (isActive ? 4.2 : 3) + '" fill="#7c3aed" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>' : '')
-        + '<circle cx="' + x + '" cy="' + yc + '" r="' + (isActive ? 6 : 4.2) + '" fill="#3158cf" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>'
+    let yTicks;
+    let yAt;
+    let formatTick;
+    let valOf;
+    let formatEndVal;
+    let ariaVal;
+    if (metric === 'clean') {
+      yTicks = [0, 0.25, 0.5, 0.75, 1];
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
+      formatTick = (g) => Math.round(g * 100) + '%';
+      valOf = (p) => pointCleanRate(p);
+      formatEndVal = (v) => pct(v, 1);
+      ariaVal = (v) => pct(v, 1) + ' clean';
+    } else if (metric === 'density') {
+      const maxDensity = Math.max(...allPoints.map((p) => pointDensity(p)), 1);
+      const axis = computeNiceTicks(maxDensity);
+      yTicks = axis.ticks;
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / axis.max))) * plotH;
+      formatTick = (g) => String(g);
+      valOf = (p) => pointDensity(p);
+      formatEndVal = (v) => v.toFixed(1);
+      ariaVal = (v) => v.toFixed(1) + ' errors per 100 ' + unit;
+    } else {
+      const maxErr = Math.max(...allPoints.map((p) => p.findings ? p.findings.hard : 0), 1);
+      const axis = computeNiceTicks(maxErr);
+      yTicks = axis.ticks;
+      yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v / axis.max))) * plotH;
+      formatTick = (g) => String(g);
+      valOf = (p) => p.findings ? p.findings.hard : 0;
+      formatEndVal = (v) => String(v);
+      ariaVal = (v) => v + ' errors';
+    }
+
+    const gridLines = yTicks.map((g, idx) => {
+      const y = yAt(g).toFixed(1);
+      const stroke = idx === 0 ? '#cbd5e1' : '#e2e8f0';
+      return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="' + stroke + '" stroke-width="1"/>'
+        + '<text x="' + (padL - 9) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + esc(formatTick(g)) + '</text>';
+    }).join('');
+
+    // Deduplicate version-change markers across repos when timestamps fall in the same scan batch
+    const rawMarkers = [];
+    for (const s of seriesList) {
+      s.points.forEach((p, i) => {
+        if (!p.version_changed) return;
+        const prev = i > 0 ? s.points[i - 1] : null;
+        rawMarkers.push({
+          x: xFor(p, i, s.points.length),
+          label: formatVersionLabel(prev ? prev.judge_version : null, p.judge_version),
+          reasons: p.change_reasons || [],
+        });
+      });
+    }
+    rawMarkers.sort((a, b) => a.x - b.x);
+    const mergedMarkers = [];
+    for (const m of rawMarkers) {
+      const last = mergedMarkers[mergedMarkers.length - 1];
+      if (last && Math.abs(m.x - last.x) <= 36) {
+        if (!last.labels.includes(m.label)) last.labels.push(m.label);
+        for (const r of m.reasons) {
+          if (!last.reasons.includes(r)) last.reasons.push(r);
+        }
+      } else {
+        mergedMarkers.push({ x: m.x, labels: [m.label], reasons: [...m.reasons] });
+      }
+    }
+    const versionLines = mergedMarkers.map((m) => {
+      const x = m.x;
+      const anchor = x > W - padR - 95 ? 'end' : x < padL + 95 ? 'start' : 'middle';
+      const shortLabel = m.labels[0] + (m.labels.length > 1 ? ' (+' + (m.labels.length - 1) + ')' : '');
+      const fullTip = esc(m.reasons.join(' | ') || shortLabel);
+      return '<g>'
+        + '<line x1="' + x.toFixed(1) + '" y1="' + padT + '" x2="' + x.toFixed(1) + '" y2="' + (H - padB) + '" stroke="#d97706" stroke-width="1.4" stroke-dasharray="4 3"/>'
+        + '<text x="' + x.toFixed(1) + '" y="' + (padT - 8) + '" text-anchor="' + anchor + '" font-size="10.5" font-weight="600" fill="#b45309">' + esc(shortLabel) + '<title>Rubric / judge change: ' + fullTip + '</title></text>'
         + '</g>';
     }).join('');
 
-    const step = Math.max(1, Math.ceil(points.length / 6));
-    const xLabels = points.map((p, i) => {
-      if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
-      const x = xAt(i).toFixed(1);
-      return '<text x="' + x + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.commit_short) + '</text>';
+    // Render non-selected repos first so the selected repo sits cleanly on top
+    const orderedSeries = [
+      ...seriesList.filter((s) => s.repo !== selectedRepo),
+      ...seriesList.filter((s) => s.repo === selectedRepo),
+    ];
+
+    const endLabels = [];
+    const seriesMarkup = orderedSeries.map((s) => {
+      const isSelected = s.repo === selectedRepo;
+      const coords = s.points.map((p, i) => ({
+        x: xFor(p, i, s.points.length),
+        y: yAt(valOf(p)),
+        p,
+        i,
+      }));
+      const lineOpacity = isSelected ? '1' : '0.82';
+      const strokeW = isSelected ? '2.8' : '2';
+      const lineParts = [];
+      if (coords.length >= 2) {
+        let seg = [coords[0]];
+        const flushSolid = () => {
+          if (seg.length < 2) return;
+          const pts = seg.map((pt) => pt.x.toFixed(1) + ',' + pt.y.toFixed(1)).join(' ');
+          lineParts.push(
+            '<polyline class="history-series-hit" data-history-repo="' + esc(s.repo) + '" fill="none" stroke="transparent" stroke-width="12" points="' + pts + '"/>'
+            + '<polyline data-comparable-segment="true" fill="none" stroke="' + s.color + '" stroke-opacity="' + lineOpacity + '" stroke-width="' + strokeW + '" stroke-linecap="round" stroke-linejoin="round" points="' + pts + '"/>'
+          );
+        };
+        for (let idx = 1; idx < coords.length; idx += 1) {
+          const prevPt = coords[idx - 1];
+          const currPt = coords[idx];
+          if (isRubricOrVersionBoundary(prevPt.p, currPt.p)) {
+            flushSolid();
+            const bridgeTip = esc(s.repo + ': rubric / judge change between snapshots — not directly comparable');
+            lineParts.push(
+              '<line class="history-series-hit" data-history-repo="' + esc(s.repo) + '" x1="' + prevPt.x.toFixed(1) + '" y1="' + prevPt.y.toFixed(1) + '" x2="' + currPt.x.toFixed(1) + '" y2="' + currPt.y.toFixed(1) + '" stroke="transparent" stroke-width="12"><title>' + bridgeTip + '</title></line>'
+              + '<line data-boundary-crossing="true" x1="' + prevPt.x.toFixed(1) + '" y1="' + prevPt.y.toFixed(1) + '" x2="' + currPt.x.toFixed(1) + '" y2="' + currPt.y.toFixed(1) + '" stroke="#94a3b8" stroke-opacity="0.7" stroke-width="1.5" stroke-dasharray="4 4"><title>' + bridgeTip + '</title></line>'
+            );
+            seg = [currPt];
+          } else {
+            seg.push(currPt);
+          }
+        }
+        flushSolid();
+      }
+      const lines = lineParts.join('');
+
+      if (coords.length > 0) {
+        const last = coords[coords.length - 1];
+        endLabels.push({
+          repo: s.repo,
+          color: s.color,
+          isSelected,
+          x: last.x + 10,
+          y: last.y,
+          text: formatEndVal(valOf(last.p)),
+        });
+      }
+
+      const dots = coords.map((pt) => {
+        const isInspected = isSelected && historyMode === selectedMode && pt.i === selectedRunIdx;
+        const r = isInspected ? 5.8 : (isSelected ? 5 : 4.2);
+        const densityVal = pointDensity(pt.p);
+        const cleanVal = pointCleanRate(pt.p);
+        const targetDenom = pt.p.scored_targets || pt.p.target_count || pt.p.file_count || 0;
+        const tip = esc(
+          s.repo + ' · ' + shortDate(pt.p.timestamp) + ' · ' + pt.p.commit_short + (pt.p.dirty ? ' (dirty)' : '')
+          + '\\nErrors / 100 ' + unit + ': ' + densityVal.toFixed(1) + ' (' + pt.p.findings.hard + ' across ' + targetDenom + ' ' + unit + ')'
+          + '\\nErrors (raw FAIL): ' + pt.p.findings.hard + ' (+' + pt.p.findings.borderline + ' borderline)'
+          + '\\nClean ' + unit + ': ' + pct(cleanVal) + (targetDenom > 0 ? ' (' + pt.p.clean_targets + '/' + targetDenom + ')' : '')
+          + (pt.p.version_changed ? '\\nChange: ' + pt.p.change_reasons.join('; ') : '')
+        );
+        return '<g class="chart-point" role="button" tabindex="0" data-history-point="1" data-history-repo="' + esc(s.repo) + '" data-history-run-idx="' + pt.i + '" aria-label="' + esc(s.repo + ' ' + isoDay(pt.p.timestamp) + ' ' + ariaVal(valOf(pt.p))) + '">'
+          + '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="11" fill="transparent"><title>' + tip + '</title></circle>'
+          + (isInspected ? '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="8.5" fill="none" stroke="' + s.color + '" stroke-opacity="0.32" stroke-width="2"/>' : '')
+          + '<circle cx="' + pt.x.toFixed(1) + '" cy="' + pt.y.toFixed(1) + '" r="' + r + '" fill="' + s.color + '" stroke="#fff" stroke-width="1.6"><title>' + tip + '</title></circle>'
+          + '</g>';
+      }).join('');
+
+      return '<g>' + lines + dots + '</g>';
     }).join('');
 
-    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Pass rate trend chart">'
-      + gridLines + versionLines
-      + polyline((p) => p.raw_pass_rate, '#0d9488', '6 3')
-      + polyline((p) => p.mean_pass_probability, '#7c3aed', '2 4')
-      + polyline((p) => p.calibrated_pass_rate, '#3158cf', '')
-      + dots + xLabels + '</svg>';
+    // Avoid vertical collisions among right-end value labels
+    endLabels.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < endLabels.length; i += 1) {
+      if (endLabels[i].y - endLabels[i - 1].y < 13) {
+        endLabels[i].y = Math.min(H - padB - 2, endLabels[i - 1].y + 13);
+      }
+    }
+    const endLabelSvg = endLabels.map((lbl) =>
+      '<text x="' + Math.min(W - 4, lbl.x).toFixed(1) + '" y="' + (lbl.y + 3.5).toFixed(1) + '" text-anchor="start" font-size="10.5" font-weight="' + (lbl.isSelected ? '700' : '600') + '" fill="' + lbl.color + '">' + esc(lbl.text) + '</text>'
+    ).join('');
+
+    // Build clean, non-overlapping X-axis date ticks across all repos
+    const rawTicks = [];
+    for (const s of seriesList) {
+      s.points.forEach((p, i) => {
+        rawTicks.push({ x: xFor(p, i, s.points.length), timestamp: p.timestamp });
+      });
+    }
+    rawTicks.sort((a, b) => a.x - b.x);
+    const clusters = [];
+    for (const tk of rawTicks) {
+      const last = clusters[clusters.length - 1];
+      if (last && Math.abs(tk.x - last.x) <= 40) continue;
+      clusters.push({ x: tk.x, timestamp: tk.timestamp });
+    }
+    const chosenTicks = [];
+    if (clusters.length <= 6) {
+      for (const c of clusters) {
+        if (chosenTicks.length === 0 || c.x - chosenTicks[chosenTicks.length - 1].x >= 92) {
+          chosenTicks.push(c);
+        }
+      }
+      if (clusters.length >= 2 && chosenTicks[chosenTicks.length - 1] !== clusters[clusters.length - 1]) {
+        const lastCluster = clusters[clusters.length - 1];
+        if (chosenTicks.length > 1 && lastCluster.x - chosenTicks[chosenTicks.length - 1].x < 92) {
+          chosenTicks[chosenTicks.length - 1] = lastCluster;
+        } else if (lastCluster.x - chosenTicks[0].x >= 70) {
+          chosenTicks.push(lastCluster);
+        }
+      }
+    } else {
+      const step = Math.ceil((clusters.length - 1) / 5);
+      for (let i = 0; i < clusters.length; i += step) {
+        chosenTicks.push(clusters[i]);
+      }
+      const lastCluster = clusters[clusters.length - 1];
+      if (chosenTicks[chosenTicks.length - 1] !== lastCluster) {
+        if (lastCluster.x - chosenTicks[chosenTicks.length - 1].x < 92) {
+          chosenTicks[chosenTicks.length - 1] = lastCluster;
+        } else {
+          chosenTicks.push(lastCluster);
+        }
+      }
+    }
+    const dayCounts = {};
+    for (const tk of chosenTicks) {
+      const d = isoDay(tk.timestamp);
+      dayCounts[d] = (dayCounts[d] || 0) + 1;
+    }
+    const hasSameDay = Object.values(dayCounts).some((n) => n > 1);
+    const xLabels = chosenTicks.map((tk, idx) => {
+      const labelText = hasSameDay ? tk.timestamp.replace('T', ' ').slice(5, 16) : isoDay(tk.timestamp);
+      const anchor = idx === 0 && tk.x < padL + 60
+        ? 'start'
+        : (idx === chosenTicks.length - 1 && tk.x > W - padR - 60 ? 'end' : 'middle');
+      return '<text x="' + tk.x.toFixed(1) + '" y="' + (H - 10) + '" text-anchor="' + anchor + '" font-size="10.5" fill="#64748b">' + esc(labelText) + '</text>';
+    }).join('');
+
+    return {
+      hasVersionChanges: mergedMarkers.length > 0,
+      svg: '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Score history chart across repositories">'
+        + gridLines + versionLines + seriesMarkup + endLabelSvg + xLabels + '</svg>',
+    };
+  }
+
+  function showHistoryTooltip(pointEl) {
+    const stage = document.getElementById('history-chart-stage');
+    const tipEl = document.getElementById('history-tooltip');
+    if (!stage || !tipEl || !pointEl) return;
+    const repoName = pointEl.dataset.historyRepo;
+    const runIdx = Number(pointEl.dataset.historyRunIdx);
+    const repoObj = (DATA.repos || []).find((r) => r.name === repoName);
+    const series = repoObj && repoObj.by_mode ? repoObj.by_mode[historyMode] : null;
+    const pt = series && series.points ? series.points[runIdx] : null;
+    if (!pt) return;
+    const color = repoColor(repoName);
+    const unit = historyUnitLabel(historyMode);
+    const densityVal = pointDensity(pt);
+    const cleanVal = pointCleanRate(pt);
+    const targetDenom = pt.scored_targets || pt.target_count || pt.file_count || 0;
+    const changeHtml = pt.version_changed
+      ? '<div class="chart-tooltip-note">Change: ' + esc(pt.change_reasons.join(' · ')) + '</div>'
+      : '';
+    tipEl.innerHTML =
+      '<div class="chart-tooltip-head"><span class="history-legend-dot" style="background:' + color + '"></span><span>' + esc(repoName) + '</span></div>'
+      + '<div class="chart-tooltip-meta">' + esc(shortDate(pt.timestamp)) + ' · ' + esc(pt.commit_short) + (pt.dirty ? ' (dirty)' : '') + ' · ' + esc(pt.judge_version) + '</div>'
+      + '<div class="chart-tooltip-row"><span>Errors / 100 ' + esc(unit) + '</span><strong>' + densityVal.toFixed(1) + '</strong></div>'
+      + '<div class="chart-tooltip-row"><span>Errors (raw FAIL)</span><strong>' + pt.findings.hard + ' (+' + pt.findings.borderline + 'w)</strong></div>'
+      + '<div class="chart-tooltip-row"><span>Clean ' + esc(unit) + '</span><strong>' + pct(cleanVal) + (targetDenom > 0 ? ' (' + pt.clean_targets + '/' + targetDenom + ')' : '') + '</strong></div>'
+      + changeHtml
+      + '<div class="chart-tooltip-hint">Click point to inspect this snapshot</div>';
+    tipEl.hidden = false;
+
+    const stageRect = stage.getBoundingClientRect();
+    const ptRect = pointEl.getBoundingClientRect();
+    const centerX = ptRect.left - stageRect.left + ptRect.width / 2;
+    const topY = ptRect.top - stageRect.top;
+    const tipW = tipEl.offsetWidth || 230;
+    const tipH = tipEl.offsetHeight || 110;
+    let left = centerX + 14;
+    if (left + tipW > stageRect.width - 8) {
+      left = Math.max(8, centerX - tipW - 14);
+    }
+    let top = topY - tipH / 2;
+    top = Math.max(6, Math.min(Math.max(6, stageRect.height - tipH - 6), top));
+    tipEl.style.left = left.toFixed(0) + 'px';
+    tipEl.style.top = top.toFixed(0) + 'px';
+  }
+
+  function hideHistoryTooltip() {
+    const tipEl = document.getElementById('history-tooltip');
+    if (tipEl) tipEl.hidden = true;
+  }
+
+  function renderHistory() {
+    const container = document.getElementById('history-root');
+    if (!container) return;
+    const repos = DATA.repos || [];
+    const modes = DATA.modes_present || [];
+    if (repos.length === 0 || modes.length === 0) {
+      container.innerHTML = '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>';
+      return;
+    }
+    if (!modes.includes(historyMode)) historyMode = defaultHistoryMode();
+
+    const seriesList = repos
+      .map((r) => {
+        const s = r.by_mode && r.by_mode[historyMode];
+        return s && s.points && s.points.length > 0
+          ? { repo: r.name, color: repoColor(r.name), points: s.points, latest: s.latest, previous: s.previous }
+          : null;
+      })
+      .filter(Boolean);
+
+    const hasTrend = seriesList.some((s) => s.points.length >= 2);
+    const unit = historyUnitLabel(historyMode);
+    const densitySub = historyMode === 'structure'
+      ? 'All tracked repos · Errors / 100 (lower is better)'
+      : 'All tracked repos · Errors / 100 ' + unit + ' (lower is better)';
+    const subtitle = historyMetric === 'density'
+      ? densitySub
+      : (historyMetric === 'clean'
+        ? 'All tracked repos · Clean ' + unit + ' with 0 errors (higher is better)'
+        : 'All tracked repos · Open errors (raw FAIL, lower is better)');
+
+    const metricTabs =
+      '<div class="tabs" role="tablist" aria-label="History metric">'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'density' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'density' ? ' active' : '') + '" data-history-metric="density">Errors / 100</button>'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'errors' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'errors' ? ' active' : '') + '" data-history-metric="errors">Errors</button>'
+      + '<button type="button" role="tab" aria-selected="' + (historyMetric === 'clean' ? 'true' : 'false') + '" class="tab-btn' + (historyMetric === 'clean' ? ' active' : '') + '" data-history-metric="clean">Clean %</button>'
+      + '</div>';
+
+    const modeTabs =
+      '<div class="tabs" role="tablist" aria-label="History mode">'
+      + modes.map((m) =>
+        '<button type="button" role="tab" aria-selected="' + (m === historyMode ? 'true' : 'false') + '" class="tab-btn' + (m === historyMode ? ' active' : '') + '" data-history-mode="' + esc(m) + '">' + esc(modeLabel(m)) + '</button>'
+      ).join('')
+      + '</div>';
+
+    const header =
+      '<div class="panel-head" id="history-panel-head">'
+      + '<div><h2>Score history</h2><div class="muted" style="font-size:.8rem">' + esc(subtitle) + '</div></div>'
+      + '<div class="history-controls">'
+      + metricTabs
+      + '<div class="mode-control"><span class="control-label">Mode</span>' + modeTabs + '</div>'
+      + '</div>'
+      + '</div>';
+
+    if (!hasTrend) {
+      const timestamps = seriesList.map((s) => s.latest.timestamp).sort();
+      const firstDay = timestamps.length > 0 ? isoDay(timestamps[0]) : '—';
+      const rightMeta = seriesList.length > 0
+        ? seriesList.length + ' repo' + (seriesList.length === 1 ? '' : 's') + ' · 1 snapshot each'
+        : 'No snapshots in ' + modeLabel(historyMode) + ' mode';
+      container.innerHTML = header
+        + '<div class="single-run-note" id="history-single-run-note" style="margin-bottom:0">'
+        + '<span>First snapshot ' + esc(firstDay) + ' · trend appears after the next run</span>'
+        + '<span class="muted numeric">' + esc(rightMeta) + '</span>'
+        + '</div>';
+      return;
+    }
+
+    const chart = renderMultiRepoHistorySvg(seriesList, historyMetric);
+
+    const legendButtons = seriesList.map((s) => {
+      const isSelected = s.repo === selectedRepo;
+      const crossedBoundary = Boolean(s.previous && isRubricOrVersionBoundary(s.previous, s.latest));
+      let valText;
+      let deltaHtml = '';
+      if (historyMetric === 'density') {
+        const curr = pointDensity(s.latest);
+        valText = curr.toFixed(1) + '/100';
+        if (s.previous && !crossedBoundary) {
+          const dd = curr - pointDensity(s.previous);
+          const cls = dd < -0.05 ? 'tone-good' : dd > 0.05 ? 'tone-bad' : 'muted';
+          const text = Math.abs(dd) < 0.05 ? '±0.0' : (dd > 0 ? '+' + dd.toFixed(1) : dd.toFixed(1));
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + text + '</span>';
+        }
+      } else if (historyMetric === 'clean') {
+        const curr = pointCleanRate(s.latest);
+        valText = pct(curr);
+        if (s.previous && !crossedBoundary) {
+          const dp = (curr - pointCleanRate(s.previous)) * 100;
+          const cls = dp > 0.05 ? 'tone-good' : dp < -0.05 ? 'tone-bad' : 'muted';
+          const text = Math.abs(dp) < 0.05 ? '±0.0pp' : (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp';
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + text + '</span>';
+        }
+      } else {
+        valText = s.latest.findings.hard + ' err';
+        if (s.previous && !crossedBoundary) {
+          const dh = s.latest.findings.hard - s.previous.findings.hard;
+          const cls = dh < 0 ? 'tone-good' : dh > 0 ? 'tone-bad' : 'muted';
+          deltaHtml = '<span class="history-legend-delta ' + cls + '">' + (dh > 0 ? '+' + dh : dh === 0 ? '±0' : String(dh)) + '</span>';
+        }
+      }
+      if (crossedBoundary) {
+        const reasonTip = s.latest.change_reasons && s.latest.change_reasons.length > 0
+          ? s.latest.change_reasons.join('; ')
+          : 'Rubric or judge version changed since previous run';
+        deltaHtml = '<span class="history-legend-delta muted" data-rubric-delta="true" title="' + esc(reasonTip) + '">— rubric Δ</span>';
+      }
+      return '<button type="button" class="history-legend-btn' + (isSelected ? ' selected' : '') + '" data-history-repo="' + esc(s.repo) + '" aria-pressed="' + (isSelected ? 'true' : 'false') + '">'
+        + '<span class="history-legend-dot" style="background:' + s.color + '"></span>'
+        + '<span class="history-legend-name">' + esc(s.repo) + '</span>'
+        + '<span class="history-legend-val">' + esc(valText) + '</span>'
+        + deltaHtml
+        + '</button>';
+    }).join('');
+
+    const versionHint = chart.hasVersionChanges
+      ? '<span class="legend-item muted" style="margin-left:auto;font-size:.75rem"><span class="legend-swatch dashed-amber"></span>Version / rubric change</span>'
+      : '<span class="muted" style="margin-left:auto;font-size:.75rem">Click a repo or point to inspect</span>';
+
+    container.innerHTML = header
+      + '<div class="chart-box history-panel-box">'
+      + '<div class="history-legend">' + legendButtons + versionHint + '</div>'
+      + '<div class="chart-stage" id="history-chart-stage">'
+      + '<div class="svg-wrap">' + chart.svg + '</div>'
+      + '<div class="chart-tooltip" id="history-tooltip" hidden></div>'
+      + '</div>'
+      + '</div>';
   }
 
   function renderFixtureTrendSvg(points) {
-    const W = 820, H = 195, padL = 48, padR = 24, padT = 20, padB = 32;
-    const plotW = W - padL - padR;
+    const W = 820, H = 190, padL = 50, padR = 24, padT = 24, padB = 32;
+    const innerPadX = 18;
+    const xMin = padL + innerPadX;
+    const xMax = W - padR - innerPadX;
     const plotH = H - padT - padB;
-    const xAt = (i) => points.length <= 1 ? padL + plotW / 2 : padL + (i / (points.length - 1)) * plotW;
+    const xAt = (i) => points.length <= 1 ? (xMin + xMax) / 2 : xMin + (i / (points.length - 1)) * (xMax - xMin);
     const yAt = (v) => padT + (1 - Math.max(0, Math.min(1, v))) * plotH;
 
     const grid = [0, 0.5, 1].map((g) => {
@@ -1248,47 +1956,161 @@ const CLIENT_SCRIPT = `
         + '<text x="' + (padL - 8) + '" y="' + (Number(y) + 4) + '" text-anchor="end" font-size="11" fill="#64748b">' + Math.round(g * 100) + '%</text>';
     }).join('');
 
-    const line = (getter, stroke, dash) => {
-      const coords = points.map((p, i) => {
-        const val = getter(p);
-        return typeof val === 'number' && Number.isFinite(val) ? xAt(i).toFixed(1) + ',' + yAt(val).toFixed(1) : null;
-      }).filter(Boolean);
-      if (coords.length < 2) return '';
-      return '<polyline fill="none" stroke="' + stroke + '" stroke-width="2" ' + (dash ? 'stroke-dasharray="' + dash + '"' : '') + ' points="' + coords.join(' ') + '"/>';
-    };
+    const versionLines = renderVersionMarkers(points, xAt, padT, H - padB);
+
+    const coords = points.map((p, i) => xAt(i).toFixed(1) + ',' + yAt(p.check_pass_rate).toFixed(1));
+    const line = coords.length >= 2
+      ? '<polyline fill="none" stroke="#15803d" stroke-width="2.2" points="' + coords.join(' ') + '"/>'
+      : '';
 
     const dots = points.map((p, i) => {
       const x = xAt(i).toFixed(1);
       const yPass = yAt(p.check_pass_rate).toFixed(1);
-      const yJit = typeof p.max_jitter === 'number' ? yAt(p.max_jitter).toFixed(1) : null;
-      const tip = esc(shortDate(p.timestamp) + ' · ' + p.judge_version + '\\nChecks passed: ' + p.checks_passed + '/' + p.checks_total + ' (' + pct(p.check_pass_rate) + ')\\nMin margin: ' + (p.min_margin !== null ? p.min_margin.toFixed(3) : '—') + ' | Max jitter: ' + (p.max_jitter !== null ? p.max_jitter.toFixed(3) : '—'));
-      return (p.version_changed ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#f59e0b" stroke-width="1.3" stroke-dasharray="4 3"/>' : '')
-        + (yJit !== null ? '<circle cx="' + x + '" cy="' + yJit + '" r="3.5" fill="#ea580c" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>' : '')
-        + '<circle cx="' + x + '" cy="' + yPass + '" r="4.5" fill="#15803d" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>';
+      const tip = esc(
+        shortDate(p.timestamp) + ' · ' + p.judge_version
+        + '\\nChecks passed: ' + p.checks_passed + '/' + p.checks_total + ' (' + pct(p.check_pass_rate) + ')'
+        + '\\nMin margin: ' + (p.min_margin !== null ? p.min_margin.toFixed(3) : '—')
+        + ' | Max jitter: ' + (p.max_jitter !== null ? p.max_jitter.toFixed(3) : '—')
+      );
+      return '<circle cx="' + x + '" cy="' + yPass + '" r="4.5" fill="#15803d" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>';
     }).join('');
 
     const step = Math.max(1, Math.ceil(points.length / 6));
     const labels = points.map((p, i) => {
       if (i !== 0 && i !== points.length - 1 && i % step !== 0) return '';
-      return '<text x="' + xAt(i).toFixed(1) + '" y="' + (H - 10) + '" text-anchor="middle" font-size="10.5" fill="#64748b">' + esc(p.timestamp.slice(5, 10) + ' ' + p.judge_version) + '</text>';
+      const x = xAt(i);
+      const anchor = i === 0 ? 'start' : (i === points.length - 1 ? 'end' : 'middle');
+      const shortVer = String(p.judge_version || '').replace(/-\\d+-g[0-9a-f]+$/i, '');
+      return '<text x="' + x.toFixed(1) + '" y="' + (H - 10) + '" text-anchor="' + anchor + '" font-size="10.5" fill="#64748b">' + esc(isoDay(p.timestamp) + (shortVer ? ' · ' + shortVer : '')) + '</text>';
     }).join('');
 
-    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Rubric fixture health trend">'
-      + grid + line((p) => p.check_pass_rate, '#15803d', '') + line((p) => p.max_jitter, '#ea580c', '4 3')
-      + dots + labels + '</svg>';
+    return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Rubric fixture pass rate trend">'
+      + grid + versionLines + line + dots + labels + '</svg>';
   }
 
-  function renderModuleArchitectureSection(repoObj, activeRun) {
-    const codeRun = selectedMode === 'code' && activeRun && activeRun.modules && activeRun.modules.length > 0
-      ? activeRun
-      : (repoObj.by_mode.code && repoObj.by_mode.code.latest && repoObj.by_mode.code.latest.modules.length > 0
-        ? repoObj.by_mode.code.latest
-        : null);
-    if (!codeRun) return '';
+  function renderHeatmap() {
+    const container = document.getElementById('heatmap-root');
+    if (!container) return;
+    const repos = DATA.repos || [];
+    const modes = DATA.modes_present || [];
+    if (repos.length === 0 || modes.length === 0) {
+      container.innerHTML = '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>';
+      return;
+    }
+    if (!DATA.heatmaps[heatmapMode]) heatmapMode = modes[0];
+    const map = DATA.heatmaps[heatmapMode];
+    const latestTag = DATA.catalog && DATA.catalog.agent_tooling ? DATA.catalog.agent_tooling.latest_tag : null;
+    const groups = [...new Set(map.rows.map((r) => r.rubric_slug).filter(Boolean))].sort();
+    const visibleRows = map.rows.filter((r) => {
+      if (heatGroup && r.rubric_slug !== heatGroup) return false;
+      if (heatSearch) {
+        const q = heatSearch.toLowerCase();
+        return r.check_id.toLowerCase().includes(q) || (r.rubric_slug || '').toLowerCase().includes(q);
+      }
+      return true;
+    });
 
-    const allModules = codeRun.modules || [];
+    const modeTabs = modes.map((m) =>
+      '<button type="button" role="tab" aria-selected="' + (m === heatmapMode ? 'true' : 'false') + '" class="tab-btn' + (m === heatmapMode ? ' active' : '') + '" data-heat-mode="' + esc(m) + '">' + esc(modeLabel(m)) + '</button>'
+    ).join('');
+    const groupOptions = '<option value="">All rubrics</option>' + groups.map((g) =>
+      '<option value="' + esc(g) + '"' + (g === heatGroup ? ' selected' : '') + '>' + esc(g) + '</option>'
+    ).join('');
+
+    const headerCols = repos.map((repo) => {
+      const isSelected = repo.name === selectedRepo;
+      const errSummary = repo.total_findings.total === 0
+        ? '<span class="pill pass">clean</span>'
+        : (repo.total_findings.hard > 0
+          ? '<span class="num-err">' + repo.total_findings.hard + ' err</span>' + (repo.total_findings.borderline > 0 ? '<span class="num-sub">+' + repo.total_findings.borderline + 'w</span>' : '')
+          : '<span class="muted numeric">0 err</span><span class="num-sub">+' + repo.total_findings.borderline + 'w</span>');
+      const modeCoverage = repo.modes.length + ' ' + (repo.modes.length === 1 ? 'mode' : 'modes') + ' · last run ' + isoDay(repo.latest_timestamp);
+      const outdatedBadge = repo.installed_status === 'outdated' && repo.installed_judge_code
+        ? '<div><span class="pill warn" title="Installed judge-code skill is outdated">judge-code ' + esc(repo.installed_judge_code.ref || 'outdated') + (latestTag ? ' → ' + esc(latestTag) : '') + '</span></div>'
+        : '';
+      return '<th class="heat-repo-th' + (isSelected ? ' heat-col-selected' : '') + '">'
+        + '<button type="button" class="repo-col-btn' + (isSelected ? ' selected' : '') + '" data-pick-repo="' + esc(repo.name) + '" aria-pressed="' + (isSelected ? 'true' : 'false') + '">'
+        + '<div class="repo-col-title"><span class="repo-col-name">' + esc(repo.name) + '</span><span>' + errSummary + '</span></div>'
+        + '<div class="repo-col-meta"><code>' + esc(repo.latest_commit_short) + '</code>' + (repo.latest_dirty ? ' <span class="pill warn">dirty</span>' : '') + ' · ' + esc(modeCoverage) + '</div>'
+        + outdatedBadge
+        + '</button></th>';
+    }).join('');
+
+    const bodyRows = visibleRows.map((row) => {
+      const label = row.instructions
+        ? '<span class="tip-wrap"><span class="tip-trigger" tabindex="0">' + esc(row.check_id) + '</span><div class="tip-card"><strong>' + esc(row.instructions) + '</strong><div class="tip-pass"><strong>Pass:</strong> ' + esc(row.pass_criteria) + '</div><div class="tip-fail"><strong>Fail:</strong> ' + esc(row.fail_criteria) + '</div></div></span>'
+        : '<code>' + esc(row.check_id) + '</code>';
+      const cells = repos.map((repo) => {
+        const rName = repo.name;
+        const isColSel = rName === selectedRepo;
+        const c = row.by_repo[rName];
+        if (!c) return '<td class="numeric muted' + (isColSel ? ' heat-col-selected' : '') + '">—</td>';
+        const col = heatCellStyle(c);
+        const isActiveCell = isColSel && selectedMode === heatmapMode && activeRule === row.check_id;
+        let topLine;
+        let subLine;
+        if (c.hard_failed > 0) {
+          topLine = c.hard_failed + ' err';
+          subLine = (c.borderline_failed > 0 ? '+' + c.borderline_failed + 'w · ' : '') + 'of ' + c.total;
+        } else if (c.borderline_failed > 0) {
+          topLine = '0 err';
+          subLine = '+' + c.borderline_failed + 'w · of ' + c.total;
+        } else {
+          topLine = 'clean';
+          subLine = 'P=' + (c.mean_pass_probability !== null ? c.mean_pass_probability.toFixed(2) : '—');
+        }
+        const tip = rName + ' · ' + row.check_id + ': ' + c.hard_failed + ' errors, ' + c.borderline_failed + ' borderline of ' + c.total + ' (mean P ' + pct(c.mean_pass_probability) + ')';
+        return '<td class="numeric' + (isColSel ? ' heat-col-selected' : '') + '">'
+          + '<button type="button" class="heat-cell-btn' + (isActiveCell ? ' heat-cell-active' : '') + '" style="background:' + col.bg + ';color:' + col.fg + '" '
+          + 'data-heat-cell-repo="' + esc(rName) + '" data-heat-cell-rule="' + esc(row.check_id) + '" data-heat-cell-mode="' + esc(heatmapMode) + '" '
+          + 'aria-pressed="' + (isActiveCell ? 'true' : 'false') + '" title="' + esc(tip) + '">'
+          + '<strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span>'
+          + '</button></td>';
+      }).join('');
+      return '<tr><td>' + label + (row.rubric_slug ? ' <span class="muted" style="font-size:.74rem">' + esc(row.rubric_slug) + '</span>' : '') + '</td><td class="numeric">' + renderThresholdCell(row.threshold) + '</td>' + cells + '</tr>';
+    }).join('');
+
+    container.innerHTML =
+      '<div class="controls" id="heatmap-controls">'
+      + '<div class="mode-control"><span class="control-label">Mode</span><div class="tabs" role="tablist" aria-label="Heatmap mode">' + modeTabs + '</div></div>'
+      + '<select id="heat-group-select" aria-label="Filter rubric group">' + groupOptions + '</select>'
+      + '<input type="search" id="heat-search-input" placeholder="Search rule ID..." value="' + esc(heatSearch) + '">'
+      + '<span class="muted numeric" style="margin-left:auto">' + visibleRows.length + ' of ' + map.rows.length + ' rules</span>'
+      + '</div>'
+      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th>' + headerCols + '</tr></thead><tbody>' + bodyRows + '</tbody></table></div>';
+  }
+
+  function renderRulesBreakdownCard(run, checkEntries) {
+    const checkRows = checkEntries.map(([cid, c]) => {
+      const fc = countCheckSummaryFindings(c);
+      const isActive = activeRule === cid;
+      return '<tr class="rule-pick-row' + (isActive ? ' active-rule-row' : '') + '" role="button" tabindex="0" aria-pressed="' + (isActive ? 'true' : 'false') + '" data-filter-rule="' + esc(cid) + '">'
+        + '<td class="rule-name-cell">' + checkLabelWithTip(cid) + (c.rubric_group ? '<span class="rule-slug-sub">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
+        + '<td class="numeric num-col">' + renderThresholdCell(c.threshold) + '</td>'
+        + '<td class="numeric num-col">' + (fc.hard > 0 ? '<span class="num-err">' + fc.hard + '</span><span class="num-sub">/' + c.total + '</span>' : '<span class="muted">0</span>') + '</td>'
+        + '<td class="numeric num-col">' + (fc.borderline > 0 ? '<span class="muted">' + fc.borderline + '</span>' : '<span class="muted">0</span>') + '</td>'
+        + '<td class="numeric num-col">' + (typeof c.min_pass_probability === 'number' ? c.min_pass_probability.toFixed(2) : '—') + '</td>'
+        + '<td class="numeric num-col">' + pct(c.mean_pass_probability) + '</td>'
+        + '</tr>';
+    }).join('');
+
+    const failingCount = checkEntries.filter(([, c]) => c.passed < c.total).length;
+    return '<div class="sub-card" id="worst-rules-card">'
+      + '<div class="panel-head"><h3>Worst-offending rules (' + failingCount + ' failing / ' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(isoDay(run.timestamp)) + ' · <code>' + esc(run.commit_short) + '</code></span></div>'
+      + '<div class="table-scroll"><table class="rules-table"><thead><tr><th>Rule</th><th class="num-col" title="Pass threshold">Thr</th><th class="num-col" title="Raw FAIL errors">Err</th><th class="num-col" title="Borderline warnings">Warn</th><th class="num-col">Min P</th><th class="num-col">Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
+      + '</div>';
+  }
+
+  function renderModuleArchitectureView(repoObj, run) {
+    if (!run || !run.modules || run.modules.length === 0) {
+      return '<div class="quiet-note" id="module-architecture-slot"><span>Module architecture checks are off. Add <code>modules</code> / <code>moduleRoots</code> to enable.</span></div>';
+    }
+    const allModules = run.modules;
     const filtered = allModules.filter((m) => {
       if (moduleFailingOnly && m.status === 'scored' && m.failed_count === 0) return false;
+      if (activeRule) {
+        return (m.failing_checks || []).some((c) => c.check_id === activeRule);
+      }
       if (moduleSearch) {
         const q = moduleSearch.toLowerCase();
         const checkIds = (m.failing_checks || []).map((c) => c.check_id).join(' ').toLowerCase();
@@ -1305,7 +2127,7 @@ const CLIENT_SCRIPT = `
       if (m.file_count > 0) sizeBits.push(m.file_count + ' file' + (m.file_count === 1 ? '' : 's'));
       const kb = fmtKiB(m.bytes);
       if (kb) sizeBits.push(kb);
-      const subMeta = '<div class="muted" style="font-size:.75rem"><code>' + esc(m.path) + '</code>' + (sizeBits.length ? ' · ' + esc(sizeBits.join(' · ')) : '') + '</div>';
+      const subMeta = '<div class="muted" style="font-size:.74rem"><code>' + esc(m.path) + '</code>' + (sizeBits.length ? ' · ' + esc(sizeBits.join(' · ')) : '') + '</div>';
 
       let statusCell;
       let detailCell;
@@ -1314,15 +2136,17 @@ const CLIENT_SCRIPT = `
         detailCell = '<span class="muted">' + esc(m.error || 'Skipped during scan') + '</span>';
       } else if (m.status === 'error') {
         statusCell = '<span class="pill fail">error</span>';
-        detailCell = '<span class="tone-bad" style="font-size:.82rem">' + esc(m.error || 'Module scan failed') + '</span>';
+        detailCell = '<span class="tone-bad" style="font-size:.8rem">' + esc(m.error || 'Module scan failed') + '</span>';
       } else if (m.failed_count === 0) {
-        statusCell = '<span class="pill pass">0 clean</span>';
-        detailCell = '<span class="pill pass">all ' + m.total_checks + ' architectural checks passed</span>';
+        statusCell = '<span class="pill pass">clean</span>';
+        detailCell = '<span class="muted">All ' + m.total_checks + ' architectural checks passed</span>';
       } else {
-        statusCell = renderFindingsPills({ total: m.failed_count, hard: m.hard_fail_count, borderline: m.borderline_count });
-        detailCell = '<div class="fail-chips">' + m.failing_checks.map((c) =>
-          renderFindingChip(c.check_id, c.severity, c.pass_probability, c.threshold)
-        ).join('') + '</div>';
+        statusCell = renderErrorsInline({ total: m.failed_count, hard: m.hard_fail_count, borderline: m.borderline_count });
+        detailCell = '<div class="rule-tags">' + m.failing_checks.map((c) => {
+          const cls = 'rule-tag ' + (c.severity === 'hard' ? 'rule-tag-hard' : 'rule-tag-borderline') + (activeRule === c.check_id ? ' rule-tag-active' : '');
+          const pText = typeof c.pass_probability === 'number' ? c.pass_probability.toFixed(2) : 'fail';
+          return '<button type="button" class="' + cls + '" data-filter-rule="' + esc(c.check_id) + '" aria-pressed="' + (activeRule === c.check_id ? 'true' : 'false') + '" title="' + esc(c.severity === 'hard' ? 'Error (raw FAIL)' : 'Borderline (P < ' + c.threshold.toFixed(2) + ')') + '">' + esc(c.check_id) + ' (' + esc(pText) + ')</button>';
+        }).join('') + '</div>';
       }
 
       return '<tr>'
@@ -1333,18 +2157,23 @@ const CLIENT_SCRIPT = `
         + '</tr>';
     }).join('');
 
-    const summaryPills = [
-      renderFindingsPills(codeRun.findings),
-      '<span class="pill neutral">' + codeRun.modules_scored + '/' + allModules.length + ' scored</span>',
-    ];
-    if (codeRun.modules_skipped > 0) summaryPills.push('<span class="pill warn">' + codeRun.modules_skipped + ' skipped</span>');
-    if (codeRun.modules_errored > 0) summaryPills.push('<span class="pill fail">' + codeRun.modules_errored + ' errored</span>');
+    const statusSummary = [
+      run.modules_scored + '/' + allModules.length + ' scored',
+      run.modules_skipped > 0 ? run.modules_skipped + ' skipped' : null,
+      run.modules_errored > 0 ? run.modules_errored + ' errored' : null,
+    ].filter(Boolean).join(' · ');
+
+    const checkEntries = Object.entries(run.checks || {}).sort((a, b) => {
+      const fa = countCheckSummaryFindings(a[1]);
+      const fb = countCheckSummaryFindings(b[1]);
+      return (fb.hard - fa.hard) || (fb.total - fa.total) || ((a[1].min_pass_probability ?? 1) - (b[1].min_pass_probability ?? 1)) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    });
 
     return '<div class="arch-card" id="module-architecture-section">'
       + '<div class="panel-head">'
       + '<div><h3>Feature / Module Architecture (' + allModules.length + ' module' + (allModules.length === 1 ? '' : 's') + ')</h3>'
-      + '<div class="muted" style="font-size:.78rem">Ranked worst-first · errors (raw FAIL) vs. warnings (threshold borderline) · ' + esc(shortDate(codeRun.timestamp)) + ' · <code>' + esc(codeRun.commit_short) + '</code></div></div>'
-      + '<div class="badge-row">' + summaryPills.join(' ') + '</div>'
+      + '<div class="muted numeric" style="font-size:.78rem">' + esc(statusSummary) + ' · ' + esc(isoDay(run.timestamp)) + ' · <code>' + esc(run.commit_short) + '</code></div></div>'
+      + '<div class="numeric">' + renderErrorsInline(run.findings) + '</div>'
       + '</div>'
       + '<div class="controls" style="margin-bottom:10px">'
       + '<input type="search" id="module-search-input" placeholder="Filter module, path, or rule..." value="' + esc(moduleSearch) + '">'
@@ -1352,236 +2181,199 @@ const CLIENT_SCRIPT = `
       + '<span class="muted numeric" style="margin-left:auto">' + filtered.length + ' of ' + allModules.length + ' shown</span>'
       + '</div>'
       + (filtered.length > 0
-        ? '<div class="table-scroll"><table><thead><tr><th>Module</th><th>Findings / Status</th><th>Min P</th><th>Failing architectural checks</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        ? '<div class="table-scroll"><table><thead><tr><th>Module</th><th>Errors</th><th>Min P</th><th>Failing architectural checks</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         : '<p class="muted">No modules match the current filter.</p>')
-      + '</div>';
+      + '</div>'
+      + (checkEntries.length > 0 ? renderRulesBreakdownCard(run, checkEntries) : '');
   }
 
   function renderRepoDetail() {
     const container = document.getElementById('repo-detail-root');
     if (!container) return;
     const sel = ensureSelection();
-    if (!sel || !sel.series || !sel.run) {
+    if (!sel) {
       container.innerHTML = '<div class="empty-state">No repository snapshots recorded yet. Run <code>pnpm rubrics:scan --config &lt;config.json&gt;</code> to populate snapshots.</div>';
       return;
     }
     const { repoObj, series, run } = sel;
 
-    document.querySelectorAll('.repo-row').forEach((tr) => {
-      tr.classList.toggle('selected', tr.dataset.repo === repoObj.name);
-    });
-
-    const repoTabs = DATA.repos.map((r) =>
-      '<button type="button" class="tab-btn' + (r.name === repoObj.name ? ' active' : '') + '" data-pick-repo="' + esc(r.name) + '">' + esc(r.name)
-      + (r.total_findings.total > 0 ? ' (' + r.total_findings.total + ')' : '') + '</button>'
-    ).join('');
-    const modeTabs = repoObj.modes.map((m) => {
-      const mLatest = repoObj.by_mode[m].latest;
-      const label = m === 'code' ? 'modules (code)' : m;
-      return '<button type="button" class="tab-btn' + (m === selectedMode ? ' active' : '') + '" data-pick-mode="' + esc(m) + '">' + esc(label)
-        + ' · ' + mLatest.findings.total + '</button>';
+    const availableModes = [...repoObj.modes];
+    if (!availableModes.includes('code')) availableModes.push('code');
+    const modeTabs = availableModes.map((m) => {
+      const mSeries = repoObj.by_mode[m];
+      const isSelected = m === selectedMode;
+      const errCount = mSeries ? mSeries.latest.findings.hard : null;
+      const suffix = errCount === null ? '' : (errCount > 0 ? ' · ' + errCount : '');
+      return '<button type="button" role="tab" aria-selected="' + (isSelected ? 'true' : 'false') + '" class="tab-btn' + (isSelected ? ' active' : '') + (!mSeries ? ' tab-muted' : '') + '" data-pick-mode="' + esc(m) + '">' + esc(modeLabel(m)) + esc(suffix) + '</button>';
     }).join('');
 
-    const punchTiles =
-      '<div class="punch-summary">'
-      + '<div class="punch-tile"><div class="punch-tile-label">Repo open findings</div><div class="punch-tile-val">' + renderFindingsPills(repoObj.total_findings) + '</div><div class="punch-tile-sub">Latest across ' + repoObj.modes.length + ' mode(s)</div></div>'
-      + '<div class="punch-tile"><div class="punch-tile-label">File checks</div><div class="punch-tile-val">' + (repoObj.file_findings ? renderFindingsPills(repoObj.file_findings) : '<span class="muted">—</span>') + '</div><div class="punch-tile-sub">' + (repoObj.by_mode.file ? repoObj.by_mode.file.latest.affected_targets + '/' + repoObj.by_mode.file.latest.file_count + ' files with findings' : 'Not scanned') + '</div></div>'
-      + '<div class="punch-tile"><div class="punch-tile-label">Module architecture</div><div class="punch-tile-val">' + (repoObj.module_findings ? renderFindingsPills(repoObj.module_findings) : '<span class="muted">—</span>') + '</div><div class="punch-tile-sub">' + (repoObj.module_architecture ? repoObj.module_architecture.modules_with_findings + '/' + repoObj.module_architecture.total_modules + ' modules affected' + (repoObj.module_architecture.skipped_modules > 0 ? ' · ' + repoObj.module_architecture.skipped_modules + ' skipped' : '') : 'Add modules/moduleRoots to enable') + '</div></div>'
-      + '<div class="punch-tile"><div class="punch-tile-label">Worst offending rules</div><div class="punch-tile-val" style="font-size:.82rem">'
-      + (repoObj.worst_rules && repoObj.worst_rules.length > 0
-        ? '<div class="fail-chips">' + repoObj.worst_rules.slice(0, 3).map((wr) =>
-            '<span class="fail-chip ' + (wr.hard > 0 ? 'fail-chip-hard' : 'fail-chip-borderline') + '">' + esc(wr.check_id) + ' (' + wr.failed + ')</span>'
-          ).join('') + '</div>'
-        : '<span class="pill pass">all rules clean</span>')
-      + '</div><div class="punch-tile-sub">' + (repoObj.worst_rules ? repoObj.worst_rules.length + ' failing rule(s) total' : '') + '</div></div>'
+    const runMeta = series && run
+      ? ' · Run ' + (selectedRunIdx + 1) + '/' + series.points.length + ' · ' + esc(run.model)
+      : '';
+    const headerMeta = '<code>' + esc(run ? run.commit_short : repoObj.latest_commit_short) + '</code>'
+      + ((run ? run.dirty : repoObj.latest_dirty) ? ' <span class="pill warn">dirty</span>' : '')
+      + ((run ? run.branch : repoObj.latest_branch) ? ' · ' + esc(run ? run.branch : repoObj.latest_branch) : '')
+      + ' · ' + repoObj.modes.length + ' ' + (repoObj.modes.length === 1 ? 'mode' : 'modes')
+      + ' · ' + esc(isoDay(run ? run.timestamp : repoObj.latest_timestamp))
+      + runMeta;
+
+    const detailHeader =
+      '<div class="panel-head" id="detail-panel-head">'
+      + '<div><h2>' + esc(repoObj.name) + '</h2><div class="muted numeric" style="font-size:.79rem;margin-top:2px">' + headerMeta + '</div></div>'
+      + '<div class="mode-control" id="detail-mode-bar"><span class="control-label">Mode</span><div class="tabs" role="tablist" aria-label="Select inspection mode">' + modeTabs + '</div></div>'
       + '</div>';
 
-    const versionBanner = run.version_changed
-      ? '<div class="version-banner"><strong>Rubric / judge change at this run:</strong> ' + esc(run.change_reasons.join(' · ')) + ' <span class="muted">(deltas vs previous run reflect rubric/judge changes as well as code changes)</span></div>'
+    if (!series || !run) {
+      container.innerHTML = detailHeader
+        + '<div class="quiet-note" id="module-architecture-slot"><span>Module architecture checks are off. Add <code>modules</code> / <code>moduleRoots</code> to enable.</span></div>';
+      return;
+    }
+
+    const activeRuleBanner = activeRule
+      ? '<div class="filter-banner" id="active-rule-banner"><span>Filtered by rule <code>' + esc(activeRule) + '</code></span><button type="button" class="clear-btn" data-clear-rule>Clear filter &times;</button></div>'
       : '';
 
-    const filteredFiles = run.files.filter((f) => {
-      if (failingOnly && selectedMode === 'file' && f.failed_count === 0) return false;
-      if (fileSearch) {
-        const q = fileSearch.toLowerCase();
-        const failedIds = Object.keys(f.checks).filter((k) => f.checks[k].choice === 'fail').join(' ').toLowerCase();
-        return f.path.toLowerCase().includes(q) || failedIds.includes(q);
-      }
-      return true;
-    });
+    const historicalRunBanner = selectedRunIdx < series.points.length - 1
+      ? '<div class="hist-run-banner"><span>Inspecting historical snapshot <strong>Run ' + (selectedRunIdx + 1) + '/' + series.points.length + '</strong> (' + esc(shortDate(run.timestamp)) + ' · <code>' + esc(run.commit_short) + '</code>)</span><button type="button" class="clear-btn" data-select-run="' + (series.points.length - 1) + '">Jump to latest</button></div>'
+      : '';
 
-    const hotspotRows = filteredFiles.slice(0, 40).map((f) => {
-      const fc = countFileFindings(f.checks);
-      const failedChecks = Object.entries(f.checks)
-        .filter(([, c]) => c.choice === 'fail')
-        .sort((a, b) =>
-          (Number(classifyScore(b[1]) === 'hard') - Number(classifyScore(a[1]) === 'hard'))
-          || ((a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0))
-          || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
-        );
-      const chips = failedChecks.length > 0
-        ? '<div class="fail-chips">' + failedChecks.map(([cid, c]) => {
+    const versionBanner = run.version_changed
+      ? '<div class="version-banner"><strong>Rubric / judge change at this snapshot:</strong> ' + esc(run.change_reasons.join(' · ')) + '</div>'
+      : '';
+
+    let modeBody = '';
+    if (selectedMode === 'code') {
+      modeBody = renderModuleArchitectureView(repoObj, run);
+    } else {
+      const checkEntries = Object.entries(run.checks).sort((a, b) => {
+        const fa = countCheckSummaryFindings(a[1]);
+        const fb = countCheckSummaryFindings(b[1]);
+        return (fb.hard - fa.hard)
+          || (fb.total - fa.total)
+          || ((a[1].min_pass_probability ?? 1) - (b[1].min_pass_probability ?? 1))
+          || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+      });
+
+      const filteredFiles = run.files.filter((f) => {
+        if (activeRule) {
+          return Boolean(f.checks && f.checks[activeRule] && f.checks[activeRule].choice === 'fail');
+        }
+        if (failingOnly && selectedMode === 'file' && f.failed_count === 0) return false;
+        if (fileSearch) {
+          const q = fileSearch.toLowerCase();
+          const failedIds = Object.keys(f.checks).filter((k) => f.checks[k].choice === 'fail').join(' ').toLowerCase();
+          return f.path.toLowerCase().includes(q) || failedIds.includes(q);
+        }
+        return true;
+      });
+
+      const prefix = sharedPathPrefix(run.files.map((f) => f.path));
+      const visibleFiles = showAllFiles ? filteredFiles : filteredFiles.slice(0, DEFAULT_HOTSPOT_LIMIT);
+
+      const hotspotRows = visibleFiles.map((f) => {
+        const fc = countFileFindings(f.checks);
+        const failedChecks = Object.entries(f.checks)
+          .filter(([, c]) => c.choice === 'fail')
+          .sort((a, b) =>
+            (Number(b[0] === activeRule) - Number(a[0] === activeRule))
+            || ((a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0))
+            || (Number(classifyScore(b[1]) === 'hard') - Number(classifyScore(a[1]) === 'hard'))
+            || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
+          );
+
+        let rulesCell;
+        if (failedChecks.length === 0) {
+          rulesCell = '<span class="pill pass">clean</span>';
+        } else {
+          const isExpanded = expandedFiles.has(f.path);
+          const shownChecks = isExpanded ? failedChecks : failedChecks.slice(0, MAX_VISIBLE_RULE_TAGS);
+          const remaining = failedChecks.length - shownChecks.length;
+          const tags = shownChecks.map(([cid, c]) => {
+            const sev = classifyScore(c) || 'hard';
             const thr = run.checks[cid] ? run.checks[cid].threshold : 0.8;
-            return renderFindingChip(cid, classifyScore(c) || 'hard', c.pass_probability, thr);
-          }).join('') + '</div>'
-        : '<span class="pill pass">all checks passed</span>';
-      return '<tr>'
-        + '<td><code>' + esc(f.path) + '</code></td>'
-        + '<td class="numeric">' + renderFindingsPills(fc) + '</td>'
-        + '<td class="numeric">' + (typeof f.min_pass_probability === 'number' ? f.min_pass_probability.toFixed(2) : '—') + '</td>'
-        + '<td>' + chips + '</td>'
-        + '</tr>';
-    }).join('');
+            const pText = typeof c.pass_probability === 'number' ? c.pass_probability.toFixed(2) : 'fail';
+            const cls = 'rule-tag ' + (sev === 'hard' ? 'rule-tag-hard' : 'rule-tag-borderline') + (activeRule === cid ? ' rule-tag-active' : '');
+            const title = (sev === 'hard' ? 'Error (raw FAIL, P=' + pText + ')' : 'Borderline (P=' + pText + ' < ' + thr.toFixed(2) + ')') + ' — click to filter';
+            return '<button type="button" class="' + cls + '" data-filter-rule="' + esc(cid) + '" aria-pressed="' + (activeRule === cid ? 'true' : 'false') + '" title="' + esc(title) + '">' + esc(cid) + '</button>';
+          });
+          if (remaining > 0) {
+            tags.push('<button type="button" class="rule-tag rule-tag-more" data-expand-file="' + esc(f.path) + '" aria-expanded="false">+' + remaining + ' more</button>');
+          } else if (isExpanded && failedChecks.length > MAX_VISIBLE_RULE_TAGS) {
+            tags.push('<button type="button" class="rule-tag rule-tag-more" data-expand-file="' + esc(f.path) + '" aria-expanded="true">show fewer</button>');
+          }
+          rulesCell = '<div class="rule-tags">' + tags.join('') + '</div>';
+        }
 
-    const checkEntries = Object.entries(run.checks).sort((a, b) => {
-      const fa = countCheckSummaryFindings(a[1]);
-      const fb = countCheckSummaryFindings(b[1]);
-      return (fb.hard - fa.hard)
-        || (fb.total - fa.total)
-        || ((a[1].min_pass_probability ?? 1) - (b[1].min_pass_probability ?? 1))
-        || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
-    });
-    const checkRows = checkEntries.map(([cid, c]) => {
-      const fc = countCheckSummaryFindings(c);
-      const thrBadge = Math.abs(c.threshold - 0.8) > 1e-9
-        ? '<span class="pill warn">&ge;' + c.threshold.toFixed(2) + '</span>'
-        : '<span class="pill neutral">&ge;' + c.threshold.toFixed(2) + '</span>';
-      return '<tr>'
-        + '<td>' + checkLabelWithTip(cid) + (c.rubric_group ? ' <span class="muted" style="font-size:.75rem">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
-        + '<td class="numeric">' + thrBadge + '</td>'
-        + '<td class="numeric">' + (fc.total > 0 ? '<strong>' + fc.total + '/' + c.total + '</strong>' : '<span class="muted">0/' + c.total + '</span>') + '</td>'
-        + '<td class="numeric">' + renderFindingsPills(fc) + '</td>'
-        + '<td class="numeric">' + (typeof c.min_pass_probability === 'number' ? c.min_pass_probability.toFixed(2) : '—') + '</td>'
-        + '<td class="numeric">' + pct(c.mean_pass_probability) + '</td>'
-        + '</tr>';
-    }).join('');
+        return '<tr>'
+          + '<td class="file-path-cell">' + renderShortPath(f.path, prefix) + '</td>'
+          + '<td class="numeric">' + renderErrorsInline(fc) + '</td>'
+          + '<td class="numeric">' + (typeof f.min_pass_probability === 'number' ? f.min_pass_probability.toFixed(2) : '—') + '</td>'
+          + '<td>' + rulesCell + '</td>'
+          + '</tr>';
+      }).join('');
+
+      const toggleMoreFooter = filteredFiles.length > DEFAULT_HOTSPOT_LIMIT
+        ? '<div class="hotspot-footer">'
+          + '<span class="numeric">Showing ' + visibleFiles.length + ' of ' + filteredFiles.length + ' matching files</span>'
+          + '<button type="button" class="link-btn" data-toggle-all-files>' + (showAllFiles ? 'Show top ' + DEFAULT_HOTSPOT_LIMIT : 'Show all ' + filteredFiles.length) + '</button>'
+          + '</div>'
+        : '';
+
+      const hotspotCard = '<div class="sub-card" id="hotspots-card">'
+        + '<div class="panel-head">'
+        + '<div><h3>Hotspot ' + (selectedMode === 'structure' ? 'targets' : 'files') + ' (' + filteredFiles.length + ' / ' + run.files.length + ')</h3>'
+        + (prefix ? '<div class="muted" style="font-size:.73rem">Base: <code>' + esc(prefix) + '</code></div>' : '')
+        + '</div>'
+        + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        + '<input type="search" id="file-search-input" placeholder="Filter path or rule..." value="' + esc(fileSearch) + '">'
+        + (selectedMode === 'file' ? '<label class="toggle"><input type="checkbox" id="failing-only-toggle"' + (failingOnly ? ' checked' : '') + '> Failing only</label>' : '')
+        + '</div></div>'
+        + (filteredFiles.length > 0
+          ? '<div class="table-scroll"><table><thead><tr><th>Target</th><th>Errors</th><th>Min P</th><th>Failing rules</th></tr></thead><tbody>' + hotspotRows + '</tbody></table></div>' + toggleMoreFooter
+          : '<p class="muted">' + (activeRule
+            ? 'No files failed <code>' + esc(activeRule) + '</code> in this snapshot.'
+            : (failingOnly && selectedMode === 'file' && !fileSearch && run.files.length > 0
+              ? 'All ' + run.files.length + ' file(s) passed every check. Uncheck "Failing only" to inspect all files.'
+              : 'No targets match the current filter.')) + '</p>')
+        + '</div>';
+
+      const moduleSetupNote = !repoObj.module_architecture
+        ? '<div class="quiet-note" id="module-architecture-slot"><span>Module architecture checks are off. Add <code>modules</code> / <code>moduleRoots</code> to enable.</span></div>'
+        : '';
+
+      modeBody = '<div class="split-grid">'
+        + renderRulesBreakdownCard(run, checkEntries)
+        + hotspotCard
+        + '</div>'
+        + moduleSetupNote;
+    }
 
     const runRows = [...series.points].reverse().map((p, revIdx) => {
       const idx = series.points.length - 1 - revIdx;
-      const df = p.delta_findings;
-      const dClass = df === null ? 'neutral' : df < 0 ? 'pass' : df > 0 ? 'fail' : 'neutral';
-      const dText = df === null ? '—' : (df > 0 ? '+' + df : String(df));
-      return '<tr class="run-row' + (idx === selectedRunIdx ? ' active-run' : '') + '" data-select-run="' + idx + '">'
+      const dh = typeof p.delta_hard_fails === 'number' ? p.delta_hard_fails : null;
+      const deltaCell = p.version_changed
+        ? '<span class="muted" title="' + esc(p.change_reasons.join('; ')) + '">—</span> <span class="pill warn" title="' + esc(p.change_reasons.join('; ')) + '">rubric &Delta;</span>'
+        : '<span class="' + (dh === null ? 'muted' : dh < 0 ? 'num-ok' : dh > 0 ? 'num-err' : 'muted') + '">' + esc(dh === null ? '—' : (dh > 0 ? '+' + dh : String(dh))) + '</span>';
+      return '<tr class="run-row' + (idx === selectedRunIdx ? ' active-run' : '') + '" role="button" tabindex="0" aria-pressed="' + (idx === selectedRunIdx ? 'true' : 'false') + '" data-select-run="' + idx + '">'
         + '<td class="numeric">' + esc(shortDate(p.timestamp)) + '</td>'
         + '<td><code>' + esc(p.commit_short) + '</code>' + (p.dirty ? ' <span class="pill warn">dirty</span>' : '') + (p.branch ? ' <span class="muted">' + esc(p.branch) + '</span>' : '') + '</td>'
         + '<td class="numeric">' + (selectedMode === 'code' && p.modules.length > 0 ? p.modules_scored + '/' + p.modules.length + ' mod' : p.file_count) + '</td>'
-        + '<td class="numeric">' + renderFindingsPills(p.findings) + '</td>'
-        + '<td class="numeric"><span class="pill ' + dClass + '">' + esc(dText) + '</span>' + (p.version_changed ? ' <span class="pill warn" title="' + esc(p.change_reasons.join('; ')) + '">rubric &Delta;</span>' : '') + '</td>'
+        + '<td class="numeric">' + (p.findings.hard > 0 ? '<span class="num-err">' + p.findings.hard + '</span>' : '<span class="muted">0</span>') + '</td>'
+        + '<td class="numeric muted">' + p.findings.borderline + '</td>'
+        + '<td class="numeric">' + deltaCell + '</td>'
         + '<td class="numeric muted">' + pct(p.calibrated_pass_rate) + '</td>'
         + '<td><code>' + esc(p.judge_version) + '</code></td>'
         + '<td class="numeric">' + esc(fmtUsd(p.cost_usd)) + '</td>'
         + '</tr>';
     }).join('');
 
-    const legendItems = trendMetric === 'findings'
-      ? '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Total findings</span>'
-        + '<span class="legend-item"><span class="legend-swatch dashed-red"></span>Errors (raw FAIL)</span>'
-        + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>'
-      : '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Calibrated pass rate</span>'
-        + '<span class="legend-item"><span class="legend-swatch dashed"></span>Raw pass rate</span>'
-        + '<span class="legend-item"><span class="legend-swatch dotted"></span>Mean P(pass)</span>'
-        + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>';
-
-    container.innerHTML =
-      '<div class="controls">'
-      + '<div class="tabs" role="tablist" aria-label="Select repository">' + repoTabs + '</div>'
-      + '<div class="tabs" role="tablist" aria-label="Select mode">' + modeTabs + '</div>'
-      + '<span class="muted numeric" style="margin-left:auto">Run ' + (selectedRunIdx + 1) + '/' + series.points.length + ' · ' + esc(run.model) + '</span>'
-      + '</div>'
-      + punchTiles
-      + renderModuleArchitectureSection(repoObj, run)
-      + '<div class="chart-box">'
-      + '<div class="chart-legend">'
-      + '<div class="tabs" role="tablist" aria-label="Trend metric">'
-      + '<button type="button" class="tab-btn' + (trendMetric === 'findings' ? ' active' : '') + '" data-trend-metric="findings">Findings</button>'
-      + '<button type="button" class="tab-btn' + (trendMetric === 'rates' ? ' active' : '') + '" data-trend-metric="rates">Pass rates</button>'
-      + '</div>'
-      + legendItems
-      + '<span class="muted" style="margin-left:auto">Click any point or history row to inspect</span>'
-      + '</div>'
-      + '<div class="svg-wrap">' + (trendMetric === 'findings' ? renderFindingsTrendSvg(series.points, selectedRunIdx) : renderRateTrendSvg(series.points, selectedRunIdx)) + '</div>'
-      + '</div>'
-      + versionBanner
-      + '<div class="split-grid">'
-      + '<div class="sub-card">'
-      + '<div class="panel-head"><h3>Worst-offending rules (' + checkEntries.filter(([, c]) => c.passed < c.total).length + ' failing / ' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(shortDate(run.timestamp)) + ' · ' + esc(run.commit_short) + '</span></div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Failed</th><th>Errors / Warnings</th><th>Min P</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
-      + '</div>'
-      + '<div class="sub-card">'
-      + '<div class="panel-head"><h3>Top hotspot ' + (selectedMode === 'code' ? 'modules' : 'files / targets') + ' (' + filteredFiles.length + ' shown / ' + run.files.length + ')</h3>'
-      + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-      + '<input type="search" id="file-search-input" placeholder="Filter path or rule..." value="' + esc(fileSearch) + '">'
-      + '<label class="toggle"><input type="checkbox" id="failing-only-toggle"' + (failingOnly ? ' checked' : '') + '> Failing only</label>'
-      + '</div></div>'
-      + (filteredFiles.length > 0
-        ? '<div class="table-scroll"><table><thead><tr><th>Target</th><th>Findings</th><th>Min P</th><th>Failing rules</th></tr></thead><tbody>' + hotspotRows + '</tbody></table></div>'
-        : '<p class="muted">' + (failingOnly && selectedMode === 'file' && !fileSearch && run.files.length > 0
-          ? 'All ' + run.files.length + ' file(s) passed every check. Uncheck "Failing only" to inspect all files.'
-          : 'No targets match the current filter.') + '</p>')
-      + '</div>'
-      + '</div>'
-      + '<details style="margin-top:14px"' + (series.points.length <= 10 ? ' open' : '') + '>'
-      + '<summary class="panel-summary" style="font-size:.9rem"><span><strong>Run history</strong> (' + series.points.length + ' snapshots)</span></summary>'
-      + '<div class="table-scroll" style="margin-top:8px"><table><thead><tr><th>Timestamp</th><th>Commit / Branch</th><th>Scope</th><th>Findings</th><th>Delta</th><th>Calibrated</th><th>Judge version</th><th>Cost</th></tr></thead><tbody>' + runRows + '</tbody></table></div>'
+    const historyOpen = series.points.length > 1 && series.points.length <= 10 ? ' open' : '';
+    const historyDetails = '<details id="run-history-details" style="margin-top:14px"' + historyOpen + '>'
+      + '<summary class="panel-summary" style="font-size:.88rem"><span><strong>Run history</strong> (' + series.points.length + ' snapshot' + (series.points.length === 1 ? '' : 's') + ')</span></summary>'
+      + '<div class="table-scroll" style="margin-top:8px"><table><thead><tr><th>Timestamp</th><th>Commit / Branch</th><th>Scope</th><th>Errors</th><th>Borderline</th><th>Error &Delta;</th><th>Calibrated</th><th>Judge version</th><th>Cost</th></tr></thead><tbody>' + runRows + '</tbody></table></div>'
       + '</details>';
-  }
 
-  function renderHeatmap() {
-    const container = document.getElementById('heatmap-root');
-    if (!container) return;
-    const modes = DATA.modes_present || [];
-    if (modes.length === 0) {
-      container.innerHTML = '<div class="empty-state">No runs available for cross-repo comparison yet.</div>';
-      return;
-    }
-    if (!DATA.heatmaps[heatmapMode]) heatmapMode = modes[0];
-    const map = DATA.heatmaps[heatmapMode];
-    const groups = [...new Set(map.rows.map((r) => r.rubric_slug).filter(Boolean))].sort();
-    const visibleRows = map.rows.filter((r) => {
-      if (heatGroup && r.rubric_slug !== heatGroup) return false;
-      if (heatSearch) {
-        const q = heatSearch.toLowerCase();
-        return r.check_id.toLowerCase().includes(q) || (r.rubric_slug || '').toLowerCase().includes(q);
-      }
-      return true;
-    });
-
-    const modeTabs = modes.map((m) =>
-      '<button type="button" class="tab-btn' + (m === heatmapMode ? ' active' : '') + '" data-heat-mode="' + esc(m) + '">' + esc(m === 'code' ? 'modules (code)' : m) + '</button>'
-    ).join('');
-    const groupOptions = '<option value="">All rubrics</option>' + groups.map((g) =>
-      '<option value="' + esc(g) + '"' + (g === heatGroup ? ' selected' : '') + '>' + esc(g) + '</option>'
-    ).join('');
-
-    const headerCols = map.repos.map((r) => '<th class="numeric">' + esc(r) + '</th>').join('');
-    const bodyRows = visibleRows.map((row) => {
-      const label = row.instructions
-        ? '<span class="tip-wrap"><span class="tip-trigger" tabindex="0">' + esc(row.check_id) + '</span><div class="tip-card"><strong>' + esc(row.instructions) + '</strong><div class="tip-pass"><strong>Pass:</strong> ' + esc(row.pass_criteria) + '</div><div class="tip-fail"><strong>Fail:</strong> ' + esc(row.fail_criteria) + '</div></div></span>'
-        : '<code>' + esc(row.check_id) + '</code>';
-      const thrBadge = Math.abs(row.threshold - 0.8) > 1e-9
-        ? '<span class="pill warn">&ge;' + row.threshold.toFixed(2) + '</span>'
-        : '<span class="pill neutral">&ge;' + row.threshold.toFixed(2) + '</span>';
-      const cells = map.repos.map((rName) => {
-        const c = row.by_repo[rName];
-        if (!c) return '<td class="numeric muted">—</td>';
-        const col = heatColors(c.pass_rate);
-        const topLine = c.failed === 0 ? 'clean' : c.failed + '/' + c.total + ' fail';
-        const subLine = c.failed === 0
-          ? 'P=' + (c.mean_pass_probability !== null ? c.mean_pass_probability.toFixed(2) : '—')
-          : c.hard_failed + 'e · ' + c.borderline_failed + 'w · ' + pct(c.pass_rate, 0);
-        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Findings: ' + c.failed + '/' + c.total + ' (' + c.hard_failed + ' errors, ' + c.borderline_failed + ' warnings) | Calibrated ' + pct(c.pass_rate) + ' | Mean P ' + pct(c.mean_pass_probability) + '"><strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span></span></td>';
-      }).join('');
-      return '<tr><td>' + label + (row.rubric_slug ? ' <span class="muted" style="font-size:.75rem">' + esc(row.rubric_slug) + '</span>' : '') + '</td><td class="numeric">' + thrBadge + '</td>' + cells + '</tr>';
-    }).join('');
-
-    container.innerHTML =
-      '<div class="controls">'
-      + '<div class="tabs">' + modeTabs + '</div>'
-      + '<select id="heat-group-select" aria-label="Filter rubric group">' + groupOptions + '</select>'
-      + '<input type="search" id="heat-search-input" placeholder="Search rule ID..." value="' + esc(heatSearch) + '">'
-      + '<span class="muted numeric" style="margin-left:auto">' + visibleRows.length + ' of ' + map.rows.length + ' rules</span>'
-      + '</div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th>' + headerCols + '</tr></thead><tbody>' + bodyRows + '</tbody></table></div>';
+    container.innerHTML = detailHeader + activeRuleBanner + historicalRunBanner + versionBanner + modeBody + historyDetails;
   }
 
   function renderFixtures() {
@@ -1593,6 +2385,26 @@ const CLIENT_SCRIPT = `
       return;
     }
     const latest = fx.latest;
+    const allPassed = latest.status === 'passed' && latest.checks_passed === latest.checks_total;
+    const minMarginText = latest.min_margin !== null ? latest.min_margin.toFixed(2) : '—';
+    const maxJitterText = latest.max_jitter !== null ? latest.max_jitter.toFixed(2) : '—';
+
+    let trendSection;
+    if (fx.points.length < 2) {
+      trendSection = '<div class="single-run-note">'
+        + '<span>First snapshot ' + esc(isoDay(latest.timestamp)) + ' · trend appears after the next run</span>'
+        + '<span class="muted numeric">' + latest.fixtures_passed + '/' + latest.fixtures_total + ' fixtures · repeats ' + latest.repeats + '</span>'
+        + '</div>';
+    } else {
+      trendSection = '<div class="chart-box">'
+        + '<div class="chart-legend">'
+        + '<span class="legend-item"><span class="legend-swatch" style="background:#15803d"></span>Fixture check pass rate</span>'
+        + '<span class="muted numeric" style="margin-left:auto">Latest ' + esc(isoDay(latest.timestamp)) + ' · ' + latest.fixtures_passed + '/' + latest.fixtures_total + ' fixtures · repeats ' + latest.repeats + ' · min margin ' + minMarginText + ' · max jitter ' + maxJitterText + '</span>'
+        + '</div>'
+        + '<div class="svg-wrap">' + renderFixtureTrendSvg(fx.points) + '</div>'
+        + '</div>';
+    }
+
     const rows = [...latest.checks].sort((a, b) =>
       (Number(a.passed) - Number(b.passed))
       || ((a.margin ?? 1) - (b.margin ?? 1))
@@ -1603,69 +2415,321 @@ const CLIENT_SCRIPT = `
           ? c.min_pass_probability.toFixed(2)
           : c.min_pass_probability.toFixed(2) + '..' + c.max_pass_probability.toFixed(2))
         : '—';
-      const marginClass = c.margin === null ? 'neutral' : c.margin >= 0.15 ? 'pass' : c.margin >= 0 ? 'warn' : 'fail';
-      const jitterClass = c.jitter === null ? 'neutral' : c.jitter <= 0.05 ? 'pass' : c.jitter <= 0.15 ? 'warn' : 'fail';
+      const marginCls = c.margin === null ? 'muted' : c.margin < 0 ? 'num-err' : c.margin < 0.10 ? 'num-warn' : '';
+      const jitterCls = c.jitter === null ? 'muted' : (!c.passed || c.jitter >= 0.15) ? 'num-err' : c.jitter >= 0.08 ? 'num-warn' : '';
+      const repeatsCls = c.passed ? '' : 'num-err';
       return '<tr>'
         + '<td><code>' + esc(c.fixture_id) + '</code></td>'
         + '<td><code>' + esc(c.check_id) + '</code></td>'
-        + '<td><span class="pill neutral">' + esc(c.expected) + '</span></td>'
-        + '<td class="numeric"><span class="pill ' + (c.passed ? 'pass' : 'fail') + '">' + c.matches + '/' + c.repeats + '</span></td>'
+        + '<td class="muted">' + esc(c.expected) + '</td>'
+        + '<td><span class="pill ' + (c.passed ? 'pass' : 'fail') + '">' + (c.passed ? 'pass' : 'fail') + '</span></td>'
+        + '<td class="numeric ' + repeatsCls + '">' + c.matches + '/' + c.repeats + '</td>'
         + '<td class="numeric">' + esc(probRange) + '</td>'
-        + '<td class="numeric">' + (c.pass_threshold !== null ? '&ge;' + c.pass_threshold.toFixed(2) : '—') + '</td>'
-        + '<td class="numeric"><span class="pill ' + marginClass + '">' + (c.margin !== null ? (c.margin >= 0 ? '+' : '') + c.margin.toFixed(3) : '—') + '</span></td>'
-        + '<td class="numeric"><span class="pill ' + jitterClass + '">' + (c.jitter !== null ? c.jitter.toFixed(3) : '—') + '</span></td>'
+        + '<td class="numeric muted">' + (c.pass_threshold !== null ? '&ge;' + c.pass_threshold.toFixed(2) : '—') + '</td>'
+        + '<td class="numeric ' + marginCls + '">' + (c.margin !== null ? (c.margin >= 0 ? '+' : '') + c.margin.toFixed(3) : '—') + '</td>'
+        + '<td class="numeric ' + jitterCls + '">' + (c.jitter !== null ? c.jitter.toFixed(3) : '—') + '</td>'
         + '</tr>';
     }).join('');
 
-    container.innerHTML =
-      '<div class="chart-box">'
-      + '<div class="chart-legend">'
-      + '<span class="legend-item"><span class="legend-swatch" style="background:#15803d"></span>Fixture check pass rate</span>'
-      + '<span class="legend-item"><span class="legend-swatch" style="background:#ea580c"></span>Max repeat jitter</span>'
-      + '<span class="muted numeric" style="margin-left:auto">Latest: ' + esc(shortDate(latest.timestamp)) + ' · ' + latest.fixtures_passed + '/' + latest.fixtures_total + ' fixtures · ' + latest.checks_passed + '/' + latest.checks_total + ' checks · repeats=' + latest.repeats + ' · min margin=' + (latest.min_margin !== null ? latest.min_margin.toFixed(3) : '—') + ' · max jitter=' + (latest.max_jitter !== null ? latest.max_jitter.toFixed(3) : '—') + '</span>'
-      + '</div>'
-      + '<div class="svg-wrap">' + renderFixtureTrendSvg(fx.points) + '</div>'
-      + '</div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Fixture</th><th>Check</th><th>Expect</th><th>Repeats</th><th>P(pass) range</th><th>Threshold</th><th>Margin</th><th>Jitter</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    const jitterFloor = typeof latest.max_jitter === 'number' && Number.isFinite(latest.max_jitter) ? latest.max_jitter : null;
+    const nearChecks = allPassed
+      ? latest.checks
+        .filter((c) => c.passed && typeof c.margin === 'number' && Number.isFinite(c.margin)
+          && (c.margin < 0.05 || (jitterFloor !== null && c.margin < jitterFloor)))
+        .sort((a, b) =>
+          ((a.margin ?? 1) - (b.margin ?? 1))
+          || (a.fixture_id < b.fixture_id ? -1 : a.fixture_id > b.fixture_id ? 1 : 0)
+          || (a.check_id < b.check_id ? -1 : a.check_id > b.check_id ? 1 : 0)
+        )
+      : [];
+    const aggregateTight = allPassed && typeof latest.min_margin === 'number' && Number.isFinite(latest.min_margin)
+      && (latest.min_margin < 0.05 || (jitterFloor !== null && latest.min_margin < jitterFloor));
+    const isNearThreshold = allPassed && (nearChecks.length > 0 || aggregateTight);
+
+    let summaryLine;
+    let rightHint;
+    if (!allPassed) {
+      summaryLine = '<span class="pill fail">fail</span> '
+        + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' checks pass</strong>'
+        + ' · min margin ' + minMarginText + ' · max jitter ' + maxJitterText;
+      rightHint = '<span class="muted numeric">Failing checks expanded</span>';
+    } else if (isNearThreshold) {
+      const tight = nearChecks[0] || null;
+      let tightDetail = '';
+      if (tight) {
+        const pStr = tight.min_pass_probability !== null && tight.max_pass_probability !== null
+          ? (tight.min_pass_probability.toFixed(2) === tight.max_pass_probability.toFixed(2)
+            ? 'P ' + tight.min_pass_probability.toFixed(2)
+            : 'P ' + tight.min_pass_probability.toFixed(2) + '–' + tight.max_pass_probability.toFixed(2))
+          : '';
+        const thrStr = tight.pass_threshold !== null
+          ? ' vs ' + (tight.expected === 'fail' ? '<' : '&ge;') + tight.pass_threshold.toFixed(2)
+          : '';
+        const prefix = nearChecks.length > 1 ? 'tightest: ' : '';
+        tightDetail = ' (' + prefix + '<code>' + esc(tight.fixture_id) + '</code> · <code>' + esc(tight.check_id) + '</code>' + (pStr ? ', ' + esc(pStr) + thrStr : '') + ')';
+      }
+      const nearLabel = nearChecks.length > 0
+        ? nearChecks.length + ' near threshold'
+        : 'min margin ' + minMarginText + ' near threshold';
+      summaryLine = '<span class="pill warn">near threshold</span> '
+        + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' pass</strong>'
+        + ' · <span class="tone-warn">' + esc(nearLabel) + '</span>' + tightDetail;
+      rightHint = '<span class="tone-warn numeric">Click to inspect tight margins</span>';
+    } else {
+      summaryLine = '<span class="pill pass">pass</span> '
+        + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' checks pass</strong>'
+        + ' · min margin ' + minMarginText + ' · max jitter ' + maxJitterText;
+      rightHint = '<span class="muted numeric">All green · click to inspect checks</span>';
+    }
+
+    container.innerHTML = trendSection
+      + '<details class="fixture-details" id="fixture-health-details"' + (allPassed ? '' : ' open') + '>'
+      + '<summary class="panel-summary"><span>' + summaryLine + '</span>' + rightHint + '</summary>'
+      + '<div class="table-scroll" style="margin-top:10px"><table><thead><tr><th>Fixture</th><th>Check</th><th>Expect</th><th>Status</th><th>Repeats</th><th>P(pass)</th><th>Threshold</th><th>Margin</th><th>Jitter</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      + '</details>';
+  }
+
+  function renderAll() {
+    ensureSelection();
+    renderHistory();
+    renderHeatmap();
+    renderRepoDetail();
+    syncUrlHash();
+  }
+
+  function selectRuleFilter(ruleId, scrollToDetail, anchorSelector) {
+    const nextRule = activeRule === ruleId && !scrollToDetail ? '' : ruleId;
+    activeRule = nextRule;
+    if (selectedMode === 'code') {
+      moduleSearch = nextRule;
+    } else {
+      fileSearch = nextRule;
+    }
+    showAllFiles = false;
+    if (scrollToDetail) {
+      renderAll();
+      const target = document.getElementById('hotspots-card') || document.getElementById('repo-detail-panel');
+      if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      preserveViewportAnchor(anchorSelector || '#detail-mode-bar', () => renderAll());
+    }
   }
 
   document.addEventListener('click', (ev) => {
     const t = ev.target;
     if (!t || !t.closest) return;
-    const repoBtn = t.closest('[data-pick-repo], .repo-row');
-    if (repoBtn) {
-      const name = repoBtn.dataset.pickRepo || repoBtn.dataset.repo;
-      if (name && name !== selectedRepo) {
-        selectedRepo = name;
-        selectedRunIdx = null;
-        renderRepoDetail();
+
+    const heatCell = t.closest('[data-heat-cell-repo]');
+    if (heatCell) {
+      const repo = heatCell.dataset.heatCellRepo;
+      const rule = heatCell.dataset.heatCellRule;
+      const mode = heatCell.dataset.heatCellMode;
+      selectedRepo = repo;
+      if (mode) selectedMode = mode;
+      selectedRunIdx = null;
+      showAllFiles = false;
+      expandedFiles = new Set();
+      activeRule = rule || '';
+      if (selectedMode === 'code') moduleSearch = activeRule;
+      else fileSearch = activeRule;
+      renderAll();
+      const target = document.getElementById('hotspots-card') || document.getElementById('repo-detail-panel');
+      if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    const historyPoint = t.closest('[data-history-point]');
+    if (historyPoint) {
+      const repo = historyPoint.dataset.historyRepo;
+      const runIdx = Number(historyPoint.dataset.historyRunIdx);
+      if (repo) {
+        preserveViewportAnchor('#history-panel-head', () => {
+          selectedRepo = repo;
+          selectedMode = historyMode;
+          selectedRunIdx = Number.isFinite(runIdx) ? runIdx : null;
+          activeRule = '';
+          fileSearch = '';
+          moduleSearch = '';
+          showAllFiles = false;
+          expandedFiles = new Set();
+          renderAll();
+        });
+        const nextPt = [...document.querySelectorAll('[data-history-point]')].find(
+          (el) => el.dataset.historyRepo === repo && Number(el.dataset.historyRunIdx) === runIdx
+        );
+        if (nextPt) showHistoryTooltip(nextPt);
       }
       return;
     }
+
+    const historyRepo = t.closest('[data-history-repo]');
+    if (historyRepo) {
+      const repo = historyRepo.dataset.historyRepo;
+      if (repo) {
+        preserveViewportAnchor('#history-panel-head', () => {
+          selectedRepo = repo;
+          selectedRunIdx = null;
+          showAllFiles = false;
+          expandedFiles = new Set();
+          renderAll();
+        });
+      }
+      return;
+    }
+
+    const historyModeBtn = t.closest('[data-history-mode]');
+    if (historyModeBtn) {
+      preserveViewportAnchor('#history-panel-head', () => {
+        historyMode = historyModeBtn.dataset.historyMode;
+        renderHistory();
+      });
+      return;
+    }
+
+    const historyMetricBtn = t.closest('[data-history-metric]');
+    if (historyMetricBtn) {
+      preserveViewportAnchor('#history-panel-head', () => {
+        historyMetric = historyMetricBtn.dataset.historyMetric;
+        renderHistory();
+      });
+      return;
+    }
+
+    const repoBtn = t.closest('[data-pick-repo]');
+    if (repoBtn) {
+      const name = repoBtn.dataset.pickRepo;
+      if (name) {
+        preserveViewportAnchor('#heatmap-controls', () => {
+          selectedRepo = name;
+          selectedRunIdx = null;
+          showAllFiles = false;
+          expandedFiles = new Set();
+          const repoObj = (DATA.repos || []).find((r) => r.name === name);
+          if (repoObj && repoObj.by_mode[heatmapMode]) {
+            selectedMode = heatmapMode;
+          }
+          renderAll();
+        });
+      }
+      return;
+    }
+
     const modeBtn = t.closest('[data-pick-mode]');
     if (modeBtn) {
-      selectedMode = modeBtn.dataset.pickMode;
-      selectedRunIdx = null;
-      renderRepoDetail();
+      preserveViewportAnchor('#detail-mode-bar', () => {
+        selectedMode = modeBtn.dataset.pickMode;
+        selectedRunIdx = null;
+        activeRule = '';
+        fileSearch = '';
+        moduleSearch = '';
+        showAllFiles = false;
+        expandedFiles = new Set();
+        ensureSelection();
+        renderHistory();
+        renderHeatmap();
+        renderRepoDetail();
+        syncUrlHash();
+      });
       return;
     }
-    const metricBtn = t.closest('[data-trend-metric]');
-    if (metricBtn) {
-      trendMetric = metricBtn.dataset.trendMetric;
-      renderRepoDetail();
+
+    const clearRule = t.closest('[data-clear-rule]');
+    if (clearRule) {
+      preserveViewportAnchor('#detail-mode-bar', () => {
+        activeRule = '';
+        fileSearch = '';
+        moduleSearch = '';
+        renderAll();
+      });
       return;
     }
+
+    const expandFileBtn = t.closest('[data-expand-file]');
+    if (expandFileBtn) {
+      const path = expandFileBtn.dataset.expandFile;
+      if (path) {
+        preserveViewportAnchor('#hotspots-card', () => {
+          if (expandedFiles.has(path)) expandedFiles.delete(path);
+          else expandedFiles.add(path);
+          renderRepoDetail();
+        });
+      }
+      return;
+    }
+
+    const toggleAllBtn = t.closest('[data-toggle-all-files]');
+    if (toggleAllBtn) {
+      preserveViewportAnchor('#hotspots-card', () => {
+        showAllFiles = !showAllFiles;
+        renderRepoDetail();
+      });
+      return;
+    }
+
+    const ruleBtn = t.closest('[data-filter-rule]');
+    if (ruleBtn) {
+      if (t.closest('.tip-card')) return;
+      const ruleId = ruleBtn.dataset.filterRule;
+      if (ruleId) selectRuleFilter(ruleId, false, '#detail-mode-bar');
+      return;
+    }
+
     const runPick = t.closest('[data-select-run]');
     if (runPick) {
-      selectedRunIdx = Number(runPick.dataset.selectRun);
-      renderRepoDetail();
+      const anchor = runPick.closest('#run-history-details') ? '#run-history-details' : '#detail-mode-bar';
+      preserveViewportAnchor(anchor, () => {
+        selectedRunIdx = Number(runPick.dataset.selectRun);
+        renderHistory();
+        renderRepoDetail();
+      });
       return;
     }
+
     const heatBtn = t.closest('[data-heat-mode]');
     if (heatBtn) {
-      heatmapMode = heatBtn.dataset.heatMode;
-      heatGroup = '';
-      renderHeatmap();
+      preserveViewportAnchor('#heatmap-controls', () => {
+        heatmapMode = heatBtn.dataset.heatMode;
+        heatGroup = '';
+        renderHeatmap();
+      });
+    }
+  });
+
+  document.addEventListener('mouseover', (ev) => {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    const pt = t.closest('[data-history-point]');
+    if (pt) {
+      showHistoryTooltip(pt);
+    } else if (!t.closest('#history-tooltip')) {
+      hideHistoryTooltip();
+    }
+  });
+
+  document.addEventListener('focusin', (ev) => {
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    const pt = t.closest('[data-history-point]');
+    if (pt) showHistoryTooltip(pt);
+  });
+
+  document.addEventListener('focusout', (ev) => {
+    const next = ev.relatedTarget;
+    if (!next || !next.closest || !next.closest('[data-history-point]')) {
+      hideHistoryTooltip();
+    }
+  });
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const t = ev.target;
+    if (!t || !t.closest) return;
+    const tag = t.tagName ? t.tagName.toLowerCase() : '';
+    if (tag === 'button' || tag === 'input' || tag === 'select' || tag === 'a' || tag === 'summary') return;
+    const roleBtn = t.closest('[role="button"]');
+    if (roleBtn) {
+      ev.preventDefault();
+      roleBtn.click();
     }
   });
 
@@ -1675,21 +2739,37 @@ const CLIENT_SCRIPT = `
     if (t.id === 'file-search-input') {
       fileSearch = t.value;
       const pos = t.selectionStart;
-      renderRepoDetail();
+      preserveViewportAnchor('#hotspots-card', () => {
+        if (activeRule && fileSearch.trim() !== activeRule) {
+          activeRule = '';
+          syncUrlHash();
+          renderHeatmap();
+        }
+        renderRepoDetail();
+      });
       const el = document.getElementById('file-search-input');
-      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+      if (el) { el.focus({ preventScroll: true }); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     } else if (t.id === 'module-search-input') {
       moduleSearch = t.value;
       const pos = t.selectionStart;
-      renderRepoDetail();
+      preserveViewportAnchor('#module-architecture-section', () => {
+        if (activeRule && moduleSearch.trim() !== activeRule) {
+          activeRule = '';
+          syncUrlHash();
+          renderHeatmap();
+        }
+        renderRepoDetail();
+      });
       const el = document.getElementById('module-search-input');
-      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+      if (el) { el.focus({ preventScroll: true }); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     } else if (t.id === 'heat-search-input') {
       heatSearch = t.value;
       const pos = t.selectionStart;
-      renderHeatmap();
+      preserveViewportAnchor('#heatmap-controls', () => {
+        renderHeatmap();
+      });
       const el = document.getElementById('heat-search-input');
-      if (el) { el.focus(); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
+      if (el) { el.focus({ preventScroll: true }); if (typeof pos === 'number') el.setSelectionRange(pos, pos); }
     }
   });
 
@@ -1697,19 +2777,34 @@ const CLIENT_SCRIPT = `
     const t = ev.target;
     if (!t) return;
     if (t.id === 'failing-only-toggle') {
-      failingOnly = t.checked;
-      renderRepoDetail();
+      preserveViewportAnchor('#hotspots-card', () => {
+        failingOnly = t.checked;
+        showAllFiles = false;
+        renderRepoDetail();
+      });
     } else if (t.id === 'module-failing-only-toggle') {
-      moduleFailingOnly = t.checked;
-      renderRepoDetail();
+      preserveViewportAnchor('#module-architecture-section', () => {
+        moduleFailingOnly = t.checked;
+        renderRepoDetail();
+      });
     } else if (t.id === 'heat-group-select') {
-      heatGroup = t.value;
-      renderHeatmap();
+      preserveViewportAnchor('#heatmap-controls', () => {
+        heatGroup = t.value;
+        renderHeatmap();
+      });
     }
   });
 
-  renderRepoDetail();
-  renderHeatmap();
+  window.addEventListener('hashchange', () => {
+    applyHashState();
+    ensureSelection();
+    renderHistory();
+    renderHeatmap();
+    renderRepoDetail();
+  });
+
+  applyHashState();
+  renderAll();
   renderFixtures();
 })();
 `;
@@ -1717,51 +2812,7 @@ const CLIENT_SCRIPT = `
 export function renderDashboardHtml(model: DashboardModel): string {
   const latestTag = model.catalog.agent_tooling.latest_tag;
   const fxLatest = model.fixtures.latest;
-  const showModuleCol = model.modes_present.includes('code');
-
-  const repoOverviewRows = model.repos.map((repo) => {
-    const fileSeries = repo.by_mode.file;
-    const structSeries = repo.by_mode.structure;
-    const codeSeries = repo.by_mode.code;
-
-    const formatModeFindingsCell = (series: RepoModeSeries | undefined, kind: JudgeMode): string => {
-      if (!series) return '<span class="muted">—</span>';
-      const p = series.latest;
-      const delta = renderDeltaFindingsBadge(p.delta_findings, p.version_changed);
-      let sub = '';
-      if (kind === 'file') {
-        sub = `${p.affected_targets}/${p.file_count} files`;
-      } else if (kind === 'code' && repo.module_architecture) {
-        const arch = repo.module_architecture;
-        const bits = [`${arch.modules_with_findings}/${arch.total_modules} modules`];
-        if (arch.skipped_modules > 0) bits.push(`${arch.skipped_modules} skipped`);
-        if (arch.errored_modules > 0) bits.push(`${arch.errored_modules} err`);
-        sub = bits.join(' · ');
-      }
-      return `<div><div class="badge-row">${renderFindingsBadges(p.findings)} ${delta}</div>${sub ? `<div class="muted numeric" style="font-size:.74rem;margin-top:2px">${escapeHtml(sub)}</div>` : ''}</div>`;
-    };
-
-    const worstRulesCell = repo.worst_rules.length > 0
-      ? `<div class="fail-chips">${repo.worst_rules.slice(0, 2).map((wr) =>
-        `<span class="fail-chip ${wr.hard > 0 ? 'fail-chip-hard' : 'fail-chip-borderline'}" title="${escapeHtml(`${wr.mode}: ${wr.hard} errors, ${wr.borderline} warnings`)}">${escapeHtml(wr.check_id)} (${wr.failed})</span>`,
-      ).join('')}</div>`
-      : '<span class="pill pass">clean</span>';
-
-    const modeCells = [
-      `<td>${formatModeFindingsCell(fileSeries, 'file')}</td>`,
-      `<td>${formatModeFindingsCell(structSeries, 'structure')}</td>`,
-      ...(showModuleCol ? [`<td>${formatModeFindingsCell(codeSeries, 'code')}</td>`] : []),
-    ].join('');
-
-    return `<tr class="repo-row" data-repo="${escapeHtml(repo.name)}">
-      <td><strong>${escapeHtml(repo.name)}</strong><div class="muted" style="font-size:.75rem">${repo.total_runs} run(s) · ${escapeHtml(repo.latest_timestamp.slice(0, 10))}</div></td>
-      <td><code>${escapeHtml(repo.latest_commit_short)}</code>${repo.latest_dirty ? ' <span class="pill warn">dirty</span>' : ''}${repo.latest_branch ? `<div class="muted" style="font-size:.75rem">${escapeHtml(repo.latest_branch)}</div>` : ''}</td>
-      <td>${renderFindingsBadges(repo.total_findings)}</td>
-      ${modeCells}
-      <td>${worstRulesCell}</td>
-      <td>${renderInstalledBadge(repo, latestTag)}</td>
-    </tr>`;
-  }).join('');
+  const versionDisplay = formatToolingVersion(model.catalog.agent_tooling.judge_version, latestTag);
 
   const warningsHtml = model.warnings.length > 0
     ? `<div class="warn-banner"><strong>Snapshot warnings (${model.warnings.length}):</strong> ${escapeHtml(model.warnings.join(' | '))}</div>`
@@ -1769,25 +2820,49 @@ export function renderDashboardHtml(model: DashboardModel): string {
 
   const totalFindings = model.totals.total_findings;
   const modFindings = model.totals.module_findings;
-  const findingsKpiClass = totalFindings.hard > 0
-    ? ' kpi-danger'
-    : totalFindings.borderline > 0
-      ? ' kpi-alert'
-      : '';
+  const hasModules = model.totals.modules_scanned > 0;
+  const errorsKpiClass = totalFindings.hard > 0 ? ' kpi-danger' : '';
   const modKpiClass = modFindings.hard > 0 || model.totals.modules_errored > 0
     ? ' kpi-danger'
-    : modFindings.borderline > 0 || model.totals.modules_skipped > 0
+    : model.totals.modules_skipped > 0
       ? ' kpi-alert'
       : '';
 
-  const modKpiValue = model.totals.modules_scanned > 0
-    ? `${modFindings.total} finding${modFindings.total === 1 ? '' : 's'}`
-    : 'Not scanned';
-  const modKpiNote = model.totals.modules_scanned > 0
-    ? `${model.totals.modules_with_findings}/${model.totals.modules_scanned} modules · ${modFindings.hard} errors · ${modFindings.borderline} warnings`
-      + (model.totals.modules_skipped > 0 ? ` · ${model.totals.modules_skipped} skipped` : '')
-      + (model.totals.modules_errored > 0 ? ` · ${model.totals.modules_errored} err` : '')
-    : 'Configure modules / moduleRoots for arch checks';
+  const scopeParts = [
+    `${model.totals.file_findings.hard} file`,
+    `${model.totals.structure_findings.hard} structure`,
+    ...(hasModules ? [`${modFindings.hard} module`] : []),
+  ];
+
+  const moduleKpiTile = hasModules
+    ? `<div class="kpi${modKpiClass}"><div class="kpi-label">Module architecture</div><div class="kpi-value${errorsTone(modFindings)}">${modFindings.hard} ${modFindings.hard === 1 ? 'error' : 'errors'}</div><div class="kpi-sub">+${modFindings.borderline} borderline · ${model.totals.modules_with_findings}/${model.totals.modules_scanned} modules${model.totals.modules_skipped > 0 ? ` · ${model.totals.modules_skipped} skipped` : ''}${model.totals.modules_errored > 0 ? ` · ${model.totals.modules_errored} err` : ''}</div></div>`
+    : '';
+
+  const qualityCols = hasModules ? 3 : 2;
+  const heroSub = totalFindings.total === 0
+    ? `All clean across ${model.totals.repo_count} repo${model.totals.repo_count === 1 ? '' : 's'}`
+    : `+${totalFindings.borderline} borderline across ${model.totals.repo_count} repo${model.totals.repo_count === 1 ? '' : 's'}`;
+
+  const fxHealth = fxLatest ? analyzeFixtureHealth(fxLatest) : null;
+  const fxKpiClass = !fxHealth
+    ? ''
+    : fxHealth.status === 'failed'
+      ? ' kpi-danger'
+      : fxHealth.status === 'near_threshold'
+        ? ' kpi-alert'
+        : '';
+  const fxValTone = !fxHealth
+    ? ''
+    : fxHealth.status === 'healthy'
+      ? ' tone-good'
+      : fxHealth.status === 'near_threshold'
+        ? ' tone-warn'
+        : ' tone-bad';
+  const fxSubHtml = !fxLatest
+    ? 'No fixture runs yet'
+    : fxHealth?.status === 'near_threshold'
+      ? `<span class="tone-warn"><strong>min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'}</strong>${fxHealth.near_threshold_checks.length > 0 ? ` (${fxHealth.near_threshold_checks.length} near threshold)` : ' (near threshold)'}</span> · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}`
+      : `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}`;
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
@@ -1795,8 +2870,7 @@ export function renderDashboardHtml(model: DashboardModel): string {
 <header>
   <div class="title-row"><h1>Rubric Quality Punch-List</h1><span class="pill-header">Offline · Local</span></div>
   <div class="meta-bar">
-    <span>agent-tooling <strong>${escapeHtml(model.catalog.agent_tooling.judge_version)}</strong></span>
-    <span>Latest tag <strong>${escapeHtml(latestTag ?? 'none')}</strong></span>
+    <span>agent-tooling <strong>${escapeHtml(versionDisplay)}</strong></span>
     <span>Authoritative rubrics <strong>${model.catalog.rubrics.length}</strong></span>
     <span>Recorded spend <strong>${escapeHtml(fmtUsd(model.totals.total_cost_usd))}</strong></span>
     <span>Built <strong>${escapeHtml(model.generated_at.replace('T', ' ').slice(0, 19))}Z</strong></span>
@@ -1805,33 +2879,39 @@ export function renderDashboardHtml(model: DashboardModel): string {
 
 ${warningsHtml}
 
-<section class="kpi-strip" aria-label="Dashboard punch-list overview">
-  <div class="kpi${findingsKpiClass}"><div class="kpi-label">Open findings</div><div class="kpi-value${findingsTone(totalFindings)}">${totalFindings.total}</div><div class="kpi-note">${totalFindings.hard} errors · ${totalFindings.borderline} warnings across ${model.totals.repo_count} repo(s)</div></div>
-  <div class="kpi${modKpiClass}"><div class="kpi-label">Module architecture</div><div class="kpi-value${model.totals.modules_scanned > 0 ? findingsTone(modFindings) : ''}">${escapeHtml(modKpiValue)}</div><div class="kpi-note">${escapeHtml(modKpiNote)}</div></div>
-  <div class="kpi"><div class="kpi-label">Findings by scope</div><div class="kpi-value">${model.totals.repo_count} repo(s)</div><div class="kpi-note">${model.totals.file_findings.total} file · ${model.totals.structure_findings.total} structure · ${modFindings.total} module (${model.totals.repo_runs} runs)</div></div>
-  <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-note">Latest release tag: ${escapeHtml(latestTag ?? 'n/a')}</div></div>
-  <div class="kpi${fxLatest && fxLatest.status === 'failed' ? ' kpi-alert' : ''}"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value${fxLatest ? (fxLatest.status === 'passed' ? ' tone-good' : ' tone-bad') : ''}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-note">${fxLatest ? `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}` : 'No fixture runs yet'}</div></div>
+<section class="kpi-bar" aria-label="Dashboard overview">
+  <div class="kpi-group kpi-group-quality">
+    <div class="kpi-group-eyebrow">Code quality</div>
+    <div class="kpi-grid" style="--kpi-cols:${qualityCols}">
+      <div class="kpi${errorsKpiClass}"><div class="kpi-label">Open errors (raw FAIL)</div><div class="kpi-value${errorsTone(totalFindings)}">${totalFindings.hard}</div><div class="kpi-sub">${escapeHtml(heroSub)}</div></div>
+      ${moduleKpiTile}
+      <div class="kpi"><div class="kpi-label">Errors by scope</div><div class="kpi-value kpi-value-sm">${model.totals.repo_count} repo${model.totals.repo_count === 1 ? '' : 's'}</div><div class="kpi-sub">${escapeHtml(scopeParts.join(' · '))} · ${model.totals.repo_runs} snapshot${model.totals.repo_runs === 1 ? '' : 's'}</div></div>
+    </div>
+  </div>
+  <div class="kpi-group kpi-group-tooling">
+    <div class="kpi-group-eyebrow">Tooling health</div>
+    <div class="kpi-grid" style="--kpi-cols:2">
+      <div class="kpi${fxKpiClass}" id="kpi-rubric-fixtures"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value kpi-value-sm${fxValTone}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-sub">${fxSubHtml}</div></div>
+      <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value kpi-value-sm ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-sub">${latestTag ? `Latest release ${escapeHtml(latestTag)}` : 'No release tag'}</div></div>
+    </div>
+  </div>
 </section>
 
-<section class="panel">
-  <div class="panel-head"><h2>Repositories punch-list (worst-first)</h2><span class="muted">Click any repository to inspect Feature / Module Architecture, worst-offending rules, hotspot files, and trends (* = rubric/judge change)</span></div>
-  ${model.repos.length > 0
-    ? `<div class="table-scroll"><table><thead><tr><th>Repository</th><th>Latest commit</th><th>Open findings</th><th>File mode</th><th>Structure mode</th>${showModuleCol ? '<th>Module architecture</th>' : ''}<th>Worst rules</th><th>Installed judge-code</th></tr></thead><tbody>${repoOverviewRows}</tbody></table></div>`
-    : '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>'}
+<section class="panel" id="history-panel" aria-label="Score history">
+  <div id="history-root">${model.repos.length === 0 ? '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>' : ''}</div>
 </section>
 
-<section class="panel">
-  <div class="panel-head"><h2>Repository punch-list, module architecture &amp; trends</h2></div>
+<section class="panel" id="heatmap-panel">
+  <div class="panel-head"><h2>Cross-repo rule heatmap</h2><span class="muted">Select a repo column or rule cell to drill down</span></div>
+  <div id="heatmap-root">${model.repos.length === 0 ? '<div class="empty-state">No repository snapshots found in <code>runs/*.json</code>.</div>' : ''}</div>
+</section>
+
+<section class="panel" id="repo-detail-panel">
   <div id="repo-detail-root"></div>
 </section>
 
-<section class="panel">
-  <div class="panel-head"><h2>Cross-repo rule heatmap (latest runs, worst-first)</h2><span class="muted">Failing targets, errors/warnings split &amp; thresholds per rule</span></div>
-  <div id="heatmap-root"></div>
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Rubric health (<code>rubrics/fixtures</code>)</h2><span class="muted">Calibration margins &amp; repeat jitter across fixture runs</span></div>
+<section class="panel" id="fixtures-panel">
+  <div class="panel-head"><h2>Rubric health (<code>rubrics/fixtures</code>)</h2><span class="muted">Fixture pass rate, calibration margins &amp; repeat jitter</span></div>
   <div id="fixtures-root"></div>
 </section>
 

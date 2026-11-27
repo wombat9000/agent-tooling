@@ -17,9 +17,16 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  FIXTURE_NEAR_THRESHOLD_MARGIN,
+  analyzeFixtureHealth,
   buildDashboardModel,
+  computeHistoryPointMetrics,
+  computeNiceAxisTicks,
+  formatToolingVersion,
+  formatVersionDeltaLabel,
   generateDashboard,
   renderDashboardHtml,
+  stripSharedPathPrefix,
 } from './dashboard.mts';
 import {
   discoverRepoModules,
@@ -1558,16 +1565,24 @@ test('dashboard model and HTML support Feature / Module Architecture, linter pun
     [{ id: 'dependency_inversion', severity: 'borderline' }],
   );
 
-  // Render HTML and verify punch-list layout, aligned errors/warnings terminology, offline self-containment, XSS escaping, and valid client script syntax
+  // Render HTML and verify redesigned UX/UI: errors-first hero, Tooling health separation,
+  // heatmap-first layout (no duplicate punch-list table), offline self-containment, XSS escaping, and valid client script syntax
   const html = renderDashboardHtml(model);
   assert.ok(!/https?:\/\//i.test(html), 'Dashboard HTML must remain 100% offline with zero external URLs');
   assert.match(html, /Rubric Quality Punch-List/);
-  assert.match(html, /Open findings/);
-  assert.match(html, /2 errors · 2 warnings/);
+  assert.match(html, /Open errors \(raw FAIL\)/);
+  assert.match(html, /\+2 borderline across 2 repos/);
+  assert.match(html, /Tooling health/);
+  assert.match(html, /Cross-repo rule heatmap/);
+  assert.doesNotMatch(html, /Repositories punch-list \(worst-first\)/);
+  assert.doesNotMatch(html, /\* = rubric\/judge change/);
+  assert.doesNotMatch(html, /Click any repository to inspect/);
   assert.match(html, /Module architecture/);
-  assert.match(html, /Repositories punch-list \(worst-first\)/);
+  assert.match(html, /2 errors/);
   assert.match(html, /Feature \/ Module Architecture/);
-  assert.match(html, /Errors \/ Warnings/);
+  assert.match(html, /minmax\(0,/);
+  assert.match(html, /:focus-visible/);
+  assert.match(html, /hashchange/);
   assert.ok(!html.includes('</script><img'), 'Raw </script> in module name must be escaped');
   assert.ok(!html.includes('<script>alert(10)</script>'), 'Raw <script> in module error must be escaped');
 
@@ -1575,6 +1590,515 @@ test('dashboard model and HTML support Feature / Module Architecture, linter pun
   const scriptMatch = /<script id="dashboard-data" type="application\/json">[\s\S]*?<\/script>\n<script>([\s\S]*?)<\/script>/.exec(html);
   assert.ok(scriptMatch, 'Client script block must be present');
   assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline dashboard client script must parse cleanly');
+});
+
+test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no Not scanned tile, single-run collapse, and fixture details', () => {
+  // 1. Nice rounded Y-axis ticks (never odd splits like 134 / 267)
+  assert.deepEqual(computeNiceAxisTicks(243), { max: 300, ticks: [0, 100, 200, 300] });
+  assert.deepEqual(computeNiceAxisTicks(267), { max: 300, ticks: [0, 100, 200, 300] });
+  assert.deepEqual(computeNiceAxisTicks(134), { max: 150, ticks: [0, 50, 100, 150] });
+  assert.deepEqual(computeNiceAxisTicks(12), { max: 15, ticks: [0, 5, 10, 15] });
+  assert.deepEqual(computeNiceAxisTicks(0), { max: 4, ticks: [0, 2, 4] });
+
+  // 1b. History point size-normalized metrics (Errors / 100 and Clean %) across file, module, and structure modes
+  const fileMetrics = computeHistoryPointMetrics({
+    mode: 'file',
+    hard_fails: 3,
+    target_count: 4,
+    file_count: 4,
+    files: [
+      { path: 'a.ts', pass_rate: 0, raw_pass_rate: 0, mean_pass_probability: 0.2, min_pass_probability: 0.2, failed_count: 2, checks: { r1: { choice: 'fail', model_choice: 'fail', pass_probability: 0.2, confidence: 0.9 } } },
+      { path: 'b.ts', pass_rate: 0.5, raw_pass_rate: 1, mean_pass_probability: 0.72, min_pass_probability: 0.72, failed_count: 1, checks: { r1: { choice: 'fail', model_choice: 'pass', pass_probability: 0.72, confidence: 0.8 } } },
+      { path: 'c.ts', pass_rate: 1, raw_pass_rate: 1, mean_pass_probability: 0.95, min_pass_probability: 0.95, failed_count: 0, checks: { r1: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 } } },
+      { path: 'd.ts', pass_rate: 1, raw_pass_rate: 1, mean_pass_probability: 0.92, min_pass_probability: 0.92, failed_count: 0, checks: { r1: { choice: 'pass', model_choice: 'pass', pass_probability: 0.92, confidence: 0.9 } } },
+    ],
+    modules: [],
+    checks: {},
+    raw_pass_rate: 0.75,
+  });
+  // b.ts has only a borderline warning (0 raw FAILs), so 3 of 4 files are clean (75%) and 3/4*100 = 75 errors/100
+  assert.deepEqual(fileMetrics, {
+    scored_targets: 4,
+    clean_targets: 3,
+    errors_per_100: 75,
+    clean_target_rate: 0.75,
+  });
+
+  const moduleMetrics = computeHistoryPointMetrics({
+    mode: 'code',
+    hard_fails: 2,
+    target_count: 2,
+    file_count: 12,
+    files: [],
+    modules: [
+      { name: 'auth', path: 'app/auth', status: 'scored', file_count: 4, failed_count: 1, hard_fail_count: 0, borderline_count: 1, passed_count: 2, total_checks: 3, min_pass_probability: 0.72, failing_checks: [] },
+      { name: 'billing', path: 'app/billing', status: 'scored', file_count: 8, failed_count: 2, hard_fail_count: 2, borderline_count: 0, passed_count: 1, total_checks: 3, min_pass_probability: 0.21, failing_checks: [] },
+      { name: 'huge', path: 'app/huge', status: 'skipped', skip_reason: 'oversize', file_count: 30, failed_count: 0, hard_fail_count: 0, borderline_count: 0, passed_count: 0, total_checks: 0, min_pass_probability: null, failing_checks: [] },
+    ],
+    checks: {},
+    raw_pass_rate: 0.67,
+  });
+  // Skipped modules are excluded from denominator: 2 hard fails across 2 scored modules = 100/100, 1/2 clean = 50%
+  assert.deepEqual(moduleMetrics, {
+    scored_targets: 2,
+    clean_targets: 1,
+    errors_per_100: 100,
+    clean_target_rate: 0.5,
+  });
+
+  const structureFallbackMetrics = computeHistoryPointMetrics({
+    mode: 'structure',
+    hard_fails: 2,
+    target_count: 4,
+    file_count: 40,
+    files: [],
+    modules: [],
+    checks: {
+      c1: { threshold: 0.8, rubric_group: 'project-structure', passed: 2, raw_passed: 3, total: 4, pass_rate: 0.5, raw_pass_rate: 0.75, mean_pass_probability: 0.7, min_pass_probability: 0.3 },
+    },
+    raw_pass_rate: 0.75,
+  });
+  assert.deepEqual(structureFallbackMetrics, {
+    scored_targets: 4,
+    clean_targets: 3,
+    errors_per_100: 50,
+    clean_target_rate: 0.75,
+  });
+
+  // 2. Header/footer version deduplication
+  assert.equal(formatToolingVersion('v2.2.0', 'v2.2.0'), 'v2.2.0');
+  assert.equal(formatToolingVersion('v2.2.0', null), 'v2.2.0');
+  assert.equal(formatToolingVersion('v2.2.0', 'v2.3.0'), 'v2.2.0 · update available: v2.3.0');
+  assert.equal(formatToolingVersion('v2.2.0-3-gabc1234', 'v2.2.0'), 'v2.2.0-3-gabc1234 · latest tag: v2.2.0');
+
+  // 3. Chart version delta marker labels
+  assert.equal(formatVersionDeltaLabel('v1.3.0', 'v2.2.0'), 'v1.3 → v2.2');
+  assert.equal(formatVersionDeltaLabel('v1.2.1', 'v1.3.0'), 'v1.2.1 → v1.3');
+  assert.equal(formatVersionDeltaLabel('v2.2.0', 'v2.2.0'), 'rubric Δ');
+  assert.equal(formatVersionDeltaLabel(null, 'v2.2.0'), 'rubric Δ');
+
+  // 4. Shared file path prefix stripping
+  assert.equal(
+    stripSharedPathPrefix(['src/main/kotlin/com/app/a/One.kt', 'src/main/kotlin/com/app/b/Two.kt']),
+    'src/main/kotlin/com/app/',
+  );
+  assert.equal(stripSharedPathPrefix(['src/only.ts']), '');
+  assert.equal(stripSharedPathPrefix(['a/one.ts', 'b/two.ts']), '');
+
+  // 5. Render without module scans -> NO "Not scanned" KPI tile; version deduped when judge_version === latest_tag
+  const catalog = loadRubricCatalog();
+  const matchedCatalog = {
+    ...catalog,
+    agent_tooling: {
+      ...catalog.agent_tooling,
+      judge_version: 'v2.2.0',
+      latest_tag: 'v2.2.0',
+    },
+  };
+  const fileOnlySnap: RepoSnapshot = {
+    schema_version: 1,
+    kind: 'repo',
+    timestamp: '2026-11-25T22:46:02.000Z',
+    repo: {
+      name: 'alpha-web',
+      branch: 'main',
+      commit: '111122223333',
+      commit_short: '1111222',
+      dirty: false,
+      installed_judge_code: { ref: 'v1.3.0', source: 'wombat9000/agent-tooling', computed_hash: 'abcd1234', skill_path: 'skills/judge-code/SKILL.md' },
+    },
+    scan: {
+      mode: 'file',
+      sources: ['app'],
+      rubrics: ['readability'],
+      rubric_id: 'readability-v2',
+      rubric_groups: { readability: ['direct_readability'] },
+      exclude: [],
+      model: 'typesafe/jev-1.14',
+      returned_model: 'typesafe/jev-1.14',
+      backend: 'openrouter',
+      conventions_hash: null,
+      requirements_hash: null,
+    },
+    judge_version: 'v1.3.0',
+    agent_tooling_tag: 'v1.3.0',
+    agent_tooling_commit: 'deadbee',
+    rubric_hashes: { readability: 'aaaa' },
+    rubrics_digest: computeHashesDigest({ readability: 'aaaa' }),
+    metrics: {
+      file_count: 2,
+      target_count: 2,
+      check_count: 1,
+      calibrated_pass_rate: 0.5,
+      raw_pass_rate: 0.5,
+      mean_pass_probability: 0.65,
+      elapsed_ms: 120,
+      cost_usd: 0.001,
+      requests: 2,
+      retries: 0,
+    },
+    checks: {
+      direct_readability: {
+        threshold: 0.8,
+        rubric_group: 'readability',
+        passed: 1,
+        raw_passed: 1,
+        total: 2,
+        pass_rate: 0.5,
+        raw_pass_rate: 0.5,
+        mean_pass_probability: 0.65,
+        min_pass_probability: 0.3,
+      },
+    },
+    files: [
+      {
+        path: 'app/features/auth/login.ts',
+        pass_rate: 0,
+        raw_pass_rate: 0,
+        mean_pass_probability: 0.3,
+        min_pass_probability: 0.3,
+        failed_count: 1,
+        checks: { direct_readability: { choice: 'fail', model_choice: 'fail', pass_probability: 0.3, confidence: 0.9 } },
+      },
+      {
+        path: 'app/features/auth/logout.ts',
+        pass_rate: 1,
+        raw_pass_rate: 1,
+        mean_pass_probability: 0.95,
+        min_pass_probability: 0.95,
+        failed_count: 0,
+        checks: { direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 } },
+      },
+    ],
+  };
+
+  const passingFixtures: LoadedSnapshotRecord<RubricFixturesSnapshot>[] = [
+    {
+      file: 'fx-pass.json',
+      snapshot: {
+        schema_version: 1,
+        kind: 'rubric_fixtures',
+        timestamp: '2026-11-25T22:46:14.000Z',
+        judge_version: 'v2.2.0',
+        agent_tooling_tag: 'v2.2.0',
+        agent_tooling_commit: '956ed80',
+        rubric_hashes: { readability: 'aaaa' },
+        fixture_hashes: { f1: '1111' },
+        combined_hash: '2222',
+        scan: { backend: 'openrouter', model: null, repeats: 2 },
+        metrics: {
+          status: 'passed',
+          fixtures_total: 1,
+          fixtures_passed: 1,
+          fixture_pass_rate: 1,
+          checks_total: 2,
+          checks_passed: 2,
+          check_pass_rate: 1,
+          min_margin: 0.19,
+          mean_margin: 0.21,
+          max_jitter: 0.05,
+          mean_jitter: 0.03,
+          elapsed_ms: 400,
+          cost_usd: 0.0002,
+          requests: 2,
+        },
+        checks: [
+          {
+            fixture_id: 'f1',
+            mode: 'file',
+            rubric: 'readability-v2',
+            check_id: 'direct_readability',
+            expected: 'pass',
+            passed: true,
+            matches: 2,
+            repeats: 2,
+            pass_threshold: 0.8,
+            min_pass_probability: 0.94,
+            max_pass_probability: 0.99,
+            mean_pass_probability: 0.965,
+            margin: 0.19,
+            jitter: 0.05,
+          },
+        ],
+      },
+    },
+  ];
+
+  const modelNoModules = buildDashboardModel({
+    repoSnapshots: [{ file: '1.json', snapshot: fileOnlySnap }],
+    fixtureSnapshots: passingFixtures,
+    catalog: matchedCatalog,
+  });
+  const htmlNoModules = renderDashboardHtml(modelNoModules);
+  assert.doesNotMatch(htmlNoModules, /Not scanned/);
+  assert.doesNotMatch(htmlNoModules, /latest tag v2\.2\.0/i);
+  assert.match(htmlNoModules, /agent-tooling <strong>v2\.2\.0<\/strong>/);
+  // Top Score History sits directly under KPI bar, above Heatmap and Repo Detail
+  const kpiPos = htmlNoModules.indexOf('class="kpi-bar"');
+  const historyPos = htmlNoModules.indexOf('id="history-panel"');
+  const heatPos = htmlNoModules.indexOf('id="heatmap-panel"');
+  const detailPos = htmlNoModules.indexOf('id="repo-detail-panel"');
+  assert.ok(
+    kpiPos > 0 && historyPos > kpiPos && heatPos > historyPos && detailPos > heatPos,
+    'Score History must sit directly below KPI strip and above Cross-repo rule heatmap and repo detail',
+  );
+
+  // Scroll-stability CSS: detail panel min-height + generous bottom page padding prevent scroll clamping
+  assert.match(htmlNoModules, /#repo-detail-panel\{min-height:/);
+  assert.match(htmlNoModules, /padding:20px 24px 160px/);
+
+  // Client script handles top multi-repo Score History, scroll anchoring, history.replaceState,
+  // independent mode toggles, single-run collapse, Module Architecture setup note, and fixture details
+  const scriptBlock = /<script id="dashboard-data" type="application\/json">[\s\S]*?<\/script>\n<script>([\s\S]*?)<\/script>/.exec(htmlNoModules)?.[1] ?? '';
+  assert.match(scriptBlock, /function renderHistory\(/);
+  assert.match(scriptBlock, /function renderMultiRepoHistorySvg\(/);
+  assert.match(scriptBlock, /let historyMetric = 'density';/, 'Errors / 100 must be the default active history metric');
+  assert.match(scriptBlock, /data-history-metric="density">Errors \/ 100</);
+  assert.match(scriptBlock, /data-history-metric="errors">Errors</);
+  assert.match(scriptBlock, /data-history-metric="clean">Clean %</);
+  assert.doesNotMatch(scriptBlock, /data-history-metric="rate"/, 'Pass rate toggle must be removed from top Score history chart');
+  assert.doesNotMatch(scriptBlock, />Pass rate</, 'Pass rate button label must be removed from top Score history chart');
+  assert.match(scriptBlock, /data-history-mode/);
+  assert.match(scriptBlock, /data-history-repo/);
+  assert.match(scriptBlock, /data-history-point/);
+  assert.match(scriptBlock, /history-tooltip/);
+  // TrendPoint model includes precomputed size-normalized density and clean target rate
+  const firstPoint = modelNoModules.repos[0].by_mode.file!.latest;
+  assert.equal(firstPoint.scored_targets, 2);
+  assert.equal(firstPoint.clean_targets, 1);
+  assert.equal(firstPoint.errors_per_100, 50);
+  assert.equal(firstPoint.clean_target_rate, 0.5);
+  assert.doesNotMatch(scriptBlock, /data-trend-metric/, 'Duplicate trend chart controls must be removed from repo detail panel');
+  assert.doesNotMatch(scriptBlock, /window\.location\.hash\s*=(?!=)/, 'URL hash updates must use history.replaceState to prevent scroll jumps');
+  assert.match(scriptBlock, /window\.history\.replaceState\(null, '', next\)/);
+  assert.match(scriptBlock, /function preserveViewportAnchor\(/);
+  assert.match(scriptBlock, /preserveViewportAnchor\('#detail-mode-bar'/);
+  // Detail mode tab click must not overwrite heatmapMode or historyMode
+  const modeClickBlock = /const modeBtn = t\.closest\('\[data-pick-mode\]'\);[\s\S]*?return;\s*\}/.exec(scriptBlock)?.[0] ?? '';
+  assert.ok(modeClickBlock.length > 0, 'Detail mode click handler must exist');
+  assert.doesNotMatch(modeClickBlock, /heatmapMode\s*=/, 'Detail mode switch must keep heatmap mode independent');
+  assert.doesNotMatch(modeClickBlock, /historyMode\s*=/, 'Detail mode switch must keep history mode independent');
+  // Healthy fixture snapshot renders green KPI tile (no kpi-alert)
+  assert.match(htmlNoModules, /id="kpi-rubric-fixtures"[^>]*><div class="kpi-label">Rubric fixtures<\/div><div class="kpi-value kpi-value-sm tone-good">/);
+  assert.doesNotMatch(htmlNoModules, /class="kpi kpi-alert" id="kpi-rubric-fixtures"/);
+
+  // Boundary-crossing, compact Worst-offending rules table, and near-threshold fixture handling in client script
+  assert.match(scriptBlock, /function isRubricOrVersionBoundary\(/);
+  assert.match(scriptBlock, /data-boundary-crossing="true"/);
+  assert.match(scriptBlock, /data-rubric-delta="true"[^>]*>— rubric Δ</);
+  assert.match(htmlNoModules, /table\.rules-table/);
+  assert.match(scriptBlock, /<table class="rules-table"><thead><tr><th>Rule<\/th><th class="num-col" title="Pass threshold">Thr<\/th><th class="num-col" title="Raw FAIL errors">Err<\/th><th class="num-col" title="Borderline warnings">Warn<\/th><th class="num-col">Min P<\/th><th class="num-col">Mean P<\/th><\/tr><\/thead>/);
+  assert.match(scriptBlock, /near threshold/);
+  assert.match(scriptBlock, /Click to inspect tight margins/);
+  assert.match(scriptBlock, /First snapshot /);
+  assert.match(scriptBlock, /trend appears after the next run/);
+  assert.match(scriptBlock, /Module architecture checks are off\. Add <code>modules<\/code> \/ <code>moduleRoots<\/code> to enable\./);
+  assert.match(scriptBlock, /DEFAULT_HOTSPOT_LIMIT = 15/);
+  assert.match(scriptBlock, /MAX_VISIBLE_RULE_TAGS = 3/);
+  assert.match(scriptBlock, /fixture-details/);
+  assert.doesNotMatch(scriptBlock, /Max repeat jitter/);
+  assert.doesNotThrow(() => new Function(scriptBlock));
+});
+
+test('dashboard flags rubric/scope boundary crossings and near-threshold fixtures in amber', () => {
+  assert.equal(FIXTURE_NEAR_THRESHOLD_MARGIN, 0.05);
+  const catalog = loadRubricCatalog();
+
+  // 1. Scope (scan.sources) change marks version_changed even when judge_version & rubric_hashes match
+  const makeScopeSnap = (timestamp: string, sources: string[], hardFails: number): RepoSnapshot => ({
+    schema_version: 1,
+    kind: 'repo',
+    timestamp,
+    repo: {
+      name: 'scope-app',
+      branch: 'main',
+      commit: 'aaaa1111bbbb',
+      commit_short: 'aaaa111',
+      dirty: false,
+      installed_judge_code: null,
+    },
+    scan: {
+      mode: 'file',
+      sources,
+      rubrics: ['readability'],
+      rubric_id: 'readability-v2',
+      rubric_groups: { readability: ['direct_readability'] },
+      exclude: [],
+      model: 'typesafe/jev-1.14',
+      returned_model: 'typesafe/jev-1.14',
+      backend: 'openrouter',
+      conventions_hash: null,
+      requirements_hash: null,
+    },
+    judge_version: 'v2.2.0',
+    agent_tooling_tag: 'v2.2.0',
+    agent_tooling_commit: '956ed80',
+    rubric_hashes: { readability: 'aaaa' },
+    rubrics_digest: computeHashesDigest({ readability: 'aaaa' }),
+    metrics: {
+      file_count: 2,
+      target_count: 2,
+      check_count: 1,
+      calibrated_pass_rate: hardFails === 0 ? 1 : 0.5,
+      raw_pass_rate: hardFails === 0 ? 1 : 0.5,
+      mean_pass_probability: 0.85,
+      elapsed_ms: 100,
+      cost_usd: 0.001,
+      requests: 2,
+      retries: 0,
+    },
+    checks: {
+      direct_readability: {
+        threshold: 0.8,
+        rubric_group: 'readability',
+        passed: 2 - hardFails,
+        raw_passed: 2 - hardFails,
+        total: 2,
+        pass_rate: (2 - hardFails) / 2,
+        raw_pass_rate: (2 - hardFails) / 2,
+        mean_pass_probability: 0.85,
+        min_pass_probability: hardFails > 0 ? 0.3 : 0.9,
+      },
+    },
+    files: [
+      {
+        path: 'src/a.ts',
+        pass_rate: hardFails > 0 ? 0 : 1,
+        raw_pass_rate: hardFails > 0 ? 0 : 1,
+        mean_pass_probability: hardFails > 0 ? 0.3 : 0.9,
+        min_pass_probability: hardFails > 0 ? 0.3 : 0.9,
+        failed_count: hardFails > 0 ? 1 : 0,
+        checks: { direct_readability: { choice: hardFails > 0 ? 'fail' : 'pass', model_choice: hardFails > 0 ? 'fail' : 'pass', pass_probability: hardFails > 0 ? 0.3 : 0.9, confidence: 0.9 } },
+      },
+      {
+        path: 'src/b.ts',
+        pass_rate: 1,
+        raw_pass_rate: 1,
+        mean_pass_probability: 0.95,
+        min_pass_probability: 0.95,
+        failed_count: 0,
+        checks: { direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 } },
+      },
+    ],
+  });
+
+  // 2. Fixture health classification: near-threshold (margin < 0.05), jitter-tight (margin < max_jitter), healthy, and failed
+  const makeFixtureSnap = (minMargin: number, maxJitter: number, status: 'passed' | 'failed' = 'passed'): LoadedSnapshotRecord<RubricFixturesSnapshot> => ({
+    file: 'fx.json',
+    snapshot: {
+      schema_version: 1,
+      kind: 'rubric_fixtures',
+      timestamp: '2026-11-27T01:00:00.000Z',
+      judge_version: 'v2.2.0',
+      agent_tooling_tag: 'v2.2.0',
+      agent_tooling_commit: '956ed80',
+      rubric_hashes: { 'integration-readiness': 'aaaa' },
+      fixture_hashes: { 'api-contract-boundary-good': '1111' },
+      combined_hash: '2222',
+      scan: { backend: 'openrouter', model: null, repeats: 2 },
+      metrics: {
+        status,
+        fixtures_total: 2,
+        fixtures_passed: status === 'passed' ? 2 : 1,
+        fixture_pass_rate: status === 'passed' ? 1 : 0.5,
+        checks_total: 2,
+        checks_passed: status === 'passed' ? 2 : 1,
+        check_pass_rate: status === 'passed' ? 1 : 0.5,
+        min_margin: minMargin,
+        mean_margin: (minMargin + 0.18) / 2,
+        max_jitter: maxJitter,
+        mean_jitter: maxJitter / 2,
+        elapsed_ms: 400,
+        cost_usd: 0.001,
+        requests: 4,
+      },
+      checks: [
+        {
+          fixture_id: 'api-contract-boundary-good',
+          mode: 'file',
+          rubric: 'integration-readiness-v3',
+          check_id: 'clean_api_contract_boundary',
+          expected: 'pass',
+          passed: status === 'passed',
+          matches: status === 'passed' ? 2 : 1,
+          repeats: 2,
+          pass_threshold: 0.8,
+          min_pass_probability: 0.8 + minMargin,
+          max_pass_probability: 0.8 + minMargin + maxJitter,
+          mean_pass_probability: 0.8 + minMargin + maxJitter / 2,
+          margin: minMargin,
+          jitter: maxJitter,
+        },
+        {
+          fixture_id: 'readability-good',
+          mode: 'file',
+          rubric: 'readability-v2',
+          check_id: 'direct_readability',
+          expected: 'pass',
+          passed: true,
+          matches: 2,
+          repeats: 2,
+          pass_threshold: 0.8,
+          min_pass_probability: 0.98,
+          max_pass_probability: 0.99,
+          mean_pass_probability: 0.985,
+          margin: 0.18,
+          jitter: 0.01,
+        },
+      ],
+    },
+  });
+
+  const tightModel = buildDashboardModel({
+    repoSnapshots: [
+      { file: '1.json', snapshot: makeScopeSnap('2026-11-25T10:00:00.000Z', ['src/core'], 1) },
+      { file: '2.json', snapshot: makeScopeSnap('2026-11-27T10:00:00.000Z', ['src/core', 'src/web'], 0) },
+    ],
+    fixtureSnapshots: [makeFixtureSnap(0.01, 0.06, 'passed')],
+    catalog,
+  });
+
+  // Sources scope change marks version_changed so chart breaks line & suppresses colored delta
+  const scopePoints = tightModel.repos[0].by_mode.file!.points;
+  assert.equal(scopePoints[1].version_changed, true);
+  assert.match(scopePoints[1].change_reasons.join(' '), /sources: src\/core -> src\/core, src\/web/);
+
+  // Near-threshold fixture health (< 0.05 margin)
+  const tightHealth = analyzeFixtureHealth(tightModel.fixtures.latest!);
+  assert.equal(tightHealth.status, 'near_threshold');
+  assert.equal(tightHealth.near_threshold_checks.length, 1);
+  assert.equal(tightHealth.tightest?.fixture_id, 'api-contract-boundary-good');
+  assert.equal(tightHealth.tightest?.check_id, 'clean_api_contract_boundary');
+
+  // Rendered HTML flags Tooling Health Rubric fixtures tile in amber (kpi-alert + tone-warn, NOT tone-good)
+  const tightHtml = renderDashboardHtml(tightModel);
+  assert.match(tightHtml, /class="kpi kpi-alert" id="kpi-rubric-fixtures"/);
+  assert.match(tightHtml, /id="kpi-rubric-fixtures"><div class="kpi-label">Rubric fixtures<\/div><div class="kpi-value kpi-value-sm tone-warn">2\/2<\/div>/);
+  assert.match(tightHtml, /<span class="tone-warn"><strong>min margin 0\.01<\/strong> \(1 near threshold\)<\/span>/);
+
+  // Margin >= 0.05 but < max_jitter is also flagged near_threshold
+  const jitterModel = buildDashboardModel({
+    repoSnapshots: [],
+    fixtureSnapshots: [makeFixtureSnap(0.06, 0.09, 'passed')],
+    catalog,
+  });
+  assert.equal(analyzeFixtureHealth(jitterModel.fixtures.latest!).status, 'near_threshold');
+
+  // Margin >= 0.05 and >= max_jitter is healthy
+  const healthyModel = buildDashboardModel({
+    repoSnapshots: [],
+    fixtureSnapshots: [makeFixtureSnap(0.12, 0.05, 'passed')],
+    catalog,
+  });
+  assert.equal(analyzeFixtureHealth(healthyModel.fixtures.latest!).status, 'healthy');
+
+  // Failed fixture snapshot reports failed
+  const failedModel = buildDashboardModel({
+    repoSnapshots: [],
+    fixtureSnapshots: [makeFixtureSnap(-0.04, 0.03, 'failed')],
+    catalog,
+  });
+  assert.equal(analyzeFixtureHealth(failedModel.fixtures.latest!).status, 'failed');
 });
 
 test('CLI supports --module-root and --skip-modules offline in --dry-run mode', (t) => {
