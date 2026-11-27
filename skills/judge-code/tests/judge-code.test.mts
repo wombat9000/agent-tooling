@@ -64,8 +64,8 @@ globalThis.fetch = async (endpoint, init) => {
       if (singleFile?.endsWith('Room.kt') && id === 'no_long_functions') {
         passProb = 0.65;
         choice = 'pass';
-      } else if (singleFile?.endsWith('Booking.kt') && id === 'named_domain_expressions') {
-        passProb = 0.58;
+      } else if (singleFile?.endsWith('Booking.kt') && id === 'direct_readability') {
+        passProb = 0.74;
         choice = 'pass';
       } else if (!isFileCmd && id === 'no_unnecessary_abstraction') {
         passProb = 0.65;
@@ -73,8 +73,8 @@ globalThis.fetch = async (endpoint, init) => {
       }
     } else if (singleFile?.endsWith('Booking.kt')) {
       if (id === 'no_long_functions') { passProb = 0.15; choice = 'fail'; }
-      else if (id === 'no_primitive_obsession') { passProb = 0.45; choice = 'fail'; }
-      else if (id === 'named_domain_expressions') { passProb = 0.58; choice = 'pass'; }
+      else if (id === 'no_primitive_obsession') { passProb = 0.50; choice = 'pass'; }
+      else if (id === 'direct_readability') { passProb = 0.74; choice = 'pass'; }
     } else if (singleFile?.endsWith('Room.kt')) {
       if (id === 'no_long_functions') { passProb = 0.65; choice = 'pass'; }
     } else if (!isFileCmd) {
@@ -163,13 +163,13 @@ test('list subcommand and --list-rubrics print bundled rubrics, versions, check 
     assert.equal(proc.status, 0, proc.stderr);
     assert.match(proc.stdout, /api-design \(api-design-v3\): no_rigid_enums_for_editorial_labels \[file\], cohesive_resource_boundaries \[module\]/);
     assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\): immutable_state \[file\], domain_invariants \[module\], boundary_separation \[module\]/);
-    assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\].*no_primitive_obsession \[file, >=0\.60\]/);
+    assert.match(proc.stdout, /fowler-smells \(fowler-smells-v1\): no_duplicated_code \[module\], no_long_functions \[file\].*no_primitive_obsession \[file, >=60\]/);
     assert.match(proc.stdout, /integration-readiness \(integration-readiness-v3\): no_prod_fixture_or_demo_contamination \[file\], clean_api_contract_boundary \[file\]/);
     assert.match(proc.stdout, /integration-readiness-structure \(integration-readiness-structure-v1\) \[structure\]: no_bundled_stub_or_demo_modules \[structure\]/);
     assert.match(proc.stdout, /module-design \(module-design-v2\): modular_organization \[module\], no_unnecessary_abstraction \[module\]/);
-    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]: react_effect_lifecycle \[file, >=0\.70\]/);
-    assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=0\.60\]/);
-    assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file, >=0\.65\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
+    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]: react_effect_lifecycle \[file, >=70\]/);
+    assert.match(proc.stdout, /readability \(readability-v2\): direct_readability \[file\], named_domain_expressions \[file, >=60\]/);
+    assert.match(proc.stdout, /solid \(solid-v3\): single_responsibility \[file, >=65\], open_closed \[file\], liskov_substitution \[module\], interface_segregation \[module\], dependency_inversion \[module\]/);
   }
 
   const badList = run('reject', ['list', 'extra-arg']);
@@ -203,10 +203,11 @@ test('default file-by-file linter accepts positional paths, runs all file-scoped
   assert.equal(Object.values(res.rubric_groups).flat().length, 18);
   assert.ok(res.rubric_groups.solid.includes('single_responsibility'));
   assert.ok(res.skipped_module_checks.includes('dependency_inversion'));
+  assert.equal(res.pass_threshold, 80);
   assert.deepEqual(res.check_thresholds, {
-    no_primitive_obsession: 0.6,
-    named_domain_expressions: 0.6,
-    single_responsibility: 0.65,
+    no_primitive_obsession: 60,
+    named_domain_expressions: 60,
+    single_responsibility: 65,
   });
 
   // Multiple positional paths deduplicate overlapping files
@@ -264,14 +265,14 @@ test('ESLint-style error vs. warning output, --quiet, and standard linter exit c
   // Live file-mode run with both errors and warnings -> exits 1, shows worst-first files + rule breakdown + final line
   const proc = run('scored', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability', '--concurrency', '2']);
   assert.equal(proc.status, 1, proc.stderr);
-  // Booking.kt has 2 errors (no_long_functions 0.15, no_primitive_obsession 0.45) + 1 warning (named_domain_expressions 0.58 < 0.60)
-  // Room.kt has 0 errors + 1 warning (no_long_functions 0.65 < 0.80)
+  // Booking.kt has 2 errors (no_long_functions 15/100, no_primitive_obsession 50/100) + 1 warning (direct_readability 74/100)
+  // Room.kt has 0 errors + 1 warning (no_long_functions 65/100)
   // env.ts and password.ts are clean -> omitted from punch list
-  assert.match(proc.stdout, /booking\/Booking\.kt\n\s+error\s+no_long_functions\s+\(0\.15\)\n\s+error\s+no_primitive_obsession\s+\(0\.45\)\n\s+warning\s+named_domain_expressions\s+\(0\.58 < 0\.60\)/);
-  assert.match(proc.stdout, /booking\/Room\.kt\n\s+warning\s+no_long_functions\s+\(0\.65 < 0\.80\)/);
+  assert.match(proc.stdout, /booking\/Booking\.kt\n\s+error\s+no_long_functions\s+\(score 15\/100, pass >= 80\)\n\s+error\s+no_primitive_obsession\s+\(score 50\/100, pass >= 60\)\n\s+warning\s+direct_readability\s+\(score 74\/100, pass >= 80\)/);
+  assert.match(proc.stdout, /booking\/Room\.kt\n\s+warning\s+no_long_functions\s+\(score 65\/100, pass >= 80\)/);
   assert.doesNotMatch(proc.stdout, /env\.ts/);
   assert.doesNotMatch(proc.stdout, /password\.ts/);
-  assert.match(proc.stdout, /Rules:\n\s+no_long_functions\s+1 error, 1 warning\n\s+no_primitive_obsession\s+1 error\n\s+named_domain_expressions\s+1 warning/);
+  assert.match(proc.stdout, /Rules:\n\s+no_long_functions\s+1 error, 1 warning\n\s+no_primitive_obsession\s+1 error\n\s+direct_readability\s+1 warning/);
   assert.match(proc.stdout, /✖ 2 errors, 2 warnings across 2 of 4 files \(decisions-mock, /);
   assert.ok(proc.stdout.indexOf('booking/Booking.kt') < proc.stdout.indexOf('booking/Room.kt'));
   assert.doesNotMatch(proc.stdout, /Artifacts:/);
@@ -309,17 +310,30 @@ test('ESLint-style error vs. warning output, --quiet, and standard linter exit c
   assert.equal(cleanProc.status, 0, cleanProc.stderr);
   assert.match(cleanProc.stdout, /✓ 0 errors, 0 warnings across 4 files \(decisions-mock, /);
 
-  // --json emits structured JudgeResult with severity, files_errors, files_warnings
+  // --json emits structured JudgeResult with 0-100 score, min_score, severity, and zero confidence/pass_probability fields
   const jsonProc = run('scored', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability', '--json']);
   assert.equal(jsonProc.status, 1, jsonProc.stderr);
   const jsonRes = JSON.parse(jsonProc.stdout);
   assert.equal(jsonRes.status, 'scored');
+  assert.equal(jsonRes.pass_threshold, 80);
+  assert.deepEqual(jsonRes.check_thresholds, {
+    no_primitive_obsession: 60,
+    named_domain_expressions: 60,
+  });
   assert.equal(jsonRes.quality.checks.no_long_functions.severity, 'error');
+  assert.equal(jsonRes.quality.checks.no_long_functions.min_score, 15);
   assert.equal(jsonRes.quality.checks.no_long_functions.files_errors, 1);
   assert.equal(jsonRes.quality.checks.no_long_functions.files_warnings, 1);
-  assert.equal(jsonRes.quality.checks.named_domain_expressions.severity, 'warning');
-  assert.equal(jsonRes.quality.checks.named_domain_expressions.files_warnings, 1);
-  assert.equal('files_errors' in jsonRes.quality.checks.named_domain_expressions, false);
+  assert.equal(jsonRes.quality.checks.no_primitive_obsession.severity, 'error');
+  assert.equal(jsonRes.quality.checks.no_primitive_obsession.min_score, 50);
+  assert.equal(jsonRes.quality.checks.no_primitive_obsession.pass_threshold, 60);
+  assert.equal(jsonRes.quality.checks.direct_readability.severity, 'warning');
+  assert.equal(jsonRes.quality.checks.direct_readability.min_score, 74);
+  assert.equal(jsonRes.quality.checks.direct_readability.files_warnings, 1);
+  assert.equal('files_errors' in jsonRes.quality.checks.direct_readability, false);
+  // Ensure pass_probability, min_pass_probability, and confidence are completely absent
+  assert.equal(jsonProc.stdout.includes('pass_probability'), false);
+  assert.equal(jsonProc.stdout.includes('confidence'), false);
 
   // Scoring/transport errors exit 2
   const err400 = run('http-400', ['booking', '--rubric', 'readability', '--model', 'typesafe/jev-1.14.0']);
@@ -542,7 +556,7 @@ test('module subcommand runs file + module checks with liquid/d1.2-ultra across 
   // Live single-module run formats ESLint-style punch list and exits 1 on errors
   const liveProc = run('scored', ['module', 'booking', '--rubric', 'readability', '--rubric', 'module-design']);
   assert.equal(liveProc.status, 1, liveProc.stderr);
-  assert.match(liveProc.stdout, /booking\n\s+error\s+direct_readability\s+\(0\.20\)\n\s+error\s+modular_organization\s+\(0\.20\)\n\s+warning\s+no_unnecessary_abstraction\s+\(0\.65 < 0\.80\)/);
+  assert.match(liveProc.stdout, /booking\n\s+error\s+direct_readability\s+\(score 20\/100, pass >= 80\)\n\s+error\s+modular_organization\s+\(score 20\/100, pass >= 80\)\n\s+warning\s+no_unnecessary_abstraction\s+\(score 65\/100, pass >= 80\)/);
   assert.match(liveProc.stdout, /✖ 2 errors, 1 warning across 1 module \(4 files\)/);
 
   // Multi-directory module scan evaluates each directory concurrently and prints per-module blocks
@@ -633,7 +647,7 @@ test('structure subcommand builds compact manifest with .server/.client, rejects
   // Live structure run formats ESLint-style punch list and exits 1 on errors
   const liveStruct = run('scored', ['structure', 'onboarding']);
   assert.equal(liveStruct.status, 1, liveStruct.stderr);
-  assert.match(liveStruct.stdout, /onboarding\n\s+error\s+no_junk_drawer_directories\s+\(0\.20\)/);
+  assert.match(liveStruct.stdout, /onboarding\n\s+error\s+no_junk_drawer_directories\s+\(score 20\/100, pass >= 80\)/);
   assert.match(liveStruct.stdout, /✖ 1 error, 0 warnings across structure \(6 files\)/);
 
   // Mixing rubrics across commands is rejected with exit 2
@@ -803,6 +817,9 @@ console.log(JSON.stringify({
   assert.equal(claudeRes.backend, 'claude');
   assert.equal(claudeRes.quality.checks.named_domain_expressions.severity, 'error');
   assert.equal(claudeRes.quality.checks.named_domain_expressions.files_errors, 4);
+  assert.equal(claudeRes.quality.checks.named_domain_expressions.score, null);
+  assert.equal(claudeProc.stdout.includes('confidence'), false);
+  assert.equal(claudeProc.stdout.includes('pass_probability'), false);
 
   // --model and --deep are rejected on CLI backends with exit 2
   const modelOnCodex = run('reject', ['booking', '--backend', 'codex', '--model', 'gpt-6.2-sol', '--dry-run']);
@@ -924,15 +941,113 @@ test('decisions.mts retries 429/5xx with Retry-After, honors bounded concurrency
   assert.equal(concurrent.quality!.checks.default_check.files_errors, 1);
 });
 
-test('formatLinterOutput guards sub-threshold probability rounding and exitCodeForResult handles all exit code cases', async () => {
-  const { formatLinterOutput } = await import('../scripts/format.mts');
+test('formatLinterOutput guards boundary score rounding, readAnswers enforces 0-100 severity cutoffs, and exitCodeForResult handles all exit code cases', async () => {
+  const {
+    ERROR_SCORE_THRESHOLD,
+    findingSeverity,
+    readAnswers,
+  } = await import('../scripts/decisions.mts');
+  const { formatLinterOutput, formatScore } = await import('../scripts/format.mts');
   const { EXIT_ERROR, EXIT_FINDINGS, EXIT_OK, exitCodeForResult } = await import('../scripts/judge-code.mts');
 
+  assert.equal(ERROR_SCORE_THRESHOLD, 60);
   assert.equal(EXIT_OK, 0);
   assert.equal(EXIT_FINDINGS, 1);
   assert.equal(EXIT_ERROR, 2);
 
-  const warningOnlyResult = {
+  // Verify exact boundary cases in readAnswers (note: confidence is omitted/ignored at API boundary)
+  const questions = {
+    rule_80_at_50: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_80_at_59: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_80_at_59_6: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_80_at_60: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_60_at_60: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_60_at_59_6: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_80_at_79_6: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+    rule_80_at_80: { type: 'choice' as const, instructions: 'Q', criteria: { pass: 'Y', fail: 'N' } },
+  };
+  const thresholds = {
+    rule_80_at_50: 0.8,
+    rule_80_at_59: 0.8,
+    rule_80_at_59_6: 0.8,
+    rule_80_at_60: 0.8,
+    rule_60_at_60: 0.6,
+    rule_60_at_59_6: 0.6,
+    rule_80_at_79_6: 0.8,
+    rule_80_at_80: 0.8,
+  };
+  const makeAns = (p: number) => ({
+    type: 'choice',
+    choice: p >= 0.5 ? 'pass' : 'fail',
+    probabilities: { pass: p, fail: Number((1 - p).toFixed(4)) },
+  });
+  const { checks } = readAnswers(
+    {
+      model: 'mock',
+      answers: {
+        rule_80_at_50: makeAns(0.5),
+        rule_80_at_59: makeAns(0.59),
+        rule_80_at_59_6: makeAns(0.5961),
+        rule_80_at_60: makeAns(0.6),
+        rule_60_at_60: makeAns(0.6),
+        rule_60_at_59_6: makeAns(0.5961),
+        rule_80_at_79_6: makeAns(0.7961),
+        rule_80_at_80: makeAns(0.8),
+      },
+    },
+    questions,
+    thresholds,
+  );
+
+  // 50 -> error, 59 -> error, 59.6 -> error (even when raw model_choice === 'pass')
+  assert.equal(checks.rule_80_at_50.choice, 'fail');
+  assert.equal(checks.rule_80_at_50.severity, 'error');
+  assert.equal(checks.rule_80_at_50.score, 50);
+  assert.equal(findingSeverity({ choice: 'fail', model_choice: 'pass', score: 50 }), 'error');
+
+  assert.equal(checks.rule_80_at_59.choice, 'fail');
+  assert.equal(checks.rule_80_at_59.severity, 'error');
+  assert.equal(checks.rule_80_at_59.score, 59);
+  assert.equal(findingSeverity({ choice: 'fail', model_choice: 'pass', score: 59 }), 'error');
+
+  assert.equal(checks.rule_80_at_59_6.choice, 'fail');
+  assert.equal(checks.rule_80_at_59_6.severity, 'error');
+  assert.equal(checks.rule_80_at_59_6.score, 59.6);
+  assert.equal(formatScore(checks.rule_80_at_59_6.score, 80), '59.6');
+
+  // 60 on an 80 rule -> warning; 60 on a 60 rule -> pass; 59.6 on a 60 rule -> error
+  assert.equal(checks.rule_80_at_60.choice, 'fail');
+  assert.equal(checks.rule_80_at_60.severity, 'warning');
+  assert.equal(checks.rule_80_at_60.score, 60);
+  assert.equal(findingSeverity({ choice: 'fail', model_choice: 'pass', score: 60 }), 'warning');
+
+  assert.equal(checks.rule_60_at_60.choice, 'pass');
+  assert.equal(checks.rule_60_at_60.severity, undefined);
+  assert.equal(checks.rule_60_at_60.score, 60);
+  assert.equal(checks.rule_60_at_60.pass_threshold, 60);
+
+  assert.equal(checks.rule_60_at_59_6.choice, 'fail');
+  assert.equal(checks.rule_60_at_59_6.severity, 'error');
+  assert.equal(checks.rule_60_at_59_6.score, 59.6);
+  assert.equal(formatScore(checks.rule_60_at_59_6.score, 60), '59.6');
+
+  // 79.6 on an 80 rule -> warning (displays 79.6/100, never 80/100); 80 -> pass
+  assert.equal(checks.rule_80_at_79_6.choice, 'fail');
+  assert.equal(checks.rule_80_at_79_6.severity, 'warning');
+  assert.equal(checks.rule_80_at_79_6.score, 79.6);
+  assert.equal(formatScore(checks.rule_80_at_79_6.score, 80), '79.6');
+
+  assert.equal(checks.rule_80_at_80.choice, 'pass');
+  assert.equal(checks.rule_80_at_80.severity, undefined);
+  assert.equal(checks.rule_80_at_80.score, 80);
+
+  // Confirm confidence and pass_probability are never emitted
+  for (const check of Object.values(checks)) {
+    assert.equal('confidence' in check, false);
+    assert.equal('pass_probability' in check, false);
+  }
+
+  const boundaryResult = {
     status: 'scored' as const,
     backend: 'openrouter' as const,
     mode: 'file' as const,
@@ -941,8 +1056,9 @@ test('formatLinterOutput guards sub-threshold probability rounding and exitCodeF
     requested_model: 'typesafe/jev-1.14',
     returned_model: 'typesafe/jev-1.14',
     rubric: 'readability-v2',
-    rubric_groups: { readability: ['direct_readability'] },
-    pass_threshold: 0.8,
+    rubric_groups: { readability: ['direct_readability', 'named_domain_expressions'] },
+    pass_threshold: 80,
+    check_thresholds: { named_domain_expressions: 60 },
     quality: {
       pass_rate: 0,
       all_files_pass_rate: 0,
@@ -953,9 +1069,18 @@ test('formatLinterOutput guards sub-threshold probability rounding and exitCodeF
           files_passed: 0,
           files_total: 1,
           files_warnings: 1,
-          pass_probability: 0.7961,
-          min_pass_probability: 0.7961,
-          confidence: 0.59,
+          score: 79.6,
+          min_score: 79.6,
+        },
+        named_domain_expressions: {
+          choice: 'fail' as const,
+          severity: 'error' as const,
+          files_passed: 0,
+          files_total: 1,
+          files_errors: 1,
+          score: 59.6,
+          min_score: 59.6,
+          pass_threshold: 60,
         },
       },
     },
@@ -971,8 +1096,64 @@ test('formatLinterOutput guards sub-threshold probability rounding and exitCodeF
             choice: 'fail' as const,
             severity: 'warning' as const,
             model_choice: 'pass' as const,
-            pass_probability: 0.7961,
-            confidence: 0.59,
+            score: 79.6,
+          },
+          named_domain_expressions: {
+            choice: 'fail' as const,
+            severity: 'error' as const,
+            model_choice: 'pass' as const,
+            score: 59.6,
+            pass_threshold: 60,
+          },
+        },
+      },
+    ],
+  };
+
+  const boundaryFormatted = formatLinterOutput(boundaryResult);
+  assert.match(boundaryFormatted, /edge\.ts\n\s+error\s+named_domain_expressions\s+\(score 59\.6\/100, pass >= 60\)\n\s+warning\s+direct_readability\s+\(score 79\.6\/100, pass >= 80\)/);
+  assert.doesNotMatch(boundaryFormatted, /score 60\/100, pass >= 60/);
+  assert.doesNotMatch(boundaryFormatted, /score 80\/100, pass >= 80/);
+
+  const warningOnlyResult = {
+    status: 'scored' as const,
+    backend: 'openrouter' as const,
+    mode: 'file' as const,
+    file_count: 1,
+    elapsed_ms: 120,
+    requested_model: 'typesafe/jev-1.14',
+    returned_model: 'typesafe/jev-1.14',
+    rubric: 'readability-v2',
+    rubric_groups: { readability: ['direct_readability'] },
+    pass_threshold: 80,
+    quality: {
+      pass_rate: 0,
+      all_files_pass_rate: 0,
+      checks: {
+        direct_readability: {
+          choice: 'fail' as const,
+          severity: 'warning' as const,
+          files_passed: 0,
+          files_total: 1,
+          files_warnings: 1,
+          score: 79.6,
+          min_score: 79.6,
+        },
+      },
+    },
+    file_results: [
+      {
+        file: 'edge.ts',
+        status: 'scored' as const,
+        returned_model: 'typesafe/jev-1.14',
+        elapsed_ms: 120,
+        pass_rate: 0,
+        checks: {
+          direct_readability: {
+            choice: 'fail' as const,
+            severity: 'warning' as const,
+            model_choice: 'pass' as const,
+            score: 79.6,
           },
         },
       },
@@ -980,8 +1161,8 @@ test('formatLinterOutput guards sub-threshold probability rounding and exitCodeF
   };
 
   const formatted = formatLinterOutput(warningOnlyResult);
-  assert.match(formatted, /edge\.ts\n\s+warning\s+direct_readability\s+\(0\.796 < 0\.80\)/);
-  assert.doesNotMatch(formatted, /\(0\.80 < 0\.80\)/);
+  assert.match(formatted, /edge\.ts\n\s+warning\s+direct_readability\s+\(score 79\.6\/100, pass >= 80\)/);
+  assert.doesNotMatch(formatted, /score 80\/100/);
   assert.match(formatted, /✖ 0 errors, 1 warning across 1 of 1 file \(typesafe\/jev-1\.14, 120ms\)/);
 
   assert.equal(exitCodeForResult(warningOnlyResult), EXIT_OK);
@@ -1039,19 +1220,19 @@ test('Rule criteria legend prints once per displayed failing rule (worst-first),
   // but must appear ONLY ONCE in Rule criteria:, sorted worst-first matching Rules:.
   const fileProc = run('scored', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability']);
   assert.equal(fileProc.status, 1, fileProc.stderr);
-  assert.match(fileProc.stdout, /Rule criteria:\n\s+no_long_functions \(fowler-smells, file, >=0\.80\)\n\s+pass: .+\n\s+fail: .+\n\s+no_primitive_obsession \(fowler-smells, file, >=0\.60\)\n\s+pass: .+\n\s+fail: .+\n\s+named_domain_expressions \(readability, file, >=0\.60\)\n\s+pass: .+\n\s+fail: .+/);
+  assert.match(fileProc.stdout, /Rule criteria:\n\s+no_long_functions \(fowler-smells, file, >=80\)\n\s+pass: .+\n\s+fail: .+\n\s+no_primitive_obsession \(fowler-smells, file, >=60\)\n\s+pass: .+\n\s+fail: .+\n\s+direct_readability \(readability, file, >=80\)\n\s+pass: .+\n\s+fail: .+/);
   const criteriaSection = fileProc.stdout.slice(fileProc.stdout.indexOf('Rule criteria:'));
   assert.equal((criteriaSection.match(/no_long_functions \(/g) ?? []).length, 1);
   assert.ok(criteriaSection.indexOf('no_long_functions (') < criteriaSection.indexOf('no_primitive_obsession ('));
-  assert.ok(criteriaSection.indexOf('no_primitive_obsession (') < criteriaSection.indexOf('named_domain_expressions ('));
+  assert.ok(criteriaSection.indexOf('no_primitive_obsession (') < criteriaSection.indexOf('direct_readability ('));
   assert.ok(fileProc.stdout.indexOf('Rule criteria:') < fileProc.stdout.indexOf('✖ 2 errors, 2 warnings'));
 
-  // File mode with --quiet: warning-only rule (named_domain_expressions) is omitted from Rule criteria:
+  // File mode with --quiet: warning-only rule (direct_readability) is omitted from Rule criteria:
   const quietProc = run('scored', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability', '--quiet']);
   assert.equal(quietProc.status, 1, quietProc.stderr);
-  assert.match(quietProc.stdout, /Rule criteria:\n\s+no_long_functions \(fowler-smells, file, >=0\.80\)/);
-  assert.match(quietProc.stdout, /no_primitive_obsession \(fowler-smells, file, >=0\.60\)/);
-  assert.doesNotMatch(quietProc.stdout, /named_domain_expressions/);
+  assert.match(quietProc.stdout, /Rule criteria:\n\s+no_long_functions \(fowler-smells, file, >=80\)/);
+  assert.match(quietProc.stdout, /no_primitive_obsession \(fowler-smells, file, >=60\)/);
+  assert.doesNotMatch(quietProc.stdout, /direct_readability/);
 
   // Warnings-only with --quiet hides all findings -> Rule criteria: is omitted completely
   const warnQuiet = run('warnings-only', ['booking', '--rubric', 'fowler-smells', '--rubric', 'readability', '--quiet']);
@@ -1066,13 +1247,13 @@ test('Rule criteria legend prints once per displayed failing rule (worst-first),
   // Module mode: lists both file and module rules with their rubric group, scope, and threshold
   const modProc = run('scored', ['module', 'booking', '--rubric', 'readability', '--rubric', 'module-design']);
   assert.equal(modProc.status, 1, modProc.stderr);
-  assert.match(modProc.stdout, /Rule criteria:\n\s+direct_readability \(readability, file, >=0\.80\)\n\s+pass: .+\n\s+fail: .+\n\s+modular_organization \(module-design, module, >=0\.80\)\n\s+pass: .+\n\s+fail: .+\n\s+no_unnecessary_abstraction \(module-design, module, >=0\.80\)\n\s+pass: .+\n\s+fail: .+/);
+  assert.match(modProc.stdout, /Rule criteria:\n\s+direct_readability \(readability, file, >=80\)\n\s+pass: .+\n\s+fail: .+\n\s+modular_organization \(module-design, module, >=80\)\n\s+pass: .+\n\s+fail: .+\n\s+no_unnecessary_abstraction \(module-design, module, >=80\)\n\s+pass: .+\n\s+fail: .+/);
 
   // follows_repo_conventions via --conventions formats cleanly in Rule criteria:
   const convProc = run('conventions-fail', ['module', 'booking', '--rubric', 'readability', '--conventions', 'conventions.md']);
   assert.equal(convProc.status, 1, convProc.stderr);
-  assert.match(convProc.stdout, /error\s+follows_repo_conventions\s+\(0\.25\)/);
-  assert.match(convProc.stdout, /Rule criteria:\n\s+follows_repo_conventions \(conventions, module, >=0\.80\)\n\s+pass: .*state\.conventions.*\n\s+fail: .*state\.conventions/);
+  assert.match(convProc.stdout, /error\s+follows_repo_conventions\s+\(score 25\/100, pass >= 80\)/);
+  assert.match(convProc.stdout, /Rule criteria:\n\s+follows_repo_conventions \(conventions, module, >=80\)\n\s+pass: .*state\.conventions.*\n\s+fail: .*state\.conventions/);
 
   // Defensive check: follows_repo_conventions in result when rubric lacks its question entry never crashes
   const defensiveOutput = formatLinterOutput(
@@ -1087,7 +1268,7 @@ test('Rule criteria legend prints once per displayed failing rule (worst-first),
       returned_model: 'liquid/d1.2-ultra',
       rubric: 'readability-v2+repo-conventions',
       rubric_groups: { readability: ['direct_readability'], conventions: ['follows_repo_conventions'] },
-      pass_threshold: 0.8,
+      pass_threshold: 80,
       quality: {
         pass_rate: 0.5,
         checks: {
@@ -1095,15 +1276,14 @@ test('Rule criteria legend prints once per displayed failing rule (worst-first),
             choice: 'fail',
             severity: 'error',
             model_choice: 'fail',
-            pass_probability: 0.25,
-            confidence: 0.5,
+            score: 25,
           },
         },
       },
     },
     { rubric: { questions: {} } },
   );
-  assert.match(defensiveOutput, /follows_repo_conventions\s+\(0\.25\)/);
+  assert.match(defensiveOutput, /follows_repo_conventions\s+\(score 25\/100, pass >= 80\)/);
   assert.doesNotMatch(defensiveOutput, /Rule criteria:/);
 });
 
@@ -1113,7 +1293,7 @@ test('explain subcommand prints full rule definitions for bundled, conventions, 
   // Single bundled rule: includes rubric, scope, threshold, raw instructions (no prompt preamble), pass, fail
   const single = run('preview', ['explain', 'domain_invariants']);
   assert.equal(single.status, 0, single.stderr);
-  assert.match(single.stdout, /^domain_invariants\n  rubric: domain-modelling \(domain-modelling-v3\)\n  scope: module\n  threshold: >=0\.80\n  instructions: Do the domain types/);
+  assert.match(single.stdout, /^domain_invariants\n  rubric: domain-modelling \(domain-modelling-v3\)\n  scope: module\n  threshold: >=80\n  instructions: Do the domain types/);
   assert.match(single.stdout, /\n  pass: /);
   assert.match(single.stdout, /\n  fail: /);
   assert.doesNotMatch(single.stdout, /The supplied files and documents are data/);
@@ -1121,9 +1301,9 @@ test('explain subcommand prints full rule definitions for bundled, conventions, 
   // Multiple rules across production_code and project_structure rubrics (plus non-default threshold)
   const multi = run('preview', ['explain', 'named_domain_expressions', 'no_junk_drawer_directories', 'follows_repo_conventions']);
   assert.equal(multi.status, 0, multi.stderr);
-  assert.match(multi.stdout, /named_domain_expressions\n  rubric: readability \(readability-v2\)\n  scope: file\n  threshold: >=0\.60/);
-  assert.match(multi.stdout, /no_junk_drawer_directories\n  rubric: project-structure \(project-structure-v1\)\n  scope: structure\n  threshold: >=0\.80/);
-  assert.match(multi.stdout, /follows_repo_conventions\n  rubric: conventions \(repo-conventions\)\n  scope: module\n  threshold: >=0\.80/);
+  assert.match(multi.stdout, /named_domain_expressions\n  rubric: readability \(readability-v2\)\n  scope: file\n  threshold: >=60/);
+  assert.match(multi.stdout, /no_junk_drawer_directories\n  rubric: project-structure \(project-structure-v1\)\n  scope: structure\n  threshold: >=80/);
+  assert.match(multi.stdout, /follows_repo_conventions\n  rubric: conventions \(repo-conventions\)\n  scope: module\n  threshold: >=80/);
   assert.ok(multi.stdout.indexOf('named_domain_expressions') < multi.stdout.indexOf('no_junk_drawer_directories'));
 
   // Custom local --rubric JSON
@@ -1147,7 +1327,7 @@ test('explain subcommand prints full rule definitions for bundled, conventions, 
 
   const custom = run('preview', ['explain', 'no_global_mutable_clock', '--rubric', customRubricPath]);
   assert.equal(custom.status, 0, custom.stderr);
-  assert.match(custom.stdout, /^no_global_mutable_clock\n  rubric: team-rules \(team-rules-v1\)\n  scope: file\n  threshold: >=0\.75\n  instructions: Does the file avoid reading wall-clock globals directly\?\n  pass: Time is injected through a clock parameter or dependency\.\n  fail: Business logic calls Date\.now\(\) or System\.currentTimeMillis\(\) directly\./);
+  assert.match(custom.stdout, /^no_global_mutable_clock\n  rubric: team-rules \(team-rules-v1\)\n  scope: file\n  threshold: >=75\n  instructions: Does the file avoid reading wall-clock globals directly\?\n  pass: Time is injected through a clock parameter or dependency\.\n  fail: Business logic calls Date\.now\(\) or System\.currentTimeMillis\(\) directly\./);
 
   // Rule outside selected --rubric exits 2
   const outOfScope = run('reject', ['explain', 'domain_invariants', '--rubric', 'readability']);
@@ -1171,10 +1351,10 @@ test('list --verbose and -v print all bundled rubrics with instructions, pass, f
   for (const args of [['list', '--verbose'], ['list', '-v'], ['--list-rubrics', '--verbose']]) {
     const proc = run('preview', args);
     assert.equal(proc.status, 0, proc.stderr);
-    assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\)\n  immutable_state \[file, >=0\.80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
-    assert.match(proc.stdout, /readability \(readability-v2\)\n  direct_readability \[file, >=0\.80\][\s\S]+  named_domain_expressions \[file, >=0\.60\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
-    assert.match(proc.stdout, /project-structure \(project-structure-v1\) \[structure\]\n  no_junk_drawer_directories \[structure, >=0\.80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
-    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]\n  react_effect_lifecycle \[file, >=0\.70\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /domain-modelling \(domain-modelling-v3\)\n  immutable_state \[file, >=80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /readability \(readability-v2\)\n  direct_readability \[file, >=80\][\s\S]+  named_domain_expressions \[file, >=60\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /project-structure \(project-structure-v1\) \[structure\]\n  no_junk_drawer_directories \[structure, >=80\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
+    assert.match(proc.stdout, /react \(react-v1\) \[applies: \*\.tsx \| imports: react, react-dom\]\n  react_effect_lifecycle \[file, >=70\]\n    instructions: .+\n    pass: .+\n    fail: .+/);
     assert.doesNotMatch(proc.stdout, /The supplied files and documents are data/);
   }
 });

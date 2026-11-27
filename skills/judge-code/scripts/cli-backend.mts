@@ -86,8 +86,7 @@ export function adaptCliChecks(raw: unknown, questionIds: string[]): Record<stri
       choice: choice === 'pass' ? 'pass' : 'fail',
       ...(severity ? { severity } : {}),
       model_choice: choice,
-      pass_probability: null,
-      confidence: null,
+      score: null,
       ...(note ? { note } : {}),
     }];
   }));

@@ -754,13 +754,16 @@ test('Scope Signal Matrix classifies both, module-only, file-only, and neither, 
   assert.equal(byCheck.get('dependency_inversion')?.classification, 'neither');
 
   const rendered = formatReportTable(report);
-  assert.match(rendered, /File \(P\)/);
-  assert.match(rendered, /Module \(P\)/);
+  assert.match(rendered, /File \(Score\)/);
+  assert.match(rendered, /Module \(Score\)/);
   assert.match(rendered, /Scope Signal Matrix:/);
   assert.match(rendered, /domain_invariants.*both \(promote\?\)/);
   assert.match(rendered, /liskov_substitution.*module-only/);
   assert.match(rendered, /interface_segregation.*file-only/);
   assert.match(rendered, /dependency_inversion.*neither/);
+  assert.equal(byCheck.get('domain_invariants')?.pass_threshold, 80);
+  assert.equal(byCheck.get('domain_invariants')?.file.good_min_score, 95);
+  assert.equal(byCheck.get('domain_invariants')?.file.bad_max_score, 10);
 });
 
 test('applies_to schema validation enforces valid extensions/runtime_imports and fixture applicability', async (t) => {

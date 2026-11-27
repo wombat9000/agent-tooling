@@ -12,7 +12,7 @@ The bundled `$SKILL_DIR/rubrics/*.json` files are an **open, readable style guid
    - **Module architecture:** `judge-code module <path...>` evaluates whole module/feature directory bundle(s) against all `file` + `module` checks using `liquid/d1.2-ultra`.
    - **Directory layout:** `judge-code structure <path>` evaluates folder layout, concern separation, and integration hygiene from a compact structural manifest using `liquid/d1.2-ultra`.
 2. When scanning a new repository or scope for the first time, preview with `--dry-run` (optionally `--out /path/to/new-private-dir` to inspect `request.json`) to verify the resolved files, rules, conventions, ignores, and credential checks, and confirm nothing unrelated or secret is included. For routine single-file or `--changed` lints in an already familiar repo, you can run directly.
-3. Run live, read the `Rule criteria:` legend printed below findings (or run `judge-code explain <check-id...>` / inspect `$SKILL_DIR/rubrics/*.json`) **before** reporting or refactoring so you evaluate what the rubric actually checks instead of guessing from a rule name, and inspect each `error` (raw model `FAIL`, `P(pass) < 0.50`) and `warning` (threshold borderline, raw `PASS` with `P(pass) < pass_threshold`) directly in the source files.
+3. Run live, read the `Rule criteria:` legend printed below findings (or run `judge-code explain <check-id...>` / inspect `$SKILL_DIR/rubrics/*.json`) **before** reporting or refactoring so you evaluate what the rubric actually checks instead of guessing from a rule name, and inspect each `error` (`score < 60/100`) and `warning` (`60/100` up to the rule's pass bar, default `80/100`) directly in the source files.
 4. If authorized to edit, make small behavior-preserving refactors for verified findings, run the project's tests and checks, and re-run `judge-code` with the same scope, rubrics, exclusions, and model to compare results.
 
 ## Run the CLI
@@ -67,30 +67,33 @@ node "$SKILL_DIR/scripts/judge-code.mts" module src/features/billing --out /path
 
 ### Output, severity, and exit codes
 
-Default stdout prints an ESLint-style punch list showing only targets with findings (sorted worst-first by error count, warning count, then lowest `P(pass)`), a compact rule breakdown, a `Rule criteria:` legend listing each distinct triggered rule once with its `pass`/`fail` definitions (omitted on clean runs and filtered by `--quiet`), and a final summary line:
+Default stdout prints an ESLint-style punch list showing only targets with findings (sorted worst-first by error count, warning count, then lowest score), a compact rule breakdown, a `Rule criteria:` legend listing each distinct triggered rule once with its `pass`/`fail` definitions (omitted on clean runs and filtered by `--quiet`), and a final summary line:
 
 ```text
 src/features/billing/workflow.ts
-  error    no_long_functions            (0.22)
-  warning  named_domain_expressions     (0.58 < 0.60)
+  error    no_long_functions            (score 50/100, pass >= 80)
+  warning  direct_readability           (score 74/100, pass >= 80)
 
 Rules:
   no_long_functions            1 error
-  named_domain_expressions     1 warning
+  direct_readability           1 warning
 
 Rule criteria:
-  no_long_functions (fowler-smells, file, >=0.80)
+  no_long_functions (fowler-smells, file, >=80)
     pass: ...
     fail: ...
-  named_domain_expressions (readability, file, >=0.60)
+  direct_readability (readability, file, >=80)
     pass: ...
     fail: ...
 
 ✖ 1 error, 1 warning across 1 of 4 files (typesafe/jev-1.14, 4.1s)
 ```
 
-- **`error`**: raw model `FAIL` (`model_choice === "fail"`, i.e. `P(pass) < 0.50`, or CLI backend `"fail"`).
-- **`warning`**: threshold borderline (`model_choice === "pass"` with `P(pass) < pass_threshold`, or CLI backend `"borderline"`).
+Scores are on a `0-100` quality scale where clean code typically scores `90-99/100`:
+
+- **`error`**: `score < 60` (a serious flaw — `50/100` is nowhere near passing, not a coin flip), or CLI backend `"fail"`.
+- **`warning`**: `60` up to the criterion's pass bar (default `80`; rules with a `60` pass bar such as `no_primitive_obsession` and `named_domain_expressions` have no warning band—below `60` is `error`, `60+` passes), or CLI backend `"borderline"`.
+- **Pass**: at or above the criterion's pass bar (default `80`).
 - **Exit `0`**: 0 errors (and warnings within `--max-warnings`, if set, and `--fail-on-warning` not triggered).
 - **Exit `1`**: 1+ errors found (or `--fail-on-warning` / `--max-warnings` exceeded).
 - **Exit `2`**: scoring, transport, backend, CLI argument, or input error (e.g. API HTTP error, errored file, invalid flags, or oversize input).

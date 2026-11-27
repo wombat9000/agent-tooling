@@ -692,11 +692,14 @@ test('runScanner caches rubric_fixtures runs by rubrics+fixtures hash, honors --
   assert.equal(first.fixture_outcome.fixtures_passed, 1);
   assert.equal(mock.calls, 4);
 
-  // Verify saved fixture snapshot margin (0.90 - 0.80 = 0.10) and jitter (0.96 - 0.90 = 0.06)
+  // Verify saved fixture snapshot margin (90 - 80 = 10) and jitter (96 - 90 = 6) on 0-100 scale
   const fxSnap = JSON.parse(readFileSync(first.fixture_outcome.snapshot_file!, 'utf8')) as RubricFixturesSnapshot;
   assert.equal(fxSnap.kind, 'rubric_fixtures');
-  assert.equal(fxSnap.metrics.min_margin, 0.1);
-  assert.equal(fxSnap.metrics.max_jitter, 0.06);
+  assert.equal(fxSnap.metrics.min_margin, 10);
+  assert.equal(fxSnap.metrics.max_jitter, 6);
+  assert.equal(fxSnap.checks[0].pass_threshold, 80);
+  assert.equal(fxSnap.checks[0].min_score, 90);
+  assert.equal(fxSnap.checks[0].max_score, 96);
 
   // Second run skips fixtures (unchanged)
   const mock2 = makeMockOpenRouterTransport();
@@ -1273,12 +1276,23 @@ test('module scan handles oversize (>128 KiB), empty modules, and per-module API
 test('dashboard model and HTML support Feature / Module Architecture, linter punch-list layout, legacy snapshots, and valid client JS', () => {
   const catalog = loadRubricCatalog();
 
-  // Verify classifyCheckFailure backwards-compatible fallback when model_choice is omitted
+  // Verify classifyCheckFailure aligns with < 60 = hard (error) across both new 0-100 and legacy 0..1 snapshots
+  assert.equal(classifyCheckFailure({ choice: 'pass', score: 90 }), null);
   assert.equal(classifyCheckFailure({ choice: 'pass', pass_probability: 0.9 }), null);
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'fail', score: 20 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', score: 50 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', score: 59.6 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', score: 60 }), 'borderline');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', score: 72 }), 'borderline');
   assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'fail', pass_probability: 0.2 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', pass_probability: 0.55 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', pass_probability: 0.596 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', pass_probability: 0.6 }), 'borderline');
   assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'pass', pass_probability: 0.72 }), 'borderline');
   assert.equal(classifyCheckFailure({ choice: 'fail', pass_probability: 0.65 }), 'borderline');
   assert.equal(classifyCheckFailure({ choice: 'fail', pass_probability: 0.35 }), 'hard');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'borderline', score: null }), 'borderline');
+  assert.equal(classifyCheckFailure({ choice: 'fail', model_choice: 'fail', score: null }), 'hard');
 
   // 1. Legacy file snapshot (no `modules`, no `model_choice`)
   const legacyFileSnap: RepoSnapshot = {
@@ -1615,4 +1629,307 @@ test('CLI supports --module-root and --skip-modules offline in --dry-run mode', 
   assert.equal(proc.status, 0, proc.stderr || proc.stdout);
   assert.match(proc.stdout, /cli-mod-repo \[file\].*would scan 2 file\(s\)/);
   assert.match(proc.stdout, /cli-mod-repo \[code\].*would scan 2\/2 module\(s\)/);
+});
+
+test('dashboard seamlessly reads mixed legacy 0..1 pass_probability snapshots alongside new 0-100 score snapshots', () => {
+  const catalog = loadRubricCatalog();
+  const h = { readability: 'aaaa1111' };
+
+  // Legacy historical snapshot on disk: 0..1 pass_probability, 0.8 threshold, confidence present,
+  // and a 0.55 finding that had model_choice='pass' under the old 0.50 cutoff (now hard/error under < 60).
+  const legacyRepoSnap: RepoSnapshot = {
+    schema_version: 1,
+    kind: 'repo',
+    timestamp: '2026-11-10T10:00:00.000Z',
+    repo: {
+      name: 'mixed-history-app',
+      branch: 'main',
+      commit: '1111111aaaa',
+      commit_short: '1111111',
+      dirty: false,
+      installed_judge_code: null,
+    },
+    scan: {
+      mode: 'file',
+      sources: ['src'],
+      rubrics: ['readability'],
+      rubric_id: 'readability-v2',
+      rubric_groups: { readability: ['direct_readability'] },
+      exclude: [],
+      model: 'typesafe/jev-1.14',
+      returned_model: 'typesafe/jev-1.14',
+      backend: 'openrouter',
+      conventions_hash: null,
+      requirements_hash: null,
+    },
+    judge_version: 'v2.2.0',
+    agent_tooling_tag: 'v2.2.0',
+    agent_tooling_commit: '956ed80',
+    rubric_hashes: h,
+    rubrics_digest: computeHashesDigest(h),
+    metrics: {
+      file_count: 2,
+      target_count: 2,
+      check_count: 1,
+      calibrated_pass_rate: 0.5,
+      raw_pass_rate: 1.0,
+      mean_pass_probability: 0.725,
+      elapsed_ms: 200,
+      cost_usd: 0.0004,
+      requests: 2,
+      retries: 0,
+    },
+    checks: {
+      direct_readability: {
+        threshold: 0.8,
+        rubric_group: 'readability',
+        passed: 1,
+        raw_passed: 2,
+        total: 2,
+        pass_rate: 0.5,
+        raw_pass_rate: 1.0,
+        mean_pass_probability: 0.725,
+        min_pass_probability: 0.55,
+      },
+    },
+    files: [
+      {
+        path: 'src/weak.ts',
+        pass_rate: 0,
+        raw_pass_rate: 1,
+        mean_pass_probability: 0.55,
+        min_pass_probability: 0.55,
+        failed_count: 1,
+        checks: { direct_readability: { choice: 'fail', model_choice: 'pass', pass_probability: 0.55, confidence: 0.1 } },
+      },
+      {
+        path: 'src/clean.ts',
+        pass_rate: 1,
+        raw_pass_rate: 1,
+        mean_pass_probability: 0.9,
+        min_pass_probability: 0.9,
+        failed_count: 0,
+        checks: { direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.9, confidence: 0.8 } },
+      },
+    ],
+  };
+
+  // New 0-100 snapshot (no pass_probability, no confidence)
+  const newRepoSnap: RepoSnapshot = {
+    schema_version: 1,
+    kind: 'repo',
+    timestamp: '2026-11-12T10:00:00.000Z',
+    repo: {
+      name: 'mixed-history-app',
+      branch: 'main',
+      commit: '2222222bbbb',
+      commit_short: '2222222',
+      dirty: false,
+      installed_judge_code: null,
+    },
+    scan: {
+      mode: 'file',
+      sources: ['src'],
+      rubrics: ['readability'],
+      rubric_id: 'readability-v2',
+      rubric_groups: { readability: ['direct_readability'] },
+      exclude: [],
+      model: 'typesafe/jev-1.14',
+      returned_model: 'typesafe/jev-1.14',
+      backend: 'openrouter',
+      conventions_hash: null,
+      requirements_hash: null,
+    },
+    judge_version: 'v2.3.0',
+    agent_tooling_tag: 'v2.3.0',
+    agent_tooling_commit: 'abcdef0',
+    rubric_hashes: h,
+    rubrics_digest: computeHashesDigest(h),
+    metrics: {
+      file_count: 2,
+      target_count: 2,
+      check_count: 1,
+      calibrated_pass_rate: 0.5,
+      raw_pass_rate: 1.0,
+      mean_score: 82.5,
+      elapsed_ms: 210,
+      cost_usd: 0.0004,
+      requests: 2,
+      retries: 0,
+    },
+    checks: {
+      direct_readability: {
+        threshold: 80,
+        rubric_group: 'readability',
+        passed: 1,
+        raw_passed: 2,
+        total: 2,
+        pass_rate: 0.5,
+        raw_pass_rate: 1.0,
+        mean_score: 82.5,
+        min_score: 72,
+      },
+    },
+    files: [
+      {
+        path: 'src/weak.ts',
+        pass_rate: 0,
+        raw_pass_rate: 1,
+        mean_score: 72,
+        min_score: 72,
+        failed_count: 1,
+        checks: { direct_readability: { choice: 'fail', severity: 'warning', model_choice: 'pass', score: 72 } },
+      },
+      {
+        path: 'src/clean.ts',
+        pass_rate: 1,
+        raw_pass_rate: 1,
+        mean_score: 93,
+        min_score: 93,
+        failed_count: 0,
+        checks: { direct_readability: { choice: 'pass', model_choice: 'pass', score: 93 } },
+      },
+    ],
+  };
+
+  // Mixed legacy 0..1 and new 0-100 fixture snapshots
+  const legacyFxSnap: RubricFixturesSnapshot = {
+    schema_version: 1,
+    kind: 'rubric_fixtures',
+    timestamp: '2026-11-10T11:00:00.000Z',
+    judge_version: 'v2.2.0',
+    agent_tooling_tag: 'v2.2.0',
+    agent_tooling_commit: '956ed80',
+    rubric_hashes: h,
+    fixture_hashes: { 'sample-good': 'cccc' },
+    combined_hash: 'dddd',
+    scan: { backend: 'openrouter', model: null, repeats: 2 },
+    metrics: {
+      status: 'passed',
+      fixtures_total: 1,
+      fixtures_passed: 1,
+      fixture_pass_rate: 1,
+      checks_total: 1,
+      checks_passed: 1,
+      check_pass_rate: 1,
+      min_margin: 0.14,
+      mean_margin: 0.14,
+      max_jitter: 0.03,
+      mean_jitter: 0.03,
+      elapsed_ms: 500,
+      cost_usd: 0.0003,
+      requests: 2,
+    },
+    checks: [
+      {
+        fixture_id: 'sample-good',
+        mode: 'file',
+        rubric: 'readability-v2',
+        check_id: 'direct_readability',
+        expected: 'pass',
+        passed: true,
+        matches: 2,
+        repeats: 2,
+        pass_threshold: 0.8,
+        min_pass_probability: 0.94,
+        max_pass_probability: 0.97,
+        mean_pass_probability: 0.955,
+        margin: 0.14,
+        jitter: 0.03,
+      },
+    ],
+  };
+
+  const newFxSnap: RubricFixturesSnapshot = {
+    schema_version: 1,
+    kind: 'rubric_fixtures',
+    timestamp: '2026-11-12T11:00:00.000Z',
+    judge_version: 'v2.3.0',
+    agent_tooling_tag: 'v2.3.0',
+    agent_tooling_commit: 'abcdef0',
+    rubric_hashes: h,
+    fixture_hashes: { 'sample-good': 'cccc' },
+    combined_hash: 'dddd',
+    scan: { backend: 'openrouter', model: null, repeats: 2 },
+    metrics: {
+      status: 'passed',
+      fixtures_total: 1,
+      fixtures_passed: 1,
+      fixture_pass_rate: 1,
+      checks_total: 1,
+      checks_passed: 1,
+      check_pass_rate: 1,
+      min_margin: 16,
+      mean_margin: 16,
+      max_jitter: 2,
+      mean_jitter: 2,
+      elapsed_ms: 500,
+      cost_usd: 0.0003,
+      requests: 2,
+    },
+    checks: [
+      {
+        fixture_id: 'sample-good',
+        mode: 'file',
+        rubric: 'readability-v2',
+        check_id: 'direct_readability',
+        expected: 'pass',
+        passed: true,
+        matches: 2,
+        repeats: 2,
+        pass_threshold: 80,
+        min_score: 96,
+        max_score: 98,
+        mean_score: 97,
+        margin: 16,
+        jitter: 2,
+      },
+    ],
+  };
+
+  const model = buildDashboardModel({
+    repoSnapshots: [
+      { file: '1-legacy.json', snapshot: legacyRepoSnap },
+      { file: '2-new.json', snapshot: newRepoSnap },
+    ],
+    fixtureSnapshots: [
+      { file: 'fx-1-legacy.json', snapshot: legacyFxSnap },
+      { file: 'fx-2-new.json', snapshot: newFxSnap },
+    ],
+    catalog,
+  });
+
+  const series = model.repos[0].by_mode.file!;
+  assert.equal(series.points.length, 2);
+
+  // Legacy point normalized onto 0-100 scale, with 0.55 reclassified as hard/error under < 60
+  const p0 = series.points[0];
+  assert.equal(p0.mean_score, 72.5);
+  assert.equal(p0.checks.direct_readability.threshold, 80);
+  assert.equal(p0.checks.direct_readability.min_score, 55);
+  assert.equal(p0.files[0].checks.direct_readability.score, 55);
+  assert.equal('confidence' in p0.files[0].checks.direct_readability, false);
+  assert.deepEqual(p0.findings, { total: 1, hard: 1, borderline: 0 });
+
+  // New point on 0-100 scale with smooth delta across legacy -> new transition
+  const p1 = series.points[1];
+  assert.equal(p1.mean_score, 82.5);
+  assert.equal(p1.delta_mean_score, 10);
+  assert.deepEqual(p1.findings, { total: 1, hard: 0, borderline: 1 });
+
+  // Fixture points both normalized onto 0-100 scale
+  assert.equal(model.fixtures.points.length, 2);
+  assert.equal(model.fixtures.points[0].min_margin, 14);
+  assert.equal(model.fixtures.points[0].max_jitter, 3);
+  assert.equal(model.fixtures.points[0].checks[0].pass_threshold, 80);
+  assert.equal(model.fixtures.points[0].checks[0].min_score, 94);
+  assert.equal(model.fixtures.points[1].min_margin, 16);
+  assert.equal(model.fixtures.points[1].max_jitter, 2);
+
+  // Rendered HTML has valid JS and zero P(pass) / confidence leakage
+  const html = renderDashboardHtml(model);
+  assert.ok(!html.includes('P(pass)'));
+  const scriptMatch = /<script id="dashboard-data" type="application\/json">([\s\S]*?)<\/script>\n<script>([\s\S]*?)<\/script>/.exec(html);
+  assert.ok(scriptMatch);
+  assert.doesNotThrow(() => new Function(scriptMatch[2]));
 });

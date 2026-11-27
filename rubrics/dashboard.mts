@@ -9,6 +9,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { DEFAULT_PASS_SCORE } from '../skills/judge-code/scripts/decisions.mts';
+import { formatThreshold } from '../skills/judge-code/scripts/format.mts';
 import type { JudgeMode } from '../skills/judge-code/scripts/rubrics.mts';
 import {
   REPO_ROOT,
@@ -21,6 +23,11 @@ import {
   escapeHtml,
   loadRubricCatalog,
   loadSnapshotsFromDir,
+  normalizeMaxScore,
+  normalizeMeanScore,
+  normalizeMinScore,
+  normalizeScore,
+  normalizeThreshold,
   safeJsonForScript,
   sumFindingCounts,
   type CatalogCheckInfo,
@@ -33,6 +40,7 @@ import {
   type RubricCatalog,
   type RubricFixturesSnapshot,
   type SnapshotCheckSummary,
+  type SnapshotFileCheckScore,
   type SnapshotFileEntry,
 } from './snapshot.mts';
 import { AUTHORITATIVE_RUBRICS_DIR } from './sync.mts';
@@ -51,7 +59,7 @@ export interface DashboardModuleCheckFinding {
   rubric_slug: string | null;
   scope: string | null;
   severity: 'hard' | 'borderline';
-  pass_probability: number | null;
+  score: number | null;
   threshold: number;
 }
 
@@ -68,7 +76,7 @@ export interface DashboardModuleView {
   borderline_count: number;
   passed_count: number;
   total_checks: number;
-  min_pass_probability: number | null;
+  min_score: number | null;
   failing_checks: DashboardModuleCheckFinding[];
 }
 
@@ -92,7 +100,7 @@ export interface RepoRuleFindingSummary {
   hard: number;
   borderline: number;
   total: number;
-  min_pass_probability: number | null;
+  min_score: number | null;
   threshold: number;
 }
 
@@ -101,7 +109,7 @@ export interface RepoHotspotSummary {
   failed_count: number;
   hard_fail_count: number;
   borderline_count: number;
-  min_pass_probability: number | null;
+  min_score: number | null;
   failing_checks: string[];
 }
 
@@ -122,7 +130,7 @@ export interface TrendPoint {
   calibrated_pass_rate: number;
   raw_pass_rate: number;
   all_files_pass_rate: number | null;
-  mean_pass_probability: number | null;
+  mean_score: number | null;
   cost_usd: number | null;
   elapsed_ms: number;
   model: string;
@@ -134,7 +142,7 @@ export interface TrendPoint {
   change_reasons: string[];
   delta_calibrated: number | null;
   delta_raw: number | null;
-  delta_mean_prob: number | null;
+  delta_mean_score: number | null;
   checks: Record<string, SnapshotCheckSummary>;
   files: SnapshotFileEntry[];
   modules: DashboardModuleView[];
@@ -191,8 +199,8 @@ export interface HeatmapRow {
     failed: number;
     hard_failed: number;
     borderline_failed: number;
-    mean_pass_probability: number | null;
-    min_pass_probability: number | null;
+    mean_score: number | null;
+    min_score: number | null;
     threshold: number;
   }>;
   total_findings: number;
@@ -273,6 +281,70 @@ function summarizeVersionChange(
   return reasons;
 }
 
+function normalizeCheckScoreRecord(
+  checks: Record<string, SnapshotFileCheckScore> | undefined,
+): Record<string, SnapshotFileCheckScore> {
+  const out: Record<string, SnapshotFileCheckScore> = {};
+  for (const [id, c] of Object.entries(checks ?? {})) {
+    const score = normalizeScore(c);
+    const kind = classifyCheckFailure(c);
+    out[id] = {
+      choice: c.choice,
+      ...(kind === 'hard' ? { severity: 'error' as const } : kind === 'borderline' ? { severity: 'warning' as const } : {}),
+      ...(c.model_choice !== undefined ? { model_choice: c.model_choice } : {}),
+      score,
+    };
+  }
+  return out;
+}
+
+function normalizeFileEntries(files: SnapshotFileEntry[] | undefined): SnapshotFileEntry[] {
+  return (files ?? []).map((f) => ({
+    path: f.path,
+    pass_rate: f.pass_rate,
+    raw_pass_rate: f.raw_pass_rate,
+    mean_score: normalizeMeanScore(f),
+    min_score: normalizeMinScore(f),
+    failed_count: f.failed_count,
+    checks: normalizeCheckScoreRecord(f.checks),
+  }));
+}
+
+function normalizeCheckSummaries(
+  snap: RepoSnapshot,
+  normalizedFiles: SnapshotFileEntry[],
+): Record<string, SnapshotCheckSummary> {
+  const detailedTargets: Array<Record<string, SnapshotFileCheckScore>> = Array.isArray(snap.modules) && snap.modules.length > 0
+    ? snap.modules.filter((m) => m.status === 'scored').map((m) => normalizeCheckScoreRecord(m.checks))
+    : normalizedFiles.map((f) => f.checks);
+
+  const out: Record<string, SnapshotCheckSummary> = {};
+  for (const [id, summary] of Object.entries(snap.checks ?? {})) {
+    const perTarget = detailedTargets
+      .map((checks) => checks[id])
+      .filter((c): c is SnapshotFileCheckScore => c !== undefined);
+    const hasExactPerTarget = perTarget.length === summary.total && summary.total > 0;
+    const rawPassed = hasExactPerTarget
+      ? perTarget.filter((c) => classifyCheckFailure(c) !== 'hard').length
+      : summary.raw_passed;
+    const rawPassRate = hasExactPerTarget
+      ? rawPassed / summary.total
+      : summary.raw_pass_rate;
+    out[id] = {
+      threshold: normalizeThreshold(summary.threshold) ?? DEFAULT_PASS_SCORE,
+      rubric_group: summary.rubric_group,
+      passed: summary.passed,
+      raw_passed: rawPassed,
+      total: summary.total,
+      pass_rate: summary.pass_rate,
+      raw_pass_rate: rawPassRate,
+      mean_score: normalizeMeanScore(summary),
+      min_score: normalizeMinScore(summary),
+    };
+  }
+  return out;
+}
+
 function sortHotspotFiles(files: SnapshotFileEntry[]): SnapshotFileEntry[] {
   return [...files].sort((a, b) => {
     const ca = countChecksFindings(a.checks);
@@ -280,20 +352,20 @@ function sortHotspotFiles(files: SnapshotFileEntry[]): SnapshotFileEntry[] {
     return (cb.hard - ca.hard)
       || (cb.total - ca.total)
       || (b.failed_count - a.failed_count)
-      || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
+      || ((a.min_score ?? 100) - (b.min_score ?? 100))
       || (a.pass_rate - b.pass_rate)
       || compareCodepoint(a.path, b.path);
   });
 }
 
 function buildFailingModuleChecks(
-  checks: Record<string, { choice: 'pass' | 'fail'; model_choice?: 'pass' | 'borderline' | 'fail'; pass_probability: number | null }>,
+  checks: Record<string, SnapshotFileCheckScore>,
   snapChecks: Record<string, SnapshotCheckSummary>,
   catalog: RubricCatalog,
 ): DashboardModuleCheckFinding[] {
   const findings: DashboardModuleCheckFinding[] = [];
-  for (const [checkId, score] of Object.entries(checks)) {
-    const severity = classifyCheckFailure(score);
+  for (const [checkId, scoreEntry] of Object.entries(checks)) {
+    const severity = classifyCheckFailure(scoreEntry);
     if (!severity) continue;
     const cat = catalog.checks_by_id[checkId];
     const summary = snapChecks[checkId];
@@ -302,13 +374,13 @@ function buildFailingModuleChecks(
       rubric_slug: cat?.rubric_slug ?? summary?.rubric_group ?? null,
       scope: cat?.scope ?? null,
       severity,
-      pass_probability: score.pass_probability,
-      threshold: summary?.threshold ?? cat?.pass_threshold ?? 0.8,
+      score: normalizeScore(scoreEntry),
+      threshold: normalizeThreshold(summary?.threshold ?? cat?.pass_threshold) ?? DEFAULT_PASS_SCORE,
     });
   }
   findings.sort((a, b) =>
     (Number(b.severity === 'hard') - Number(a.severity === 'hard'))
-    || ((a.pass_probability ?? 0) - (b.pass_probability ?? 0))
+    || ((a.score ?? 0) - (b.score ?? 0))
     || compareCodepoint(a.check_id, b.check_id),
   );
   return findings;
@@ -328,7 +400,7 @@ function sortModuleViews(modules: DashboardModuleView[]): DashboardModuleView[] 
     if (a.status === 'scored' && b.status === 'scored') {
       return (b.hard_fail_count - a.hard_fail_count)
         || (b.failed_count - a.failed_count)
-        || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
+        || ((a.min_score ?? 100) - (b.min_score ?? 100))
         || compareCodepoint(a.name, b.name)
         || compareCodepoint(a.path, b.path);
     }
@@ -336,12 +408,18 @@ function sortModuleViews(modules: DashboardModuleView[]): DashboardModuleView[] 
   });
 }
 
-function buildModuleViewsForSnapshot(snap: RepoSnapshot, catalog: RubricCatalog): DashboardModuleView[] {
+function buildModuleViewsForSnapshot(
+  snap: RepoSnapshot,
+  normalizedChecks: Record<string, SnapshotCheckSummary>,
+  normalizedFiles: SnapshotFileEntry[],
+  catalog: RubricCatalog,
+): DashboardModuleView[] {
   if (Array.isArray(snap.modules)) {
     return sortModuleViews(
       snap.modules.map((m) => {
-        const failing = buildFailingModuleChecks(m.checks ?? {}, snap.checks, catalog);
-        const totalChecks = Object.keys(m.checks ?? {}).length;
+        const checks = normalizeCheckScoreRecord(m.checks);
+        const failing = buildFailingModuleChecks(checks, normalizedChecks, catalog);
+        const totalChecks = Object.keys(checks).length;
         const hardCount = failing.filter((c) => c.severity === 'hard').length;
         const borderlineCount = failing.filter((c) => c.severity === 'borderline').length;
         return {
@@ -357,7 +435,7 @@ function buildModuleViewsForSnapshot(snap: RepoSnapshot, catalog: RubricCatalog)
           borderline_count: m.status === 'scored' ? borderlineCount : 0,
           passed_count: m.status === 'scored' ? Math.max(0, totalChecks - failing.length) : 0,
           total_checks: totalChecks,
-          min_pass_probability: m.min_pass_probability,
+          min_score: normalizeMinScore(m),
           failing_checks: failing,
         };
       }),
@@ -365,24 +443,24 @@ function buildModuleViewsForSnapshot(snap: RepoSnapshot, catalog: RubricCatalog)
   }
 
   // Backwards-compatible fallback for legacy mode === 'code' snapshots without `modules`.
-  if (snap.scan.mode === 'code' && snap.files.length > 0) {
+  if (snap.scan.mode === 'code' && normalizedFiles.length > 0) {
     return sortModuleViews(
-      snap.files.map((f) => {
-        const failing = buildFailingModuleChecks(f.checks ?? {}, snap.checks, catalog);
-        const totalChecks = Object.keys(f.checks ?? {}).length;
+      normalizedFiles.map((f) => {
+        const failing = buildFailingModuleChecks(f.checks, normalizedChecks, catalog);
+        const totalChecks = Object.keys(f.checks).length;
         const hardCount = failing.filter((c) => c.severity === 'hard').length;
         const borderlineCount = failing.filter((c) => c.severity === 'borderline').length;
         return {
           name: f.path === '.' ? snap.repo.name : f.path,
           path: f.path,
           status: 'scored' as const,
-          file_count: snap.files.length === 1 ? snap.metrics.file_count : 0,
+          file_count: normalizedFiles.length === 1 ? snap.metrics.file_count : 0,
           failed_count: failing.length,
           hard_fail_count: hardCount,
           borderline_count: borderlineCount,
           passed_count: Math.max(0, totalChecks - failing.length),
           total_checks: totalChecks,
-          min_pass_probability: f.min_pass_probability,
+          min_score: normalizeMinScore(f),
           failing_checks: failing,
         };
       }),
@@ -392,8 +470,12 @@ function buildModuleViewsForSnapshot(snap: RepoSnapshot, catalog: RubricCatalog)
   return [];
 }
 
-function computeSnapshotFindings(snap: RepoSnapshot): FindingCounts {
-  const checkSummaries = Object.values(snap.checks ?? {});
+function computeSnapshotFindings(
+  snap: RepoSnapshot,
+  normalizedChecks: Record<string, SnapshotCheckSummary>,
+  normalizedFiles: SnapshotFileEntry[],
+): FindingCounts {
+  const checkSummaries = Object.values(normalizedChecks);
   if (checkSummaries.length > 0) {
     return sumFindingCounts(checkSummaries.map(countSummaryFindings));
   }
@@ -401,10 +483,10 @@ function computeSnapshotFindings(snap: RepoSnapshot): FindingCounts {
     return sumFindingCounts(
       snap.modules
         .filter((m) => m.status === 'scored')
-        .map((m) => countChecksFindings(m.checks ?? {})),
+        .map((m) => countChecksFindings(normalizeCheckScoreRecord(m.checks))),
     );
   }
-  return sumFindingCounts((snap.files ?? []).map((f) => countChecksFindings(f.checks ?? {})));
+  return sumFindingCounts(normalizedFiles.map((f) => countChecksFindings(f.checks)));
 }
 
 function classifyInstalledStatus(
@@ -462,7 +544,9 @@ export function buildDashboardModel(options: {
       const records = byModeMap.get(mode)!;
       totalRuns += records.length;
 
-      const points: TrendPoint[] = records.map((rec, idx) => {
+      const points: TrendPoint[] = [];
+      for (let idx = 0; idx < records.length; idx += 1) {
+        const rec = records[idx];
         const snap = rec.snapshot;
         if (!latestOverall || compareCodepoint(snap.timestamp, latestOverall.timestamp) >= 0) {
           latestOverall = snap;
@@ -470,26 +554,29 @@ export function buildDashboardModel(options: {
         if (typeof snap.metrics.cost_usd === 'number' && Number.isFinite(snap.metrics.cost_usd)) {
           totalCost += snap.metrics.cost_usd;
         }
-        const prev = idx > 0 ? records[idx - 1].snapshot : null;
-        const changeReasons = prev ? summarizeVersionChange(prev, snap) : [];
+        const prevSnap = idx > 0 ? records[idx - 1].snapshot : null;
+        const prevPoint = idx > 0 ? points[idx - 1] : null;
+        const changeReasons = prevSnap ? summarizeVersionChange(prevSnap, snap) : [];
         const versionChanged = changeReasons.length > 0;
-        const findings = computeSnapshotFindings(snap);
-        const prevFindings = prev ? computeSnapshotFindings(prev) : null;
-        const deltaFindings = prevFindings ? findings.total - prevFindings.total : null;
-        const deltaCalibrated = prev
-          ? snap.metrics.calibrated_pass_rate - prev.metrics.calibrated_pass_rate
+        const normalizedFiles = normalizeFileEntries(snap.files);
+        const normalizedChecks = normalizeCheckSummaries(snap, normalizedFiles);
+        const findings = computeSnapshotFindings(snap, normalizedChecks, normalizedFiles);
+        const meanScore = normalizeMeanScore(snap.metrics);
+        const deltaFindings = prevPoint ? findings.total - prevPoint.findings.total : null;
+        const deltaCalibrated = prevPoint
+          ? snap.metrics.calibrated_pass_rate - prevPoint.calibrated_pass_rate
           : null;
-        const deltaRaw = prev
-          ? snap.metrics.raw_pass_rate - prev.metrics.raw_pass_rate
+        const deltaRaw = prevPoint
+          ? snap.metrics.raw_pass_rate - prevPoint.raw_pass_rate
           : null;
-        const deltaMeanProb = prev
-          && typeof snap.metrics.mean_pass_probability === 'number'
-          && typeof prev.metrics.mean_pass_probability === 'number'
-          ? snap.metrics.mean_pass_probability - prev.metrics.mean_pass_probability
+        const deltaMeanScore = prevPoint
+          && typeof meanScore === 'number'
+          && typeof prevPoint.mean_score === 'number'
+          ? Number((meanScore - prevPoint.mean_score).toFixed(1))
           : null;
 
-        const modules = buildModuleViewsForSnapshot(snap, catalog);
-        const sortedFiles = sortHotspotFiles(snap.files ?? []);
+        const modules = buildModuleViewsForSnapshot(snap, normalizedChecks, normalizedFiles, catalog);
+        const sortedFiles = sortHotspotFiles(normalizedFiles);
         const affectedTargets = modules.length > 0
           ? modules.filter((m) => m.status === 'scored' && m.failed_count > 0).length
           : sortedFiles.filter((f) => f.failed_count > 0).length;
@@ -497,7 +584,7 @@ export function buildDashboardModel(options: {
         const modulesSkipped = modules.filter((m) => m.status === 'skipped').length;
         const modulesErrored = modules.filter((m) => m.status === 'error').length;
 
-        return {
+        points.push({
           id: `${repoName}::${mode}::${idx}`,
           file: rec.file,
           timestamp: snap.timestamp,
@@ -514,7 +601,7 @@ export function buildDashboardModel(options: {
           calibrated_pass_rate: snap.metrics.calibrated_pass_rate,
           raw_pass_rate: snap.metrics.raw_pass_rate,
           all_files_pass_rate: snap.metrics.all_files_pass_rate ?? null,
-          mean_pass_probability: snap.metrics.mean_pass_probability,
+          mean_score: meanScore,
           cost_usd: snap.metrics.cost_usd,
           elapsed_ms: snap.metrics.elapsed_ms,
           model: snap.scan.model,
@@ -526,15 +613,15 @@ export function buildDashboardModel(options: {
           change_reasons: changeReasons,
           delta_calibrated: deltaCalibrated,
           delta_raw: deltaRaw,
-          delta_mean_prob: deltaMeanProb,
-          checks: snap.checks,
+          delta_mean_score: deltaMeanScore,
+          checks: normalizedChecks,
           files: sortedFiles,
           modules,
           modules_scored: modulesScored,
           modules_skipped: modulesSkipped,
           modules_errored: modulesErrored,
-        };
-      });
+        });
+      }
 
       const latest = points[points.length - 1];
       const previous = points.length >= 2 ? points[points.length - 2] : null;
@@ -571,15 +658,15 @@ export function buildDashboardModel(options: {
           hard: fc.hard,
           borderline: fc.borderline,
           total: summary.total,
-          min_pass_probability: summary.min_pass_probability,
-          threshold: summary.threshold,
+          min_score: normalizeMinScore(summary),
+          threshold: normalizeThreshold(summary.threshold) ?? DEFAULT_PASS_SCORE,
         });
       }
     }
     worstRules.sort((a, b) =>
       (b.hard - a.hard)
       || (b.failed - a.failed)
-      || ((a.min_pass_probability ?? 1) - (b.min_pass_probability ?? 1))
+      || ((a.min_score ?? 100) - (b.min_score ?? 100))
       || compareCodepoint(a.check_id, b.check_id),
     );
 
@@ -592,7 +679,7 @@ export function buildDashboardModel(options: {
           .filter(([, s]) => s.choice === 'fail')
           .sort((a, b) =>
             (Number(classifyCheckFailure(b[1]) === 'hard') - Number(classifyCheckFailure(a[1]) === 'hard'))
-            || ((a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0))
+            || ((normalizeScore(a[1]) ?? 0) - (normalizeScore(b[1]) ?? 0))
             || compareCodepoint(a[0], b[0]),
           )
           .map(([cid]) => cid);
@@ -601,7 +688,7 @@ export function buildDashboardModel(options: {
           failed_count: fc.total,
           hard_fail_count: fc.hard,
           borderline_count: fc.borderline,
-          min_pass_probability: f.min_pass_probability,
+          min_score: normalizeMinScore(f),
           failing_checks: failingIds,
         };
       });
@@ -670,12 +757,12 @@ export function buildDashboardModel(options: {
       let worst = 1;
       let totalFindingsForCheck = 0;
       let totalHardFailsForCheck = 0;
-      let fallbackThreshold = 0.8;
+      let fallbackThreshold = DEFAULT_PASS_SCORE;
       let fallbackGroup: string | null = null;
       for (const rName of modeRepos) {
         const check = repos.find((r) => r.name === rName)!.by_mode[mode]!.latest.checks[checkId];
         if (!check || check.total === 0) continue;
-        fallbackThreshold = check.threshold;
+        fallbackThreshold = normalizeThreshold(check.threshold) ?? DEFAULT_PASS_SCORE;
         if (check.rubric_group) fallbackGroup = check.rubric_group;
         const fc = countSummaryFindings(check);
         totalFindingsForCheck += fc.total;
@@ -688,16 +775,16 @@ export function buildDashboardModel(options: {
           failed: fc.total,
           hard_failed: fc.hard,
           borderline_failed: fc.borderline,
-          mean_pass_probability: check.mean_pass_probability,
-          min_pass_probability: check.min_pass_probability,
-          threshold: check.threshold,
+          mean_score: normalizeMeanScore(check),
+          min_score: normalizeMinScore(check),
+          threshold: fallbackThreshold,
         };
         if (check.pass_rate < worst) worst = check.pass_rate;
       }
       return {
         check_id: checkId,
         rubric_slug: catalogInfo?.rubric_slug ?? fallbackGroup,
-        threshold: catalogInfo?.pass_threshold ?? fallbackThreshold,
+        threshold: normalizeThreshold(catalogInfo?.pass_threshold) ?? fallbackThreshold,
         scope: catalogInfo?.scope ?? null,
         instructions: catalogInfo?.instructions ?? '',
         pass_criteria: catalogInfo?.criteria.pass ?? '',
@@ -731,6 +818,30 @@ export function buildDashboardModel(options: {
       const changedCount = fDiff.added.length + fDiff.removed.length + fDiff.modified.length;
       if (changedCount > 0) changeReasons.push(`fixtures: ${changedCount} file(s) changed`);
     }
+    const isLegacyFixtureScale = snap.checks.some(
+      (c) => (c.min_score === undefined && c.min_pass_probability !== undefined)
+        || (typeof c.pass_threshold === 'number' && c.pass_threshold > 0 && c.pass_threshold <= 1),
+    );
+    const scalePoints = (val: number | null | undefined): number | null => {
+      if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+      return isLegacyFixtureScale ? Number((val * 100).toFixed(1)) : Number(val.toFixed(1));
+    };
+    const normalizedChecks: FixtureCheckSnapshot[] = snap.checks.map((c) => ({
+      fixture_id: c.fixture_id,
+      mode: c.mode,
+      rubric: c.rubric,
+      check_id: c.check_id,
+      expected: c.expected,
+      passed: c.passed,
+      matches: c.matches,
+      repeats: c.repeats,
+      pass_threshold: normalizeThreshold(c.pass_threshold),
+      min_score: normalizeMinScore(c),
+      max_score: normalizeMaxScore(c),
+      mean_score: normalizeMeanScore(c),
+      margin: scalePoints(c.margin),
+      jitter: scalePoints(c.jitter),
+    }));
     return {
       file: rec.file,
       timestamp: snap.timestamp,
@@ -743,16 +854,16 @@ export function buildDashboardModel(options: {
       checks_passed: snap.metrics.checks_passed,
       checks_total: snap.metrics.checks_total,
       check_pass_rate: snap.metrics.check_pass_rate,
-      min_margin: snap.metrics.min_margin,
-      mean_margin: snap.metrics.mean_margin,
-      max_jitter: snap.metrics.max_jitter,
-      mean_jitter: snap.metrics.mean_jitter,
+      min_margin: scalePoints(snap.metrics.min_margin),
+      mean_margin: scalePoints(snap.metrics.mean_margin),
+      max_jitter: scalePoints(snap.metrics.max_jitter),
+      mean_jitter: scalePoints(snap.metrics.mean_jitter),
       repeats: snap.scan.repeats,
       cost_usd: snap.metrics.cost_usd,
       elapsed_ms: snap.metrics.elapsed_ms,
       version_changed: changeReasons.length > 0,
       change_reasons: changeReasons,
-      checks: snap.checks,
+      checks: normalizedChecks,
     };
   });
 
@@ -859,14 +970,14 @@ function renderInstalledBadge(repo: RepoSummary, latestTag: string | null): stri
 function renderCatalogPanel(catalog: RubricCatalog): string {
   const rows = catalog.rubrics.map((r) => {
     const customThresholds = r.checks
-      .filter((c) => Math.abs(c.pass_threshold - 0.8) > 1e-9)
-      .map((c) => `${c.id} (&ge;${c.pass_threshold.toFixed(2)})`);
+      .filter((c) => Math.abs((normalizeThreshold(c.pass_threshold) ?? DEFAULT_PASS_SCORE) - DEFAULT_PASS_SCORE) > 1e-9)
+      .map((c) => `${c.id} (&ge;${formatThreshold(c.pass_threshold)})`);
     return `<tr>
       <td><code>${escapeHtml(r.slug)}</code></td>
       <td><code>${escapeHtml(r.id)}</code></td>
       <td><span class="pill target-${escapeHtml(r.target)}">${escapeHtml(r.target)}</span></td>
       <td class="numeric">${r.checks.length}</td>
-      <td>${customThresholds.length > 0 ? escapeHtml(customThresholds.join(', ')) : '<span class="muted">all &ge;0.80</span>'}</td>
+      <td>${customThresholds.length > 0 ? escapeHtml(customThresholds.join(', ')) : `<span class="muted">all &ge;${DEFAULT_PASS_SCORE}</span>`}</td>
       <td><code>${escapeHtml(r.sha256.slice(0, 12))}</code></td>
     </tr>`;
   }).join('');
@@ -1027,11 +1138,40 @@ const CLIENT_SCRIPT = `
     if (!ts) return '—';
     return ts.replace('T', ' ').slice(0, 16) + 'Z';
   }
+  function fmtScore(v, thr) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
+    const rounded = Math.round(v);
+    const bounds = [60];
+    if (typeof thr === 'number' && Number.isFinite(thr)) bounds.push(thr);
+    for (const b of bounds) {
+      if (v < b && rounded >= b) {
+        const floored = Math.floor(v * 10) / 10;
+        return Math.min(floored, Number((b - 0.1).toFixed(1))).toFixed(1);
+      }
+    }
+    return String(rounded);
+  }
+  function fmtScoreVal(v) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
+    const r = Number(v.toFixed(1));
+    return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  }
+  function fmtThr(v) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
+    const s = v > 0 && v <= 1 ? Number((v * 100).toFixed(1)) : Number(v.toFixed(1));
+    return Number.isInteger(s) ? String(s) : s.toFixed(1);
+  }
   function classifyScore(score) {
     if (!score || score.choice !== 'fail') return null;
+    if (score.severity === 'error') return 'hard';
+    if (score.severity === 'warning') return 'borderline';
+    const val = typeof score.score === 'number'
+      ? score.score
+      : (typeof score.pass_probability === 'number' ? Number((score.pass_probability * 100).toFixed(1)) : null);
+    if (val !== null) return val < 60 ? 'hard' : 'borderline';
     if (score.model_choice === 'fail') return 'hard';
-    if (score.model_choice === 'pass' || score.model_choice === 'borderline') return 'borderline';
-    return typeof score.pass_probability === 'number' && score.pass_probability >= 0.5 ? 'borderline' : 'hard';
+    if (score.model_choice === 'borderline') return 'borderline';
+    return 'hard';
   }
   function countFileFindings(checks) {
     let hard = 0, borderline = 0;
@@ -1069,14 +1209,14 @@ const CLIENT_SCRIPT = `
       + '<div class="tip-pass"><strong>Pass:</strong> ' + esc(cat.criteria.pass) + '</div>'
       + '<div class="tip-fail"><strong>Fail:</strong> ' + esc(cat.criteria.fail) + '</div></div></span>';
   }
-  function renderFindingChip(cid, severity, prob, thr) {
+  function renderFindingChip(cid, severity, score, thr) {
     const cat = DATA.catalog && DATA.catalog.checks_by_id ? DATA.catalog.checks_by_id[cid] : null;
     const cls = severity === 'hard' ? 'fail-chip fail-chip-hard' : 'fail-chip fail-chip-borderline';
-    const pText = typeof prob === 'number' ? prob.toFixed(2) : 'fail';
+    const sText = typeof score === 'number' ? fmtScore(score, thr) + '/100' : 'fail';
     const detail = severity === 'hard'
-      ? 'error ' + pText
-      : 'warning ' + pText + ' < ' + thr.toFixed(2);
-    const title = (severity === 'hard' ? 'Error (raw model FAIL)' : 'Warning (threshold borderline, P < ' + thr.toFixed(2) + ')')
+      ? 'error ' + sText + ', pass >= ' + fmtThr(thr)
+      : 'warning ' + sText + ', pass >= ' + fmtThr(thr);
+    const title = (severity === 'hard' ? 'Error (score < 60/100)' : 'Warning (score 60..<' + fmtThr(thr) + '/100)')
       + (cat && cat.instructions ? ' — ' + cat.instructions : '');
     return '<span class="' + cls + '" title="' + esc(title) + '">' + esc(cid) + ' (' + esc(detail) + ')</span>';
   }
@@ -1204,12 +1344,12 @@ const CLIENT_SCRIPT = `
       const x = xAt(i).toFixed(1);
       const yc = yAt(p.calibrated_pass_rate).toFixed(1);
       const yr = yAt(p.raw_pass_rate).toFixed(1);
-      const ym = typeof p.mean_pass_probability === 'number' ? yAt(p.mean_pass_probability).toFixed(1) : null;
+      const ym = typeof p.mean_score === 'number' ? yAt(p.mean_score / 100).toFixed(1) : null;
       const isActive = i === activeIdx;
       const tip = esc(
         shortDate(p.timestamp) + ' · ' + p.commit_short + (p.dirty ? ' (dirty)' : '')
-        + '\\nCalibrated: ' + pct(p.calibrated_pass_rate) + ' | Raw: ' + pct(p.raw_pass_rate)
-        + ' | Mean P(pass): ' + pct(p.mean_pass_probability)
+        + '\\nCalibrated: ' + pct(p.calibrated_pass_rate) + ' | Non-error: ' + pct(p.raw_pass_rate)
+        + ' | Mean score: ' + (typeof p.mean_score === 'number' ? fmtScoreVal(p.mean_score) + '/100' : '—')
         + '\\nFindings: ' + p.findings.total + ' (' + p.findings.hard + ' errors, ' + p.findings.borderline + ' warnings)'
       );
       return '<g class="chart-point" data-select-run="' + i + '">'
@@ -1230,7 +1370,7 @@ const CLIENT_SCRIPT = `
     return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Pass rate trend chart">'
       + gridLines + versionLines
       + polyline((p) => p.raw_pass_rate, '#0d9488', '6 3')
-      + polyline((p) => p.mean_pass_probability, '#7c3aed', '2 4')
+      + polyline((p) => typeof p.mean_score === 'number' ? p.mean_score / 100 : null, '#7c3aed', '2 4')
       + polyline((p) => p.calibrated_pass_rate, '#3158cf', '')
       + dots + xLabels + '</svg>';
   }
@@ -1260,8 +1400,8 @@ const CLIENT_SCRIPT = `
     const dots = points.map((p, i) => {
       const x = xAt(i).toFixed(1);
       const yPass = yAt(p.check_pass_rate).toFixed(1);
-      const yJit = typeof p.max_jitter === 'number' ? yAt(p.max_jitter).toFixed(1) : null;
-      const tip = esc(shortDate(p.timestamp) + ' · ' + p.judge_version + '\\nChecks passed: ' + p.checks_passed + '/' + p.checks_total + ' (' + pct(p.check_pass_rate) + ')\\nMin margin: ' + (p.min_margin !== null ? p.min_margin.toFixed(3) : '—') + ' | Max jitter: ' + (p.max_jitter !== null ? p.max_jitter.toFixed(3) : '—'));
+      const yJit = typeof p.max_jitter === 'number' ? yAt(p.max_jitter / 100).toFixed(1) : null;
+      const tip = esc(shortDate(p.timestamp) + ' · ' + p.judge_version + '\\nChecks passed: ' + p.checks_passed + '/' + p.checks_total + ' (' + pct(p.check_pass_rate) + ')\\nMin margin: ' + (p.min_margin !== null ? fmtScoreVal(p.min_margin) : '—') + ' | Max jitter: ' + (p.max_jitter !== null ? fmtScoreVal(p.max_jitter) : '—'));
       return (p.version_changed ? '<line x1="' + x + '" y1="' + padT + '" x2="' + x + '" y2="' + (H - padB) + '" stroke="#f59e0b" stroke-width="1.3" stroke-dasharray="4 3"/>' : '')
         + (yJit !== null ? '<circle cx="' + x + '" cy="' + yJit + '" r="3.5" fill="#ea580c" stroke="#fff" stroke-width="1"><title>' + tip + '</title></circle>' : '')
         + '<circle cx="' + x + '" cy="' + yPass + '" r="4.5" fill="#15803d" stroke="#fff" stroke-width="1.5"><title>' + tip + '</title></circle>';
@@ -1274,7 +1414,7 @@ const CLIENT_SCRIPT = `
     }).join('');
 
     return '<svg class="trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Rubric fixture health trend">'
-      + grid + line((p) => p.check_pass_rate, '#15803d', '') + line((p) => p.max_jitter, '#ea580c', '4 3')
+      + grid + line((p) => p.check_pass_rate, '#15803d', '') + line((p) => typeof p.max_jitter === 'number' ? p.max_jitter / 100 : null, '#ea580c', '4 3')
       + dots + labels + '</svg>';
   }
 
@@ -1321,14 +1461,14 @@ const CLIENT_SCRIPT = `
       } else {
         statusCell = renderFindingsPills({ total: m.failed_count, hard: m.hard_fail_count, borderline: m.borderline_count });
         detailCell = '<div class="fail-chips">' + m.failing_checks.map((c) =>
-          renderFindingChip(c.check_id, c.severity, c.pass_probability, c.threshold)
+          renderFindingChip(c.check_id, c.severity, c.score, c.threshold)
         ).join('') + '</div>';
       }
 
       return '<tr>'
         + '<td><strong>' + esc(m.name) + '</strong>' + subMeta + '</td>'
         + '<td class="numeric">' + statusCell + '</td>'
-        + '<td class="numeric">' + (typeof m.min_pass_probability === 'number' ? m.min_pass_probability.toFixed(2) : '—') + '</td>'
+        + '<td class="numeric">' + (typeof m.min_score === 'number' ? fmtScoreVal(m.min_score) : '—') + '</td>'
         + '<td>' + detailCell + '</td>'
         + '</tr>';
     }).join('');
@@ -1343,7 +1483,7 @@ const CLIENT_SCRIPT = `
     return '<div class="arch-card" id="module-architecture-section">'
       + '<div class="panel-head">'
       + '<div><h3>Feature / Module Architecture (' + allModules.length + ' module' + (allModules.length === 1 ? '' : 's') + ')</h3>'
-      + '<div class="muted" style="font-size:.78rem">Ranked worst-first · errors (raw FAIL) vs. warnings (threshold borderline) · ' + esc(shortDate(codeRun.timestamp)) + ' · <code>' + esc(codeRun.commit_short) + '</code></div></div>'
+      + '<div class="muted" style="font-size:.78rem">Ranked worst-first · errors (&lt;60/100) vs. warnings (60..&lt;pass bar) · ' + esc(shortDate(codeRun.timestamp)) + ' · <code>' + esc(codeRun.commit_short) + '</code></div></div>'
       + '<div class="badge-row">' + summaryPills.join(' ') + '</div>'
       + '</div>'
       + '<div class="controls" style="margin-bottom:10px">'
@@ -1352,7 +1492,7 @@ const CLIENT_SCRIPT = `
       + '<span class="muted numeric" style="margin-left:auto">' + filtered.length + ' of ' + allModules.length + ' shown</span>'
       + '</div>'
       + (filtered.length > 0
-        ? '<div class="table-scroll"><table><thead><tr><th>Module</th><th>Findings / Status</th><th>Min P</th><th>Failing architectural checks</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        ? '<div class="table-scroll"><table><thead><tr><th>Module</th><th>Findings / Status</th><th>Min Score</th><th>Failing architectural checks</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         : '<p class="muted">No modules match the current filter.</p>')
       + '</div>';
   }
@@ -1416,19 +1556,19 @@ const CLIENT_SCRIPT = `
         .filter(([, c]) => c.choice === 'fail')
         .sort((a, b) =>
           (Number(classifyScore(b[1]) === 'hard') - Number(classifyScore(a[1]) === 'hard'))
-          || ((a[1].pass_probability ?? 0) - (b[1].pass_probability ?? 0))
+          || ((a[1].score ?? 0) - (b[1].score ?? 0))
           || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
         );
       const chips = failedChecks.length > 0
         ? '<div class="fail-chips">' + failedChecks.map(([cid, c]) => {
-            const thr = run.checks[cid] ? run.checks[cid].threshold : 0.8;
-            return renderFindingChip(cid, classifyScore(c) || 'hard', c.pass_probability, thr);
+            const thr = run.checks[cid] ? run.checks[cid].threshold : 80;
+            return renderFindingChip(cid, classifyScore(c) || 'hard', c.score, thr);
           }).join('') + '</div>'
         : '<span class="pill pass">all checks passed</span>';
       return '<tr>'
         + '<td><code>' + esc(f.path) + '</code></td>'
         + '<td class="numeric">' + renderFindingsPills(fc) + '</td>'
-        + '<td class="numeric">' + (typeof f.min_pass_probability === 'number' ? f.min_pass_probability.toFixed(2) : '—') + '</td>'
+        + '<td class="numeric">' + (typeof f.min_score === 'number' ? fmtScoreVal(f.min_score) : '—') + '</td>'
         + '<td>' + chips + '</td>'
         + '</tr>';
     }).join('');
@@ -1438,21 +1578,21 @@ const CLIENT_SCRIPT = `
       const fb = countCheckSummaryFindings(b[1]);
       return (fb.hard - fa.hard)
         || (fb.total - fa.total)
-        || ((a[1].min_pass_probability ?? 1) - (b[1].min_pass_probability ?? 1))
+        || ((a[1].min_score ?? 100) - (b[1].min_score ?? 100))
         || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
     });
     const checkRows = checkEntries.map(([cid, c]) => {
       const fc = countCheckSummaryFindings(c);
-      const thrBadge = Math.abs(c.threshold - 0.8) > 1e-9
-        ? '<span class="pill warn">&ge;' + c.threshold.toFixed(2) + '</span>'
-        : '<span class="pill neutral">&ge;' + c.threshold.toFixed(2) + '</span>';
+      const thrBadge = Math.abs(c.threshold - 80) > 1e-9
+        ? '<span class="pill warn">&ge;' + fmtThr(c.threshold) + '</span>'
+        : '<span class="pill neutral">&ge;' + fmtThr(c.threshold) + '</span>';
       return '<tr>'
         + '<td>' + checkLabelWithTip(cid) + (c.rubric_group ? ' <span class="muted" style="font-size:.75rem">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
         + '<td class="numeric">' + thrBadge + '</td>'
         + '<td class="numeric">' + (fc.total > 0 ? '<strong>' + fc.total + '/' + c.total + '</strong>' : '<span class="muted">0/' + c.total + '</span>') + '</td>'
         + '<td class="numeric">' + renderFindingsPills(fc) + '</td>'
-        + '<td class="numeric">' + (typeof c.min_pass_probability === 'number' ? c.min_pass_probability.toFixed(2) : '—') + '</td>'
-        + '<td class="numeric">' + pct(c.mean_pass_probability) + '</td>'
+        + '<td class="numeric">' + (typeof c.min_score === 'number' ? fmtScoreVal(c.min_score) : '—') + '</td>'
+        + '<td class="numeric">' + (typeof c.mean_score === 'number' ? fmtScoreVal(c.mean_score) : '—') + '</td>'
         + '</tr>';
     }).join('');
 
@@ -1475,11 +1615,11 @@ const CLIENT_SCRIPT = `
 
     const legendItems = trendMetric === 'findings'
       ? '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Total findings</span>'
-        + '<span class="legend-item"><span class="legend-swatch dashed-red"></span>Errors (raw FAIL)</span>'
+        + '<span class="legend-item"><span class="legend-swatch dashed-red"></span>Errors (&lt;60/100)</span>'
         + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>'
       : '<span class="legend-item"><span class="legend-swatch" style="background:#3158cf"></span>Calibrated pass rate</span>'
-        + '<span class="legend-item"><span class="legend-swatch dashed"></span>Raw pass rate</span>'
-        + '<span class="legend-item"><span class="legend-swatch dotted"></span>Mean P(pass)</span>'
+        + '<span class="legend-item"><span class="legend-swatch dashed"></span>Non-error rate (&ge;60)</span>'
+        + '<span class="legend-item"><span class="legend-swatch dotted"></span>Mean score</span>'
         + '<span class="legend-item"><span class="legend-marker"></span>Judge or rubric hash changed</span>';
 
     container.innerHTML =
@@ -1505,7 +1645,7 @@ const CLIENT_SCRIPT = `
       + '<div class="split-grid">'
       + '<div class="sub-card">'
       + '<div class="panel-head"><h3>Worst-offending rules (' + checkEntries.filter(([, c]) => c.passed < c.total).length + ' failing / ' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(shortDate(run.timestamp)) + ' · ' + esc(run.commit_short) + '</span></div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Failed</th><th>Errors / Warnings</th><th>Min P</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
+      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Failed</th><th>Errors / Warnings</th><th>Min Score</th><th>Mean Score</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
       + '</div>'
       + '<div class="sub-card">'
       + '<div class="panel-head"><h3>Top hotspot ' + (selectedMode === 'code' ? 'modules' : 'files / targets') + ' (' + filteredFiles.length + ' shown / ' + run.files.length + ')</h3>'
@@ -1514,7 +1654,7 @@ const CLIENT_SCRIPT = `
       + '<label class="toggle"><input type="checkbox" id="failing-only-toggle"' + (failingOnly ? ' checked' : '') + '> Failing only</label>'
       + '</div></div>'
       + (filteredFiles.length > 0
-        ? '<div class="table-scroll"><table><thead><tr><th>Target</th><th>Findings</th><th>Min P</th><th>Failing rules</th></tr></thead><tbody>' + hotspotRows + '</tbody></table></div>'
+        ? '<div class="table-scroll"><table><thead><tr><th>Target</th><th>Findings</th><th>Min Score</th><th>Failing rules</th></tr></thead><tbody>' + hotspotRows + '</tbody></table></div>'
         : '<p class="muted">' + (failingOnly && selectedMode === 'file' && !fileSearch && run.files.length > 0
           ? 'All ' + run.files.length + ' file(s) passed every check. Uncheck "Failing only" to inspect all files.'
           : 'No targets match the current filter.') + '</p>')
@@ -1558,18 +1698,18 @@ const CLIENT_SCRIPT = `
       const label = row.instructions
         ? '<span class="tip-wrap"><span class="tip-trigger" tabindex="0">' + esc(row.check_id) + '</span><div class="tip-card"><strong>' + esc(row.instructions) + '</strong><div class="tip-pass"><strong>Pass:</strong> ' + esc(row.pass_criteria) + '</div><div class="tip-fail"><strong>Fail:</strong> ' + esc(row.fail_criteria) + '</div></div></span>'
         : '<code>' + esc(row.check_id) + '</code>';
-      const thrBadge = Math.abs(row.threshold - 0.8) > 1e-9
-        ? '<span class="pill warn">&ge;' + row.threshold.toFixed(2) + '</span>'
-        : '<span class="pill neutral">&ge;' + row.threshold.toFixed(2) + '</span>';
+      const thrBadge = Math.abs(row.threshold - 80) > 1e-9
+        ? '<span class="pill warn">&ge;' + fmtThr(row.threshold) + '</span>'
+        : '<span class="pill neutral">&ge;' + fmtThr(row.threshold) + '</span>';
       const cells = map.repos.map((rName) => {
         const c = row.by_repo[rName];
         if (!c) return '<td class="numeric muted">—</td>';
         const col = heatColors(c.pass_rate);
         const topLine = c.failed === 0 ? 'clean' : c.failed + '/' + c.total + ' fail';
         const subLine = c.failed === 0
-          ? 'P=' + (c.mean_pass_probability !== null ? c.mean_pass_probability.toFixed(2) : '—')
+          ? 'score ' + (typeof c.mean_score === 'number' ? fmtScoreVal(c.mean_score) : '—')
           : c.hard_failed + 'e · ' + c.borderline_failed + 'w · ' + pct(c.pass_rate, 0);
-        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Findings: ' + c.failed + '/' + c.total + ' (' + c.hard_failed + ' errors, ' + c.borderline_failed + ' warnings) | Calibrated ' + pct(c.pass_rate) + ' | Mean P ' + pct(c.mean_pass_probability) + '"><strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span></span></td>';
+        return '<td class="numeric"><span class="heat-cell" style="background:' + col.bg + ';color:' + col.fg + '" title="Findings: ' + c.failed + '/' + c.total + ' (' + c.hard_failed + ' errors, ' + c.borderline_failed + ' warnings) | Calibrated ' + pct(c.pass_rate) + ' | Mean score ' + (typeof c.mean_score === 'number' ? fmtScoreVal(c.mean_score) + '/100' : '—') + '"><strong>' + esc(topLine) + '</strong><span>' + esc(subLine) + '</span></span></td>';
       }).join('');
       return '<tr><td>' + label + (row.rubric_slug ? ' <span class="muted" style="font-size:.75rem">' + esc(row.rubric_slug) + '</span>' : '') + '</td><td class="numeric">' + thrBadge + '</td>' + cells + '</tr>';
     }).join('');
@@ -1598,22 +1738,22 @@ const CLIENT_SCRIPT = `
       || ((a.margin ?? 1) - (b.margin ?? 1))
       || (a.fixture_id < b.fixture_id ? -1 : a.fixture_id > b.fixture_id ? 1 : 0)
     ).map((c) => {
-      const probRange = c.min_pass_probability !== null && c.max_pass_probability !== null
-        ? (c.min_pass_probability.toFixed(2) === c.max_pass_probability.toFixed(2)
-          ? c.min_pass_probability.toFixed(2)
-          : c.min_pass_probability.toFixed(2) + '..' + c.max_pass_probability.toFixed(2))
+      const scoreRange = typeof c.min_score === 'number' && typeof c.max_score === 'number'
+        ? (fmtScoreVal(c.min_score) === fmtScoreVal(c.max_score)
+          ? fmtScoreVal(c.min_score)
+          : fmtScoreVal(c.min_score) + '..' + fmtScoreVal(c.max_score))
         : '—';
-      const marginClass = c.margin === null ? 'neutral' : c.margin >= 0.15 ? 'pass' : c.margin >= 0 ? 'warn' : 'fail';
-      const jitterClass = c.jitter === null ? 'neutral' : c.jitter <= 0.05 ? 'pass' : c.jitter <= 0.15 ? 'warn' : 'fail';
+      const marginClass = c.margin === null ? 'neutral' : c.margin >= 15 ? 'pass' : c.margin >= 0 ? 'warn' : 'fail';
+      const jitterClass = c.jitter === null ? 'neutral' : c.jitter <= 5 ? 'pass' : c.jitter <= 15 ? 'warn' : 'fail';
       return '<tr>'
         + '<td><code>' + esc(c.fixture_id) + '</code></td>'
         + '<td><code>' + esc(c.check_id) + '</code></td>'
         + '<td><span class="pill neutral">' + esc(c.expected) + '</span></td>'
         + '<td class="numeric"><span class="pill ' + (c.passed ? 'pass' : 'fail') + '">' + c.matches + '/' + c.repeats + '</span></td>'
-        + '<td class="numeric">' + esc(probRange) + '</td>'
-        + '<td class="numeric">' + (c.pass_threshold !== null ? '&ge;' + c.pass_threshold.toFixed(2) : '—') + '</td>'
-        + '<td class="numeric"><span class="pill ' + marginClass + '">' + (c.margin !== null ? (c.margin >= 0 ? '+' : '') + c.margin.toFixed(3) : '—') + '</span></td>'
-        + '<td class="numeric"><span class="pill ' + jitterClass + '">' + (c.jitter !== null ? c.jitter.toFixed(3) : '—') + '</span></td>'
+        + '<td class="numeric">' + esc(scoreRange) + '</td>'
+        + '<td class="numeric">' + (c.pass_threshold !== null ? '&ge;' + fmtThr(c.pass_threshold) : '—') + '</td>'
+        + '<td class="numeric"><span class="pill ' + marginClass + '">' + (c.margin !== null ? (c.margin >= 0 ? '+' : '') + fmtScoreVal(c.margin) : '—') + '</span></td>'
+        + '<td class="numeric"><span class="pill ' + jitterClass + '">' + (c.jitter !== null ? fmtScoreVal(c.jitter) : '—') + '</span></td>'
         + '</tr>';
     }).join('');
 
@@ -1622,11 +1762,11 @@ const CLIENT_SCRIPT = `
       + '<div class="chart-legend">'
       + '<span class="legend-item"><span class="legend-swatch" style="background:#15803d"></span>Fixture check pass rate</span>'
       + '<span class="legend-item"><span class="legend-swatch" style="background:#ea580c"></span>Max repeat jitter</span>'
-      + '<span class="muted numeric" style="margin-left:auto">Latest: ' + esc(shortDate(latest.timestamp)) + ' · ' + latest.fixtures_passed + '/' + latest.fixtures_total + ' fixtures · ' + latest.checks_passed + '/' + latest.checks_total + ' checks · repeats=' + latest.repeats + ' · min margin=' + (latest.min_margin !== null ? latest.min_margin.toFixed(3) : '—') + ' · max jitter=' + (latest.max_jitter !== null ? latest.max_jitter.toFixed(3) : '—') + '</span>'
+      + '<span class="muted numeric" style="margin-left:auto">Latest: ' + esc(shortDate(latest.timestamp)) + ' · ' + latest.fixtures_passed + '/' + latest.fixtures_total + ' fixtures · ' + latest.checks_passed + '/' + latest.checks_total + ' checks · repeats=' + latest.repeats + ' · min margin=' + (latest.min_margin !== null ? fmtScoreVal(latest.min_margin) : '—') + ' · max jitter=' + (latest.max_jitter !== null ? fmtScoreVal(latest.max_jitter) : '—') + '</span>'
       + '</div>'
       + '<div class="svg-wrap">' + renderFixtureTrendSvg(fx.points) + '</div>'
       + '</div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Fixture</th><th>Check</th><th>Expect</th><th>Repeats</th><th>P(pass) range</th><th>Threshold</th><th>Margin</th><th>Jitter</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      + '<div class="table-scroll"><table><thead><tr><th>Fixture</th><th>Check</th><th>Expect</th><th>Repeats</th><th>Score range</th><th>Threshold</th><th>Margin</th><th>Jitter</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
   document.addEventListener('click', (ev) => {
@@ -1810,7 +1950,7 @@ ${warningsHtml}
   <div class="kpi${modKpiClass}"><div class="kpi-label">Module architecture</div><div class="kpi-value${model.totals.modules_scanned > 0 ? findingsTone(modFindings) : ''}">${escapeHtml(modKpiValue)}</div><div class="kpi-note">${escapeHtml(modKpiNote)}</div></div>
   <div class="kpi"><div class="kpi-label">Findings by scope</div><div class="kpi-value">${model.totals.repo_count} repo(s)</div><div class="kpi-note">${model.totals.file_findings.total} file · ${model.totals.structure_findings.total} structure · ${modFindings.total} module (${model.totals.repo_runs} runs)</div></div>
   <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-note">Latest release tag: ${escapeHtml(latestTag ?? 'n/a')}</div></div>
-  <div class="kpi${fxLatest && fxLatest.status === 'failed' ? ' kpi-alert' : ''}"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value${fxLatest ? (fxLatest.status === 'passed' ? ' tone-good' : ' tone-bad') : ''}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-note">${fxLatest ? `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}` : 'No fixture runs yet'}</div></div>
+  <div class="kpi${fxLatest && fxLatest.status === 'failed' ? ' kpi-alert' : ''}"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value${fxLatest ? (fxLatest.status === 'passed' ? ' tone-good' : ' tone-bad') : ''}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-note">${fxLatest ? `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(1) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(1) : '—'}` : 'No fixture runs yet'}</div></div>
 </section>
 
 <section class="panel">
