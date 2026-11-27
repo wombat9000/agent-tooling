@@ -17,6 +17,8 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  FIXTURE_NEAR_THRESHOLD_MARGIN,
+  analyzeFixtureHealth,
   buildDashboardModel,
   computeHistoryPointMetrics,
   computeNiceAxisTicks,
@@ -1876,6 +1878,18 @@ test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no
   assert.ok(modeClickBlock.length > 0, 'Detail mode click handler must exist');
   assert.doesNotMatch(modeClickBlock, /heatmapMode\s*=/, 'Detail mode switch must keep heatmap mode independent');
   assert.doesNotMatch(modeClickBlock, /historyMode\s*=/, 'Detail mode switch must keep history mode independent');
+  // Healthy fixture snapshot renders green KPI tile (no kpi-alert)
+  assert.match(htmlNoModules, /id="kpi-rubric-fixtures"[^>]*><div class="kpi-label">Rubric fixtures<\/div><div class="kpi-value kpi-value-sm tone-good">/);
+  assert.doesNotMatch(htmlNoModules, /class="kpi kpi-alert" id="kpi-rubric-fixtures"/);
+
+  // Boundary-crossing, compact Worst-offending rules table, and near-threshold fixture handling in client script
+  assert.match(scriptBlock, /function isRubricOrVersionBoundary\(/);
+  assert.match(scriptBlock, /data-boundary-crossing="true"/);
+  assert.match(scriptBlock, /data-rubric-delta="true"[^>]*>— rubric Δ</);
+  assert.match(htmlNoModules, /table\.rules-table/);
+  assert.match(scriptBlock, /<table class="rules-table"><thead><tr><th>Rule<\/th><th class="num-col" title="Pass threshold">Thr<\/th><th class="num-col" title="Raw FAIL errors">Err<\/th><th class="num-col" title="Borderline warnings">Warn<\/th><th class="num-col">Min P<\/th><th class="num-col">Mean P<\/th><\/tr><\/thead>/);
+  assert.match(scriptBlock, /near threshold/);
+  assert.match(scriptBlock, /Click to inspect tight margins/);
   assert.match(scriptBlock, /First snapshot /);
   assert.match(scriptBlock, /trend appears after the next run/);
   assert.match(scriptBlock, /Module architecture checks are off\. Add <code>modules<\/code> \/ <code>moduleRoots<\/code> to enable\./);
@@ -1884,6 +1898,207 @@ test('dashboard UX helpers and redesigned states: nice ticks, version dedupe, no
   assert.match(scriptBlock, /fixture-details/);
   assert.doesNotMatch(scriptBlock, /Max repeat jitter/);
   assert.doesNotThrow(() => new Function(scriptBlock));
+});
+
+test('dashboard flags rubric/scope boundary crossings and near-threshold fixtures in amber', () => {
+  assert.equal(FIXTURE_NEAR_THRESHOLD_MARGIN, 0.05);
+  const catalog = loadRubricCatalog();
+
+  // 1. Scope (scan.sources) change marks version_changed even when judge_version & rubric_hashes match
+  const makeScopeSnap = (timestamp: string, sources: string[], hardFails: number): RepoSnapshot => ({
+    schema_version: 1,
+    kind: 'repo',
+    timestamp,
+    repo: {
+      name: 'scope-app',
+      branch: 'main',
+      commit: 'aaaa1111bbbb',
+      commit_short: 'aaaa111',
+      dirty: false,
+      installed_judge_code: null,
+    },
+    scan: {
+      mode: 'file',
+      sources,
+      rubrics: ['readability'],
+      rubric_id: 'readability-v2',
+      rubric_groups: { readability: ['direct_readability'] },
+      exclude: [],
+      model: 'typesafe/jev-1.14',
+      returned_model: 'typesafe/jev-1.14',
+      backend: 'openrouter',
+      conventions_hash: null,
+      requirements_hash: null,
+    },
+    judge_version: 'v2.2.0',
+    agent_tooling_tag: 'v2.2.0',
+    agent_tooling_commit: '956ed80',
+    rubric_hashes: { readability: 'aaaa' },
+    rubrics_digest: computeHashesDigest({ readability: 'aaaa' }),
+    metrics: {
+      file_count: 2,
+      target_count: 2,
+      check_count: 1,
+      calibrated_pass_rate: hardFails === 0 ? 1 : 0.5,
+      raw_pass_rate: hardFails === 0 ? 1 : 0.5,
+      mean_pass_probability: 0.85,
+      elapsed_ms: 100,
+      cost_usd: 0.001,
+      requests: 2,
+      retries: 0,
+    },
+    checks: {
+      direct_readability: {
+        threshold: 0.8,
+        rubric_group: 'readability',
+        passed: 2 - hardFails,
+        raw_passed: 2 - hardFails,
+        total: 2,
+        pass_rate: (2 - hardFails) / 2,
+        raw_pass_rate: (2 - hardFails) / 2,
+        mean_pass_probability: 0.85,
+        min_pass_probability: hardFails > 0 ? 0.3 : 0.9,
+      },
+    },
+    files: [
+      {
+        path: 'src/a.ts',
+        pass_rate: hardFails > 0 ? 0 : 1,
+        raw_pass_rate: hardFails > 0 ? 0 : 1,
+        mean_pass_probability: hardFails > 0 ? 0.3 : 0.9,
+        min_pass_probability: hardFails > 0 ? 0.3 : 0.9,
+        failed_count: hardFails > 0 ? 1 : 0,
+        checks: { direct_readability: { choice: hardFails > 0 ? 'fail' : 'pass', model_choice: hardFails > 0 ? 'fail' : 'pass', pass_probability: hardFails > 0 ? 0.3 : 0.9, confidence: 0.9 } },
+      },
+      {
+        path: 'src/b.ts',
+        pass_rate: 1,
+        raw_pass_rate: 1,
+        mean_pass_probability: 0.95,
+        min_pass_probability: 0.95,
+        failed_count: 0,
+        checks: { direct_readability: { choice: 'pass', model_choice: 'pass', pass_probability: 0.95, confidence: 0.9 } },
+      },
+    ],
+  });
+
+  // 2. Fixture health classification: near-threshold (margin < 0.05), jitter-tight (margin < max_jitter), healthy, and failed
+  const makeFixtureSnap = (minMargin: number, maxJitter: number, status: 'passed' | 'failed' = 'passed'): LoadedSnapshotRecord<RubricFixturesSnapshot> => ({
+    file: 'fx.json',
+    snapshot: {
+      schema_version: 1,
+      kind: 'rubric_fixtures',
+      timestamp: '2026-11-27T01:00:00.000Z',
+      judge_version: 'v2.2.0',
+      agent_tooling_tag: 'v2.2.0',
+      agent_tooling_commit: '956ed80',
+      rubric_hashes: { 'integration-readiness': 'aaaa' },
+      fixture_hashes: { 'api-contract-boundary-good': '1111' },
+      combined_hash: '2222',
+      scan: { backend: 'openrouter', model: null, repeats: 2 },
+      metrics: {
+        status,
+        fixtures_total: 2,
+        fixtures_passed: status === 'passed' ? 2 : 1,
+        fixture_pass_rate: status === 'passed' ? 1 : 0.5,
+        checks_total: 2,
+        checks_passed: status === 'passed' ? 2 : 1,
+        check_pass_rate: status === 'passed' ? 1 : 0.5,
+        min_margin: minMargin,
+        mean_margin: (minMargin + 0.18) / 2,
+        max_jitter: maxJitter,
+        mean_jitter: maxJitter / 2,
+        elapsed_ms: 400,
+        cost_usd: 0.001,
+        requests: 4,
+      },
+      checks: [
+        {
+          fixture_id: 'api-contract-boundary-good',
+          mode: 'file',
+          rubric: 'integration-readiness-v3',
+          check_id: 'clean_api_contract_boundary',
+          expected: 'pass',
+          passed: status === 'passed',
+          matches: status === 'passed' ? 2 : 1,
+          repeats: 2,
+          pass_threshold: 0.8,
+          min_pass_probability: 0.8 + minMargin,
+          max_pass_probability: 0.8 + minMargin + maxJitter,
+          mean_pass_probability: 0.8 + minMargin + maxJitter / 2,
+          margin: minMargin,
+          jitter: maxJitter,
+        },
+        {
+          fixture_id: 'readability-good',
+          mode: 'file',
+          rubric: 'readability-v2',
+          check_id: 'direct_readability',
+          expected: 'pass',
+          passed: true,
+          matches: 2,
+          repeats: 2,
+          pass_threshold: 0.8,
+          min_pass_probability: 0.98,
+          max_pass_probability: 0.99,
+          mean_pass_probability: 0.985,
+          margin: 0.18,
+          jitter: 0.01,
+        },
+      ],
+    },
+  });
+
+  const tightModel = buildDashboardModel({
+    repoSnapshots: [
+      { file: '1.json', snapshot: makeScopeSnap('2026-11-25T10:00:00.000Z', ['src/core'], 1) },
+      { file: '2.json', snapshot: makeScopeSnap('2026-11-27T10:00:00.000Z', ['src/core', 'src/web'], 0) },
+    ],
+    fixtureSnapshots: [makeFixtureSnap(0.01, 0.06, 'passed')],
+    catalog,
+  });
+
+  // Sources scope change marks version_changed so chart breaks line & suppresses colored delta
+  const scopePoints = tightModel.repos[0].by_mode.file!.points;
+  assert.equal(scopePoints[1].version_changed, true);
+  assert.match(scopePoints[1].change_reasons.join(' '), /sources: src\/core -> src\/core, src\/web/);
+
+  // Near-threshold fixture health (< 0.05 margin)
+  const tightHealth = analyzeFixtureHealth(tightModel.fixtures.latest!);
+  assert.equal(tightHealth.status, 'near_threshold');
+  assert.equal(tightHealth.near_threshold_checks.length, 1);
+  assert.equal(tightHealth.tightest?.fixture_id, 'api-contract-boundary-good');
+  assert.equal(tightHealth.tightest?.check_id, 'clean_api_contract_boundary');
+
+  // Rendered HTML flags Tooling Health Rubric fixtures tile in amber (kpi-alert + tone-warn, NOT tone-good)
+  const tightHtml = renderDashboardHtml(tightModel);
+  assert.match(tightHtml, /class="kpi kpi-alert" id="kpi-rubric-fixtures"/);
+  assert.match(tightHtml, /id="kpi-rubric-fixtures"><div class="kpi-label">Rubric fixtures<\/div><div class="kpi-value kpi-value-sm tone-warn">2\/2<\/div>/);
+  assert.match(tightHtml, /<span class="tone-warn"><strong>min margin 0\.01<\/strong> \(1 near threshold\)<\/span>/);
+
+  // Margin >= 0.05 but < max_jitter is also flagged near_threshold
+  const jitterModel = buildDashboardModel({
+    repoSnapshots: [],
+    fixtureSnapshots: [makeFixtureSnap(0.06, 0.09, 'passed')],
+    catalog,
+  });
+  assert.equal(analyzeFixtureHealth(jitterModel.fixtures.latest!).status, 'near_threshold');
+
+  // Margin >= 0.05 and >= max_jitter is healthy
+  const healthyModel = buildDashboardModel({
+    repoSnapshots: [],
+    fixtureSnapshots: [makeFixtureSnap(0.12, 0.05, 'passed')],
+    catalog,
+  });
+  assert.equal(analyzeFixtureHealth(healthyModel.fixtures.latest!).status, 'healthy');
+
+  // Failed fixture snapshot reports failed
+  const failedModel = buildDashboardModel({
+    repoSnapshots: [],
+    fixtureSnapshots: [makeFixtureSnap(-0.04, 0.03, 'failed')],
+    catalog,
+  });
+  assert.equal(analyzeFixtureHealth(failedModel.fixtures.latest!).status, 'failed');
 });
 
 test('CLI supports --module-root and --skip-modules offline in --dry-run mode', (t) => {

@@ -260,8 +260,8 @@ export interface DashboardModel {
 }
 
 function summarizeVersionChange(
-  prev: { judge_version: string; rubric_hashes: Record<string, string> },
-  curr: { judge_version: string; rubric_hashes: Record<string, string> },
+  prev: { judge_version: string; rubric_hashes: Record<string, string>; scan?: { sources?: string[] } },
+  curr: { judge_version: string; rubric_hashes: Record<string, string>; scan?: { sources?: string[] } },
 ): string[] {
   const reasons: string[] = [];
   if (prev.judge_version !== curr.judge_version) {
@@ -274,6 +274,13 @@ function summarizeVersionChange(
     if (diff.added.length > 0) parts.push(`added ${diff.added.join(', ')}`);
     if (diff.removed.length > 0) parts.push(`removed ${diff.removed.join(', ')}`);
     reasons.push(`rubrics: ${parts.join('; ')}`);
+  }
+  if (Array.isArray(prev.scan?.sources) && Array.isArray(curr.scan?.sources)) {
+    const prevSources = [...prev.scan.sources].sort(compareCodepoint);
+    const currSources = [...curr.scan.sources].sort(compareCodepoint);
+    if (prevSources.join('\0') !== currSources.join('\0')) {
+      reasons.push(`sources: ${prevSources.join(', ') || '(none)'} -> ${currSources.join(', ') || '(none)'}`);
+    }
   }
   return reasons;
 }
@@ -963,6 +970,42 @@ export function stripSharedPathPrefix(paths: readonly string[]): string {
   return common.length > 0 ? `${common.join('/')}/` : '';
 }
 
+export const FIXTURE_NEAR_THRESHOLD_MARGIN = 0.05;
+
+export interface FixtureHealthSummary {
+  status: 'failed' | 'near_threshold' | 'healthy';
+  near_threshold_checks: FixtureCheckSnapshot[];
+  tightest: FixtureCheckSnapshot | null;
+}
+
+export function analyzeFixtureHealth(latest: FixtureTrendPoint): FixtureHealthSummary {
+  const allPassed = latest.status === 'passed' && latest.checks_passed === latest.checks_total;
+  if (!allPassed) {
+    return { status: 'failed', near_threshold_checks: [], tightest: null };
+  }
+  const jitterFloor = typeof latest.max_jitter === 'number' && Number.isFinite(latest.max_jitter)
+    ? latest.max_jitter
+    : null;
+  const near = latest.checks
+    .filter((c) => c.passed && typeof c.margin === 'number' && Number.isFinite(c.margin)
+      && (c.margin < FIXTURE_NEAR_THRESHOLD_MARGIN || (jitterFloor !== null && c.margin < jitterFloor)))
+    .sort((a, b) =>
+      ((a.margin ?? 1) - (b.margin ?? 1))
+      || compareCodepoint(a.fixture_id, b.fixture_id)
+      || compareCodepoint(a.check_id, b.check_id),
+    );
+  const aggregateTight = typeof latest.min_margin === 'number' && Number.isFinite(latest.min_margin)
+    && (latest.min_margin < FIXTURE_NEAR_THRESHOLD_MARGIN || (jitterFloor !== null && latest.min_margin < jitterFloor));
+  if (near.length > 0 || aggregateTight) {
+    return {
+      status: 'near_threshold',
+      near_threshold_checks: near,
+      tightest: near[0] ?? null,
+    };
+  }
+  return { status: 'healthy', near_threshold_checks: [], tightest: null };
+}
+
 function errorsTone(counts: FindingCounts): string {
   if (counts.hard > 0) return ' tone-bad';
   return ' tone-good';
@@ -1055,6 +1098,13 @@ th{font-size:.75rem;color:var(--muted);font-weight:600;white-space:nowrap;border
 th,td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
 th:first-child,td:first-child{padding-left:0}
 tbody tr:last-child td{border-bottom:0}
+table.rules-table{table-layout:auto;font-size:.82rem}
+table.rules-table th,table.rules-table td{padding:7px 6px}
+table.rules-table th:first-child,table.rules-table td:first-child{padding-left:0}
+table.rules-table th:last-child,table.rules-table td:last-child{padding-right:2px}
+table.rules-table th.num-col,table.rules-table td.num-col{text-align:right}
+.rule-name-cell{min-width:150px;overflow-wrap:anywhere}
+.rule-slug-sub{display:block;font-size:.71rem;color:var(--muted);line-height:1.25;margin-top:1px}
 .tabs{display:inline-flex;background:#f1f5f9;border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px;flex-wrap:wrap}
 .tab-btn{border:0;background:transparent;color:var(--muted);font:inherit;font-size:.8rem;font-weight:600;padding:5px 11px;border-radius:6px;cursor:pointer;font-variant-numeric:tabular-nums}
 .tab-btn:hover{color:var(--ink);background:rgba(255,255,255,.65)}
@@ -1444,6 +1494,14 @@ const CLIENT_SCRIPT = `
     }).join('');
   }
 
+  function isRubricOrVersionBoundary(prev, curr) {
+    if (!prev || !curr) return false;
+    if (curr.version_changed) return true;
+    if (prev.judge_version !== curr.judge_version) return true;
+    if (prev.rubrics_digest !== curr.rubrics_digest) return true;
+    return false;
+  }
+
   function renderMultiRepoHistorySvg(seriesList, metric) {
     const W = 1160, H = 200, padL = 54, padR = 72, padT = 24, padB = 30;
     const innerPadX = 24;
@@ -1563,13 +1621,37 @@ const CLIENT_SCRIPT = `
         p,
         i,
       }));
-      const lineStr = coords.map((pt) => pt.x.toFixed(1) + ',' + pt.y.toFixed(1)).join(' ');
       const lineOpacity = isSelected ? '1' : '0.82';
       const strokeW = isSelected ? '2.8' : '2';
-      const lines = coords.length >= 2
-        ? '<polyline class="history-series-hit" data-history-repo="' + esc(s.repo) + '" fill="none" stroke="transparent" stroke-width="12" points="' + lineStr + '"/>'
-          + '<polyline fill="none" stroke="' + s.color + '" stroke-opacity="' + lineOpacity + '" stroke-width="' + strokeW + '" stroke-linecap="round" stroke-linejoin="round" points="' + lineStr + '"/>'
-        : '';
+      const lineParts = [];
+      if (coords.length >= 2) {
+        let seg = [coords[0]];
+        const flushSolid = () => {
+          if (seg.length < 2) return;
+          const pts = seg.map((pt) => pt.x.toFixed(1) + ',' + pt.y.toFixed(1)).join(' ');
+          lineParts.push(
+            '<polyline class="history-series-hit" data-history-repo="' + esc(s.repo) + '" fill="none" stroke="transparent" stroke-width="12" points="' + pts + '"/>'
+            + '<polyline data-comparable-segment="true" fill="none" stroke="' + s.color + '" stroke-opacity="' + lineOpacity + '" stroke-width="' + strokeW + '" stroke-linecap="round" stroke-linejoin="round" points="' + pts + '"/>'
+          );
+        };
+        for (let idx = 1; idx < coords.length; idx += 1) {
+          const prevPt = coords[idx - 1];
+          const currPt = coords[idx];
+          if (isRubricOrVersionBoundary(prevPt.p, currPt.p)) {
+            flushSolid();
+            const bridgeTip = esc(s.repo + ': rubric / judge change between snapshots — not directly comparable');
+            lineParts.push(
+              '<line class="history-series-hit" data-history-repo="' + esc(s.repo) + '" x1="' + prevPt.x.toFixed(1) + '" y1="' + prevPt.y.toFixed(1) + '" x2="' + currPt.x.toFixed(1) + '" y2="' + currPt.y.toFixed(1) + '" stroke="transparent" stroke-width="12"><title>' + bridgeTip + '</title></line>'
+              + '<line data-boundary-crossing="true" x1="' + prevPt.x.toFixed(1) + '" y1="' + prevPt.y.toFixed(1) + '" x2="' + currPt.x.toFixed(1) + '" y2="' + currPt.y.toFixed(1) + '" stroke="#94a3b8" stroke-opacity="0.7" stroke-width="1.5" stroke-dasharray="4 4"><title>' + bridgeTip + '</title></line>'
+            );
+            seg = [currPt];
+          } else {
+            seg.push(currPt);
+          }
+        }
+        flushSolid();
+      }
+      const lines = lineParts.join('');
 
       if (coords.length > 0) {
         const last = coords[coords.length - 1];
@@ -1802,12 +1884,13 @@ const CLIENT_SCRIPT = `
 
     const legendButtons = seriesList.map((s) => {
       const isSelected = s.repo === selectedRepo;
+      const crossedBoundary = Boolean(s.previous && isRubricOrVersionBoundary(s.previous, s.latest));
       let valText;
       let deltaHtml = '';
       if (historyMetric === 'density') {
         const curr = pointDensity(s.latest);
         valText = curr.toFixed(1) + '/100';
-        if (s.previous) {
+        if (s.previous && !crossedBoundary) {
           const dd = curr - pointDensity(s.previous);
           const cls = dd < -0.05 ? 'tone-good' : dd > 0.05 ? 'tone-bad' : 'muted';
           const text = Math.abs(dd) < 0.05 ? '±0.0' : (dd > 0 ? '+' + dd.toFixed(1) : dd.toFixed(1));
@@ -1816,7 +1899,7 @@ const CLIENT_SCRIPT = `
       } else if (historyMetric === 'clean') {
         const curr = pointCleanRate(s.latest);
         valText = pct(curr);
-        if (s.previous) {
+        if (s.previous && !crossedBoundary) {
           const dp = (curr - pointCleanRate(s.previous)) * 100;
           const cls = dp > 0.05 ? 'tone-good' : dp < -0.05 ? 'tone-bad' : 'muted';
           const text = Math.abs(dp) < 0.05 ? '±0.0pp' : (dp > 0 ? '+' : '') + dp.toFixed(1) + 'pp';
@@ -1824,11 +1907,17 @@ const CLIENT_SCRIPT = `
         }
       } else {
         valText = s.latest.findings.hard + ' err';
-        if (s.previous) {
+        if (s.previous && !crossedBoundary) {
           const dh = s.latest.findings.hard - s.previous.findings.hard;
           const cls = dh < 0 ? 'tone-good' : dh > 0 ? 'tone-bad' : 'muted';
           deltaHtml = '<span class="history-legend-delta ' + cls + '">' + (dh > 0 ? '+' + dh : dh === 0 ? '±0' : String(dh)) + '</span>';
         }
+      }
+      if (crossedBoundary) {
+        const reasonTip = s.latest.change_reasons && s.latest.change_reasons.length > 0
+          ? s.latest.change_reasons.join('; ')
+          : 'Rubric or judge version changed since previous run';
+        deltaHtml = '<span class="history-legend-delta muted" data-rubric-delta="true" title="' + esc(reasonTip) + '">— rubric Δ</span>';
       }
       return '<button type="button" class="history-legend-btn' + (isSelected ? ' selected' : '') + '" data-history-repo="' + esc(s.repo) + '" aria-pressed="' + (isSelected ? 'true' : 'false') + '">'
         + '<span class="history-legend-dot" style="background:' + s.color + '"></span>'
@@ -1996,19 +2085,19 @@ const CLIENT_SCRIPT = `
       const fc = countCheckSummaryFindings(c);
       const isActive = activeRule === cid;
       return '<tr class="rule-pick-row' + (isActive ? ' active-rule-row' : '') + '" role="button" tabindex="0" aria-pressed="' + (isActive ? 'true' : 'false') + '" data-filter-rule="' + esc(cid) + '">'
-        + '<td>' + checkLabelWithTip(cid) + (c.rubric_group ? ' <span class="muted" style="font-size:.74rem">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
-        + '<td class="numeric">' + renderThresholdCell(c.threshold) + '</td>'
-        + '<td class="numeric">' + (fc.hard > 0 ? '<span class="num-err">' + fc.hard + '</span><span class="num-sub">/' + c.total + '</span>' : '<span class="muted">0</span>') + '</td>'
-        + '<td class="numeric">' + (fc.borderline > 0 ? '<span class="muted">' + fc.borderline + '</span>' : '<span class="muted">0</span>') + '</td>'
-        + '<td class="numeric">' + (typeof c.min_pass_probability === 'number' ? c.min_pass_probability.toFixed(2) : '—') + '</td>'
-        + '<td class="numeric">' + pct(c.mean_pass_probability) + '</td>'
+        + '<td class="rule-name-cell">' + checkLabelWithTip(cid) + (c.rubric_group ? '<span class="rule-slug-sub">' + esc(c.rubric_group) + '</span>' : '') + '</td>'
+        + '<td class="numeric num-col">' + renderThresholdCell(c.threshold) + '</td>'
+        + '<td class="numeric num-col">' + (fc.hard > 0 ? '<span class="num-err">' + fc.hard + '</span><span class="num-sub">/' + c.total + '</span>' : '<span class="muted">0</span>') + '</td>'
+        + '<td class="numeric num-col">' + (fc.borderline > 0 ? '<span class="muted">' + fc.borderline + '</span>' : '<span class="muted">0</span>') + '</td>'
+        + '<td class="numeric num-col">' + (typeof c.min_pass_probability === 'number' ? c.min_pass_probability.toFixed(2) : '—') + '</td>'
+        + '<td class="numeric num-col">' + pct(c.mean_pass_probability) + '</td>'
         + '</tr>';
     }).join('');
 
     const failingCount = checkEntries.filter(([, c]) => c.passed < c.total).length;
-    return '<div class="sub-card">'
+    return '<div class="sub-card" id="worst-rules-card">'
       + '<div class="panel-head"><h3>Worst-offending rules (' + failingCount + ' failing / ' + checkEntries.length + ')</h3><span class="muted numeric">' + esc(isoDay(run.timestamp)) + ' · <code>' + esc(run.commit_short) + '</code></span></div>'
-      + '<div class="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Errors</th><th>Borderline</th><th>Min P</th><th>Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
+      + '<div class="table-scroll"><table class="rules-table"><thead><tr><th>Rule</th><th class="num-col" title="Pass threshold">Thr</th><th class="num-col" title="Raw FAIL errors">Err</th><th class="num-col" title="Borderline warnings">Warn</th><th class="num-col">Min P</th><th class="num-col">Mean P</th></tr></thead><tbody>' + checkRows + '</tbody></table></div>'
       + '</div>';
   }
 
@@ -2262,15 +2351,16 @@ const CLIENT_SCRIPT = `
     const runRows = [...series.points].reverse().map((p, revIdx) => {
       const idx = series.points.length - 1 - revIdx;
       const dh = typeof p.delta_hard_fails === 'number' ? p.delta_hard_fails : null;
-      const dClass = dh === null ? 'muted' : dh < 0 ? 'num-ok' : dh > 0 ? 'num-err' : 'muted';
-      const dText = dh === null ? '—' : (dh > 0 ? '+' + dh : String(dh));
+      const deltaCell = p.version_changed
+        ? '<span class="muted" title="' + esc(p.change_reasons.join('; ')) + '">—</span> <span class="pill warn" title="' + esc(p.change_reasons.join('; ')) + '">rubric &Delta;</span>'
+        : '<span class="' + (dh === null ? 'muted' : dh < 0 ? 'num-ok' : dh > 0 ? 'num-err' : 'muted') + '">' + esc(dh === null ? '—' : (dh > 0 ? '+' + dh : String(dh))) + '</span>';
       return '<tr class="run-row' + (idx === selectedRunIdx ? ' active-run' : '') + '" role="button" tabindex="0" aria-pressed="' + (idx === selectedRunIdx ? 'true' : 'false') + '" data-select-run="' + idx + '">'
         + '<td class="numeric">' + esc(shortDate(p.timestamp)) + '</td>'
         + '<td><code>' + esc(p.commit_short) + '</code>' + (p.dirty ? ' <span class="pill warn">dirty</span>' : '') + (p.branch ? ' <span class="muted">' + esc(p.branch) + '</span>' : '') + '</td>'
         + '<td class="numeric">' + (selectedMode === 'code' && p.modules.length > 0 ? p.modules_scored + '/' + p.modules.length + ' mod' : p.file_count) + '</td>'
         + '<td class="numeric">' + (p.findings.hard > 0 ? '<span class="num-err">' + p.findings.hard + '</span>' : '<span class="muted">0</span>') + '</td>'
         + '<td class="numeric muted">' + p.findings.borderline + '</td>'
-        + '<td class="numeric"><span class="' + dClass + '">' + esc(dText) + '</span>' + (p.version_changed ? ' <span class="pill warn" title="' + esc(p.change_reasons.join('; ')) + '">rubric &Delta;</span>' : '') + '</td>'
+        + '<td class="numeric">' + deltaCell + '</td>'
         + '<td class="numeric muted">' + pct(p.calibrated_pass_rate) + '</td>'
         + '<td><code>' + esc(p.judge_version) + '</code></td>'
         + '<td class="numeric">' + esc(fmtUsd(p.cost_usd)) + '</td>'
@@ -2341,13 +2431,60 @@ const CLIENT_SCRIPT = `
         + '</tr>';
     }).join('');
 
-    const summaryLine = '<span class="pill ' + (allPassed ? 'pass' : 'fail') + '">' + (allPassed ? 'pass' : 'fail') + '</span> '
-      + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' checks pass</strong>'
-      + ' · min margin ' + minMarginText + ' · max jitter ' + maxJitterText;
+    const jitterFloor = typeof latest.max_jitter === 'number' && Number.isFinite(latest.max_jitter) ? latest.max_jitter : null;
+    const nearChecks = allPassed
+      ? latest.checks
+        .filter((c) => c.passed && typeof c.margin === 'number' && Number.isFinite(c.margin)
+          && (c.margin < 0.05 || (jitterFloor !== null && c.margin < jitterFloor)))
+        .sort((a, b) =>
+          ((a.margin ?? 1) - (b.margin ?? 1))
+          || (a.fixture_id < b.fixture_id ? -1 : a.fixture_id > b.fixture_id ? 1 : 0)
+          || (a.check_id < b.check_id ? -1 : a.check_id > b.check_id ? 1 : 0)
+        )
+      : [];
+    const aggregateTight = allPassed && typeof latest.min_margin === 'number' && Number.isFinite(latest.min_margin)
+      && (latest.min_margin < 0.05 || (jitterFloor !== null && latest.min_margin < jitterFloor));
+    const isNearThreshold = allPassed && (nearChecks.length > 0 || aggregateTight);
+
+    let summaryLine;
+    let rightHint;
+    if (!allPassed) {
+      summaryLine = '<span class="pill fail">fail</span> '
+        + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' checks pass</strong>'
+        + ' · min margin ' + minMarginText + ' · max jitter ' + maxJitterText;
+      rightHint = '<span class="muted numeric">Failing checks expanded</span>';
+    } else if (isNearThreshold) {
+      const tight = nearChecks[0] || null;
+      let tightDetail = '';
+      if (tight) {
+        const pStr = tight.min_pass_probability !== null && tight.max_pass_probability !== null
+          ? (tight.min_pass_probability.toFixed(2) === tight.max_pass_probability.toFixed(2)
+            ? 'P ' + tight.min_pass_probability.toFixed(2)
+            : 'P ' + tight.min_pass_probability.toFixed(2) + '–' + tight.max_pass_probability.toFixed(2))
+          : '';
+        const thrStr = tight.pass_threshold !== null
+          ? ' vs ' + (tight.expected === 'fail' ? '<' : '&ge;') + tight.pass_threshold.toFixed(2)
+          : '';
+        const prefix = nearChecks.length > 1 ? 'tightest: ' : '';
+        tightDetail = ' (' + prefix + '<code>' + esc(tight.fixture_id) + '</code> · <code>' + esc(tight.check_id) + '</code>' + (pStr ? ', ' + esc(pStr) + thrStr : '') + ')';
+      }
+      const nearLabel = nearChecks.length > 0
+        ? nearChecks.length + ' near threshold'
+        : 'min margin ' + minMarginText + ' near threshold';
+      summaryLine = '<span class="pill warn">near threshold</span> '
+        + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' pass</strong>'
+        + ' · <span class="tone-warn">' + esc(nearLabel) + '</span>' + tightDetail;
+      rightHint = '<span class="tone-warn numeric">Click to inspect tight margins</span>';
+    } else {
+      summaryLine = '<span class="pill pass">pass</span> '
+        + '<strong>' + latest.checks_passed + '/' + latest.checks_total + ' checks pass</strong>'
+        + ' · min margin ' + minMarginText + ' · max jitter ' + maxJitterText;
+      rightHint = '<span class="muted numeric">All green · click to inspect checks</span>';
+    }
 
     container.innerHTML = trendSection
-      + '<details class="fixture-details"' + (allPassed ? '' : ' open') + '>'
-      + '<summary class="panel-summary"><span class="numeric">' + summaryLine + '</span><span class="muted numeric">' + (allPassed ? 'All green · click to inspect checks' : 'Failing checks expanded') + '</span></summary>'
+      + '<details class="fixture-details" id="fixture-health-details"' + (allPassed ? '' : ' open') + '>'
+      + '<summary class="panel-summary"><span>' + summaryLine + '</span>' + rightHint + '</summary>'
       + '<div class="table-scroll" style="margin-top:10px"><table><thead><tr><th>Fixture</th><th>Check</th><th>Expect</th><th>Status</th><th>Repeats</th><th>P(pass)</th><th>Threshold</th><th>Margin</th><th>Jitter</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
       + '</details>';
   }
@@ -2706,6 +2843,27 @@ export function renderDashboardHtml(model: DashboardModel): string {
     ? `All clean across ${model.totals.repo_count} repo${model.totals.repo_count === 1 ? '' : 's'}`
     : `+${totalFindings.borderline} borderline across ${model.totals.repo_count} repo${model.totals.repo_count === 1 ? '' : 's'}`;
 
+  const fxHealth = fxLatest ? analyzeFixtureHealth(fxLatest) : null;
+  const fxKpiClass = !fxHealth
+    ? ''
+    : fxHealth.status === 'failed'
+      ? ' kpi-danger'
+      : fxHealth.status === 'near_threshold'
+        ? ' kpi-alert'
+        : '';
+  const fxValTone = !fxHealth
+    ? ''
+    : fxHealth.status === 'healthy'
+      ? ' tone-good'
+      : fxHealth.status === 'near_threshold'
+        ? ' tone-warn'
+        : ' tone-bad';
+  const fxSubHtml = !fxLatest
+    ? 'No fixture runs yet'
+    : fxHealth?.status === 'near_threshold'
+      ? `<span class="tone-warn"><strong>min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'}</strong>${fxHealth.near_threshold_checks.length > 0 ? ` (${fxHealth.near_threshold_checks.length} near threshold)` : ' (near threshold)'}</span> · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}`
+      : `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}`;
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
 <title>Rubric Quality Punch-List · agent-tooling</title><style>${STYLE}</style></head><body><main>
@@ -2733,7 +2891,7 @@ ${warningsHtml}
   <div class="kpi-group kpi-group-tooling">
     <div class="kpi-group-eyebrow">Tooling health</div>
     <div class="kpi-grid" style="--kpi-cols:2">
-      <div class="kpi${fxLatest && fxLatest.status === 'failed' ? ' kpi-danger' : ''}"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value kpi-value-sm${fxLatest ? (fxLatest.status === 'passed' ? ' tone-good' : ' tone-bad') : ''}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-sub">${fxLatest ? `min margin ${fxLatest.min_margin !== null ? fxLatest.min_margin.toFixed(2) : '—'} · max jitter ${fxLatest.max_jitter !== null ? fxLatest.max_jitter.toFixed(2) : '—'}` : 'No fixture runs yet'}</div></div>
+      <div class="kpi${fxKpiClass}" id="kpi-rubric-fixtures"><div class="kpi-label">Rubric fixtures</div><div class="kpi-value kpi-value-sm${fxValTone}">${fxLatest ? `${fxLatest.checks_passed}/${fxLatest.checks_total}` : '—'}</div><div class="kpi-sub">${fxSubHtml}</div></div>
       <div class="kpi${model.totals.outdated_repos > 0 ? ' kpi-alert' : ''}"><div class="kpi-label">Installed judge-code</div><div class="kpi-value kpi-value-sm ${model.totals.outdated_repos === 0 ? 'tone-good' : 'tone-warn'}">${model.totals.outdated_repos === 0 ? 'Up to date' : `${model.totals.outdated_repos} outdated`}</div><div class="kpi-sub">${latestTag ? `Latest release ${escapeHtml(latestTag)}` : 'No release tag'}</div></div>
     </div>
   </div>
