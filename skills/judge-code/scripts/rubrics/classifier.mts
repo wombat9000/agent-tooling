@@ -1,4 +1,5 @@
 import { narrowResolvedRubric } from './applicability.mts';
+import { hasRuntimeImport } from './import-scan.mts';
 import {
   PLAYWRIGHT_PACKAGES,
   detectPlaywrightSignals,
@@ -9,6 +10,20 @@ import {
 import { nonempty, object, type ResolvedRubric } from './types.mts';
 
 export { PLAYWRIGHT_PACKAGES, detectPlaywrightSignals, type PlaywrightDetectionContext, type PlaywrightSignals };
+
+export const NON_PLAYWRIGHT_TEST_RUNNERS = [
+  'vitest',
+  '@testing-library/react',
+  '@testing-library/vue',
+  '@testing-library/svelte',
+  '@testing-library/angular',
+  '@jest/globals',
+  'jest',
+  'cypress',
+  'mocha',
+  'ava',
+  'node:test',
+] as const;
 
 export type TestKind = 'unit' | 'integration' | 'e2e_browser' | 'test_support' | 'other';
 
@@ -409,6 +424,9 @@ function finalizeSignalsAfterStage1(
   detectionContext?: PlaywrightDetectionContext,
 ): PlaywrightSignals {
   if (signals.isPlaywright || !activeKinds.includes('e2e_browser')) {
+    return signals;
+  }
+  if (hasRuntimeImport(file.content, NON_PLAYWRIGHT_TEST_RUNNERS)) {
     return signals;
   }
   if (hasAncestorPlaywrightConfig(file.filePath, detectionContext)) {
