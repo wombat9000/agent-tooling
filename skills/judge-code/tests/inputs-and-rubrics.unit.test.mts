@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { isTestOrSupportPath } from '../scripts/inputs/classify-path.mts';
 import { containsSensitiveCredential } from '../scripts/inputs/credentials.mts';
+import { readInputs, readPerFileInputs } from '../scripts/inputs/files.mts';
 import { compileIgnoreMatcher } from '../scripts/inputs/ignore.mts';
 import { filterRubricForFiles, hasRuntimeImport, matchesFileApplicability } from '../scripts/rubrics/applicability.mts';
 import {
@@ -18,7 +19,7 @@ import {
   routeTestBundleRubrics,
   routeTestRubrics,
 } from '../scripts/rubrics/classifier.mts';
-import { findAncestorPlaywrightConfig } from '../scripts/rubrics/playwright-detect.mts';
+import { candidateModulePaths, findAncestorPlaywrightConfig } from '../scripts/rubrics/playwright-detect.mts';
 import { resolveRubrics } from '../scripts/rubrics/resolver.mts';
 
 test('isTestOrSupportPath classifies universal test and support paths as true and production paths as false', () => {
@@ -29,6 +30,12 @@ test('isTestOrSupportPath classifies universal test and support paths as true an
     ['__tests__/widget.tsx', true],
     ['__mocks__/api.ts', true],
     ['testFixtures/BookingBuilder.kt', true],
+    ['src/test/kotlin/com/app/testsupport/Fake.kt', true],
+    ['src/test-support/helper.ts', true],
+    ['app/features/jobs/.server/test-support.ts', true],
+    ['app/features/jobs/overview.test-support.ts', true],
+    ['app/features/auth/auth_test_support.ts', true],
+    ['ServiceIdentityFeatureTestSupport.kt', true],
     ['booking.test.ts', true],
     ['booking.spec.tsx', true],
     ['client.mock.ts', true],
@@ -193,6 +200,116 @@ test('detectPlaywrightSignals resolves 1-2 hop transitive fixture imports in bun
   assert.equal('playwright_strict_scoped_locators' in filtered.questions, true);
 });
 
+test('candidateModulePaths and detectPlaywrightSignals ignore static assets without ENOTDIR while resolving dotted code stems', (t) => {
+  assert.deepEqual(candidateModulePaths('./styles.css'), []);
+  assert.deepEqual(candidateModulePaths('./data/regions.json'), []);
+  assert.deepEqual(candidateModulePaths('./assets/icon.svg'), []);
+  assert.deepEqual(candidateModulePaths('./fonts/inter.woff2'), []);
+  assert.equal(candidateModulePaths('./api.session').includes('./api.session.ts'), true);
+  assert.equal(candidateModulePaths('./foo.v2').includes('./foo.v2.ts'), true);
+
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'pw-static-assets-')));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  mkdirSync(join(tmp, 'app/data'), { recursive: true });
+  writeFileSync(join(tmp, 'app/styles.css'), '.panel { color: inherit; }\n');
+  writeFileSync(join(tmp, 'app/data/regions.json'), '{"regions":[]}\n');
+  writeFileSync(
+    join(tmp, 'app/api.session.ts'),
+    "import { test as base, expect } from '@playwright/test';\nexport const test = base;\nexport { expect };\n",
+  );
+  writeFileSync(join(tmp, 'app/helper.v2.ts'), 'export const value = 42;\n');
+
+  const pwSpecCode = [
+    "import './styles.css';",
+    "import regions from './data/regions.json';",
+    "import { test, expect } from './api.session';",
+    "test('renders', async ({ page }) => { await expect(page).toHaveTitle(String(regions)); });",
+    '',
+  ].join('\n');
+  const nonPwSpecCode = [
+    "import './styles.css?inline';",
+    "import regions from './data/regions.json';",
+    "import { value } from './helper.v2';",
+    'export const summary = [regions, value];',
+    '',
+  ].join('\n');
+
+  const pwSpecPath = join(tmp, 'app/workspace.spec.ts');
+  const nonPwSpecPath = join(tmp, 'app/panel.test.tsx');
+  writeFileSync(pwSpecPath, pwSpecCode);
+  writeFileSync(nonPwSpecPath, nonPwSpecCode);
+
+  // On-disk resolution: zero ENOTDIR crash on real .css/.json files, dotted .ts stem resolves transitively
+  assert.deepEqual(
+    detectPlaywrightSignals({ filePath: 'app/workspace.spec.ts', content: pwSpecCode }, { absPath: pwSpecPath, repoRoot: tmp }),
+    { isPlaywright: true, isPlaywrightConfig: false },
+  );
+  assert.deepEqual(
+    detectPlaywrightSignals({ filePath: 'app/panel.test.tsx', content: nonPwSpecCode }, { absPath: nonPwSpecPath, repoRoot: tmp }),
+    { isPlaywright: false, isPlaywrightConfig: false },
+  );
+
+  // In-memory bundle resolution: same behavior without disk paths
+  assert.deepEqual(
+    detectPlaywrightSignals(
+      { filePath: 'app/workspace.spec.ts', content: pwSpecCode },
+      {
+        bundleFiles: {
+          'app/workspace.spec.ts': pwSpecCode,
+          'app/api.session.ts': "import { test as base } from '@playwright/test';\nexport const test = base;\n",
+        },
+      },
+    ),
+    { isPlaywright: true, isPlaywrightConfig: false },
+  );
+  assert.deepEqual(
+    detectPlaywrightSignals(
+      { filePath: 'app/panel.test.tsx', content: nonPwSpecCode },
+      {
+        bundleFiles: {
+          'app/panel.test.tsx': nonPwSpecCode,
+          'app/helper.v2.ts': 'export const value = 42;\n',
+        },
+      },
+    ),
+    { isPlaywright: false, isPlaywrightConfig: false },
+  );
+});
+
+test('readInputs and readPerFileInputs preserve test-root context inside repoRoot without leaking temp ancestor dirs', (t) => {
+  const outer = realpathSync(mkdtempSync(join(tmpdir(), 'test-dir-xyz-')));
+  t.after(() => rmSync(outer, { recursive: true, force: true }));
+  const repo = join(outer, 'test', 'my-repo');
+  mkdirSync(join(repo, 'src/main/kotlin/com/app'), { recursive: true });
+  mkdirSync(join(repo, 'src/test/kotlin/com/app'), { recursive: true });
+  writeFileSync(join(repo, 'src/main/kotlin/com/app/App.kt'), 'class App\n');
+  writeFileSync(join(repo, 'src/test/kotlin/com/app/Fake.kt'), 'class Fake\n');
+  writeFileSync(
+    join(repo, 'src/test/kotlin/com/app/Fixture.kt'),
+    'private const val API_KEY = "test-api-key"\nprivate const val RESEND_API_KEY = "fixture-api-key"\n',
+  );
+
+  // Production file inside /tmp/.../test/my-repo/src/main MUST stay production when repoRoot is my-repo
+  const prodLoaded = readPerFileInputs({
+    source: join(repo, 'src/main'),
+    repoRoot: repo,
+    includeProduction: true,
+    includeTests: true,
+  });
+  assert.deepEqual(Object.keys(prodLoaded.files), ['kotlin/com/app/App.kt']);
+  assert.deepEqual(Object.keys(prodLoaded.testFiles ?? {}), []);
+
+  // Directory target src/test/kotlin without displayBaseDir (module mode) MUST preserve test-root context and isTestFile=true
+  const testLoaded = readInputs({
+    source: join(repo, 'src/test/kotlin'),
+    repoRoot: repo,
+    includeProduction: true,
+    includeTests: true,
+  });
+  assert.deepEqual(Object.keys(testLoaded.files), []);
+  assert.deepEqual(Object.keys(testLoaded.testFiles ?? {}).sort(), ['com/app/Fake.kt', 'com/app/Fixture.kt']);
+});
+
 test('Stage 0 avoids false positives on e2e Node helpers and Vitest-globals specs while Stage 1 e2e_browser + ancestor playwright.config.* upgrades to e2e_playwright', async (t) => {
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'pw-ancestor-')));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -268,6 +385,48 @@ test('Stage 0 avoids false positives on e2e Node helpers and Vitest-globals spec
   });
   assert.equal(classifiedOther.isPlaywright, false);
   assert.equal(classifiedOther.fileRole, 'e2e_browser');
+
+  // Vitest Browser Mode / RTL component test under repo with root playwright.config.ts must NOT promote to e2e_playwright
+  mkdirSync(join(tmp, 'app/features/about/components'), { recursive: true });
+  const vitestBrowserPath = join(tmp, 'app/features/about/components/about-page.browser.test.tsx');
+  const vitestBrowserCode = [
+    "import { render, screen } from '@testing-library/react';",
+    "import { expect, it } from 'vitest';",
+    "import { page } from 'vitest/browser';",
+    "it('renders about page', async () => { await page.viewport(1280, 900); render(<main />); expect(screen.getByRole('main')).toBeVisible(); });",
+    '',
+  ].join('\n');
+  writeFileSync(vitestBrowserPath, vitestBrowserCode);
+
+  const classifiedVitestSecondary = await classifyTestFile({
+    filePath: 'app/features/about/components/about-page.browser.test.tsx',
+    content: vitestBrowserCode,
+    detectionContext: { absPath: vitestBrowserPath, repoRoot: tmp },
+    invokeOpenRouter: async () => ({
+      raw: {
+        model: 'typesafe/jev-1.14',
+        answers: {
+          test_kind: {
+            type: 'choice',
+            choice: 'unit',
+            probabilities: { unit: 0.7, integration: 0.02, e2e_browser: 0.25, test_support: 0.02, other: 0.01 },
+          },
+        },
+      },
+      retries: 0,
+    }),
+  });
+  assert.equal(classifiedVitestSecondary.isPlaywright, false);
+  assert.equal(classifiedVitestSecondary.fileRole, 'unit+e2e_browser');
+
+  const classifiedVitestPrimary = await classifyTestFile({
+    filePath: 'app/features/about/components/about-page.browser.test.tsx',
+    content: vitestBrowserCode,
+    detectionContext: { absPath: vitestBrowserPath, repoRoot: tmp },
+    invokeCli: async () => ({ raw: { test_kind: 'e2e_browser', reason: 'browser viewport test' }, returnedModel: 'stub' }),
+  });
+  assert.equal(classifiedVitestPrimary.isPlaywright, false);
+  assert.equal(classifiedVitestPrimary.fileRole, 'e2e_browser');
 });
 
 test('containsSensitiveCredential allows obvious synthetic test placeholders in tests while blocking real secrets everywhere', () => {
@@ -278,6 +437,8 @@ test('containsSensitiveCredential allows obvious synthetic test placeholders in 
     "const creds = { password: 'test-password-123' };",
     "const token = { access_token: 'playwright-auth-token' };",
     "const secret = { client_secret: 'fake-secret-value' };",
+    "const fixtureKey = { resendApiKey: 'fixture-api-key' };",
+    "const fixtureUnderscore = { api_key: 'fixture_api_key' };",
     "const mock = { apiKey: 'mock-api-key-value' };",
     "const stub = { accessToken: 'stub-token-9999' };",
     "const dummy = { password: 'dummy-password' };",

@@ -414,3 +414,75 @@ test('Playwright custom-fixture specs, file-mode playwright.config.ts linting, a
   const unitReq = readSavedRequest(join(unitOut, 'request.json'));
   assert.equal(Object.keys(unitReq.state.test_files ?? {}).some((f) => f.includes('playwright.config')), false);
 });
+
+test('static asset imports do not crash Stage 0 with ENOTDIR and test-support / test-root paths partition cleanly', (t) => {
+  const { project, root, runCliJson } = createCliTestWorkspace(t);
+
+  // 1. Test files importing real .css, .json, and dotted .ts modules run cleanly without ENOTDIR
+  const featureDir = join(project, 'app/features/jobs');
+  mkdirSync(join(featureDir, '.server'), { recursive: true });
+  mkdirSync(join(featureDir, 'data'), { recursive: true });
+  writeFileSync(join(featureDir, 'styles.css'), '.jobs { display: grid; }\n');
+  writeFileSync(join(featureDir, 'data/regions.json'), '{"de":true}\n');
+  writeFileSync(
+    join(featureDir, 'api.session.ts'),
+    "import { test as base, expect } from '@playwright/test';\nexport const test = base;\nexport { expect };\n",
+  );
+  writeFileSync(
+    join(featureDir, 'workspace.browser.test.tsx'),
+    "import './styles.css';\nimport regions from './data/regions.json';\nexport const check = () => regions;\n",
+  );
+  writeFileSync(
+    join(featureDir, 'session.spec.ts'),
+    "import './styles.css';\nimport './data/regions.json';\nimport { test, expect } from './api.session';\ntest('session', async ({ page }) => { await expect(page).toHaveTitle(/Jobs/); });\n",
+  );
+  writeFileSync(join(featureDir, '.server/test-support.ts'), 'export const makeJob = () => ({ id: 1 });\n');
+  writeFileSync(join(featureDir, 'overview.test-support.ts'), 'export const makeOverview = () => ({ count: 1 });\n');
+
+  const featureDry = runCliJson(['app/features/jobs', '--dry-run']);
+  assert.equal(featureDry.status, 0, featureDry.stderr);
+  assert.equal(findFileEntry(featureDry.result, 'app/features/jobs/workspace.browser.test.tsx').status, 'dry_run');
+  assert.equal(findFileEntry(featureDry.result, 'app/features/jobs/workspace.browser.test.tsx').file_role, 'test:auto');
+  assert.equal(findFileEntry(featureDry.result, 'app/features/jobs/session.spec.ts').file_role, 'test:playwright_auto');
+  assert.equal(findFileEntry(featureDry.result, 'app/features/jobs/.server/test-support.ts').file_role, 'test:auto');
+  assert.equal(findFileEntry(featureDry.result, 'app/features/jobs/overview.test-support.ts').file_role, 'test:auto');
+  assert.equal(findFileEntry(featureDry.result, 'app/features/jobs/api.session.ts').file_role, undefined);
+
+  // 2. Directory target src/test/kotlin preserves test-root context in both file and module modes with zero credential halt
+  const ktTestDir = join(project, 'src/test/kotlin/com/app');
+  mkdirSync(join(ktTestDir, 'testsupport'), { recursive: true });
+  writeFileSync(join(ktTestDir, 'Fake.kt'), 'class Fake\n');
+  writeFileSync(join(ktTestDir, 'ServiceIdentityFeatureTestSupport.kt'), 'class ServiceIdentityFeatureTestSupport\n');
+  writeFileSync(
+    join(ktTestDir, 'testsupport/Fixture.kt'),
+    'private const val FIREBASE_API_KEY = "test-api-key"\nprivate const val RESEND_API_KEY = "fixture-api-key"\n',
+  );
+
+  const ktFileDry = runCliJson(['src/test/kotlin', '--dry-run']);
+  assert.equal(ktFileDry.status, 0, ktFileDry.stderr);
+  for (const rel of [
+    'src/test/kotlin/com/app/Fake.kt',
+    'src/test/kotlin/com/app/ServiceIdentityFeatureTestSupport.kt',
+    'src/test/kotlin/com/app/testsupport/Fixture.kt',
+  ]) {
+    assert.equal(findFileEntry(ktFileDry.result, rel).file_role, 'test:auto');
+  }
+
+  const ktModOut = join(root, 'kt-test-mod');
+  const ktModDry = runCliJson(['module', 'src/test/kotlin', '--out', ktModOut, '--dry-run']);
+  assert.equal(ktModDry.status, 0, ktModDry.stderr);
+  const ktModReq = readSavedRequest(join(ktModOut, 'request.json'));
+  assert.equal(ktModReq.state.production_files, undefined);
+  assert.deepEqual(
+    Object.keys(ktModReq.state.test_files ?? {}).sort(),
+    ['com/app/Fake.kt', 'com/app/ServiceIdentityFeatureTestSupport.kt', 'com/app/testsupport/Fixture.kt'],
+  );
+
+  // 3. Temp ancestor directory named "test" outside repoRoot MUST NOT turn production code into tests
+  const nestedProdRepo = join(root, 'test', 'prod-repo');
+  mkdirSync(join(nestedProdRepo, 'src'), { recursive: true });
+  writeFileSync(join(nestedProdRepo, 'src/app.ts'), 'export const ready = true;\n');
+  const prodDry = runCliJson(['src', '--dry-run'], { cwd: nestedProdRepo });
+  assert.equal(prodDry.status, 0, prodDry.stderr);
+  assert.equal(findFileEntry(prodDry.result, 'src/app.ts').file_role, undefined);
+});

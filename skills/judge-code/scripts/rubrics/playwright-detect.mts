@@ -12,6 +12,8 @@ import { extractRelativeRuntimeImports, hasRuntimeImport } from './import-scan.m
 export const PLAYWRIGHT_PACKAGES = ['@playwright/test', 'playwright'] as const;
 
 const JS_TS_EXT_RE = /\.(?:tsx?|[cm]?[jt]sx?)$/i;
+const STATIC_ASSET_EXT_RE =
+  /\.(?:css|scss|sass|less|styl|json|svg|png|jpe?g|gif|webp|ico|avif|woff2?|ttf|eot|otf|pdf|txt|mdx?|html?|xml|ya?ml|toml|wasm|gql|graphql|sql|csv|mp[34]|wav)$/i;
 const PLAYWRIGHT_CONFIG_FILENAMES = [
   'playwright.config.ts',
   'playwright.config.mts',
@@ -53,7 +55,18 @@ function toPosixPath(filePath: string): string {
   return filePath.replaceAll('\\', '/');
 }
 
-function candidateModulePaths(rawTarget: string): string[] {
+function safeLstatSync(targetPath: string) {
+  try {
+    return lstatSync(targetPath, { throwIfNoEntry: false });
+  } catch {
+    return undefined;
+  }
+}
+
+export function candidateModulePaths(rawTarget: string): string[] {
+  if (STATIC_ASSET_EXT_RE.test(rawTarget)) {
+    return [];
+  }
   if (/\.js$/i.test(rawTarget)) {
     const stem = rawTarget.slice(0, -3);
     return [`${stem}.ts`, `${stem}.tsx`, rawTarget, `${stem}.jsx`];
@@ -89,7 +102,7 @@ function resolveFileAbsPath(filePath: string, context?: PlaywrightDetectionConte
 }
 
 function readDiskFileBounded(absPath: string, canonicalRepoRoot?: string): { canonical: string; content: string } | null {
-  const stat = lstatSync(absPath, { throwIfNoEntry: false });
+  const stat = safeLstatSync(absPath);
   if (!stat?.isFile()) return null;
   const canonical = canonicalizeOrFallback(absPath);
   if (canonicalRepoRoot && !isPathInsideDir(canonical, canonicalRepoRoot)) return null;
@@ -111,9 +124,11 @@ function resolveRelativeTarget(params: {
   canonicalRepoRoot?: string;
 }): ImportTarget | null {
   const { specifier, currentBundleKey, currentAbsPath, context, canonicalRepoRoot } = params;
+  const cleanSpecifier = specifier.replace(/[?#].*$/, '');
+  if (!cleanSpecifier) return null;
   if (context?.bundleFiles && currentBundleKey !== undefined) {
     const baseDir = posix.dirname(toPosixPath(currentBundleKey));
-    const joined = posix.normalize(baseDir === '.' ? specifier : `${baseDir}/${specifier}`);
+    const joined = posix.normalize(baseDir === '.' ? cleanSpecifier : `${baseDir}/${cleanSpecifier}`);
     if (!joined.startsWith('../') && joined !== '..') {
       for (const candidate of candidateModulePaths(joined)) {
         const content = context.bundleFiles[candidate];
@@ -129,7 +144,7 @@ function resolveRelativeTarget(params: {
   }
 
   if (currentAbsPath !== undefined) {
-    const rawTarget = resolve(dirname(currentAbsPath), specifier);
+    const rawTarget = resolve(dirname(currentAbsPath), cleanSpecifier);
     for (const candidate of candidateModulePaths(rawTarget)) {
       const diskFile = readDiskFileBounded(candidate, canonicalRepoRoot);
       if (diskFile) {
@@ -197,12 +212,12 @@ export function findAncestorPlaywrightConfig(
   for (let level = 0; level <= maxLevels; level += 1) {
     for (const filename of PLAYWRIGHT_CONFIG_FILENAMES) {
       const candidate = join(currentDir, filename);
-      if (lstatSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+      if (safeLstatSync(candidate)?.isFile()) {
         return canonicalizeOrFallback(candidate);
       }
     }
     if (canonicalStopDir && currentDir === canonicalStopDir) break;
-    if (lstatSync(join(currentDir, 'package.json'), { throwIfNoEntry: false })?.isFile()) break;
+    if (safeLstatSync(join(currentDir, 'package.json'))?.isFile()) break;
     const parent = dirname(currentDir);
     if (parent === currentDir) break;
     if (canonicalStopDir && !isPathInsideDir(parent, canonicalStopDir)) break;
@@ -236,7 +251,7 @@ export function hasAncestorPlaywrightConfig(
   const absPath = resolveFileAbsPath(filePath, context);
   if (!absPath) return false;
   const startDir = dirname(absPath);
-  if (!lstatSync(startDir, { throwIfNoEntry: false })?.isDirectory()) return false;
+  if (!safeLstatSync(startDir)?.isDirectory()) return false;
   return findAncestorPlaywrightConfig(startDir, { stopDir: context?.repoRoot }) !== null;
 }
 

@@ -1,15 +1,14 @@
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
-  SKIP_DIRS,
+  classifyDirectoryName,
+  classifySourceFile,
   isHiddenNonRoutingEntry,
   isPlaywrightConfigFilename,
-  isProductionSource,
   isSkippedDirPath,
   isTestOrSupportDirName,
   isTestOrSupportPath,
-  isTestSource,
 } from './classify-path.mts';
 import { containsSensitiveCredential } from './credentials.mts';
 import {
@@ -57,12 +56,14 @@ export interface DocReadContext {
 
 interface ResolvedSourceEntry {
   path: string;
+  rawSource: string;
   isDirectory: boolean;
 }
 
 interface PartitionCollectorConfig {
   entries: ResolvedSourceEntry[];
   displayBaseDir?: string;
+  repoRoot?: string;
   ignoreMatcher: IgnoreMatcher;
   allowEmpty?: boolean;
   includeProduction: boolean;
@@ -76,6 +77,7 @@ interface PartitionWalkState {
   filePaths: Record<string, string>;
   seenCanonical: Set<string>;
   canonicalDisplayBase?: string;
+  canonicalRepoRoot?: string;
   config: PartitionCollectorConfig;
 }
 
@@ -191,7 +193,7 @@ function resolveSourcesAndOut(options: ReadInputsOptions): {
     if (sourceStat.isDirectory()) {
       assertSpecificDirectory(canonical, 'Select a specific production file or directory');
     }
-    entries.push({ path: canonical, isDirectory: sourceStat.isDirectory() });
+    entries.push({ path: canonical, rawSource, isDirectory: sourceStat.isDirectory() });
   }
 
   let out: string | undefined;
@@ -215,26 +217,64 @@ function displayKeyForFile(canonicalDisplayBase: string | undefined, absFile: st
   return fallbackRel;
 }
 
+function normalizeRelativeRawSource(rawSource: string): string | null {
+  if (isAbsolute(rawSource)) return null;
+  const segments = rawSource
+    .replaceAll('\\', '/')
+    .split('/')
+    .filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+  return segments.length > 0 ? segments.join('/') : null;
+}
+
+type ContextBases = Pick<PartitionWalkState, 'canonicalRepoRoot' | 'canonicalDisplayBase'>;
+
+function resolveContextRel(
+  target: { absPath: string; rawSource?: string; isDirectory: boolean },
+  bases: ContextBases,
+): string | null {
+  if (bases.canonicalRepoRoot) {
+    const fromRepo = toPosixRelativeWithin(bases.canonicalRepoRoot, target.absPath);
+    if (fromRepo !== null) return fromRepo;
+    if (target.isDirectory && target.absPath === bases.canonicalRepoRoot) return null;
+  }
+  if (bases.canonicalDisplayBase) {
+    const fromDisplay = toPosixRelativeWithin(bases.canonicalDisplayBase, target.absPath);
+    if (fromDisplay !== null) return fromDisplay;
+    if (target.isDirectory && target.absPath === bases.canonicalDisplayBase) return null;
+  }
+  return target.rawSource ? normalizeRelativeRawSource(target.rawSource) : null;
+}
+
+function isDirectoryInsideTestRoot(entry: ResolvedSourceEntry, bases: ContextBases): boolean {
+  const contextRel = resolveContextRel({ absPath: entry.path, rawSource: entry.rawSource, isDirectory: true }, bases);
+  if (contextRel !== null) {
+    return contextRel.split('/').some((segment) => isTestOrSupportDirName(segment));
+  }
+  if (bases.canonicalRepoRoot && entry.path === bases.canonicalRepoRoot) {
+    return false;
+  }
+  return isTestOrSupportDirName(basename(entry.path));
+}
+
 function resolveFilePartition(params: {
   checkRel: string;
   displayKey: string;
+  contextRel?: string;
   insideTestRoot: boolean;
   includeProduction: boolean;
   includeTests: boolean;
 }): 'production' | 'test' | null {
-  const isTest = params.insideTestRoot
-    || isTestOrSupportPath(params.checkRel)
-    || (params.displayKey !== params.checkRel && isTestOrSupportPath(params.displayKey));
-  if (isTest) {
-    const insideTestContext = params.insideTestRoot || isTestOrSupportPath(params.displayKey);
-    return params.includeTests && isTestSource(params.checkRel, insideTestContext) ? 'test' : null;
-  }
-  return params.includeProduction && isProductionSource(params.checkRel) ? 'production' : null;
+  const hasTestContextPath = (params.displayKey !== params.checkRel && isTestOrSupportPath(params.displayKey))
+    || (params.contextRel !== undefined && isTestOrSupportPath(params.contextRel));
+  const partition = classifySourceFile(params.checkRel, params.insideTestRoot || hasTestContextPath);
+  if (partition === 'test') return params.includeTests ? 'test' : null;
+  if (partition === 'production') return params.includeProduction ? 'production' : null;
+  return null;
 }
 
 function collectSingleFile(
   state: PartitionWalkState,
-  candidate: { absFile: string; relInSource: string; isSingleFile: boolean; insideTestRoot: boolean },
+  candidate: { absFile: string; relInSource: string; rawSource?: string; isSingleFile: boolean; insideTestRoot: boolean },
 ): void {
   const canonical = realpathSync(candidate.absFile);
   if (state.seenCanonical.has(canonical)) return;
@@ -246,9 +286,14 @@ function collectSingleFile(
   const checkRel = candidate.isSingleFile ? displayKey : candidate.relInSource;
   if (candidate.isSingleFile && isSkippedDirPath(checkRel, state.config.includeTests)) return;
 
+  const contextRel = resolveContextRel(
+    { absPath: canonical, rawSource: candidate.rawSource, isDirectory: false },
+    state,
+  ) ?? undefined;
   const partition = resolveFilePartition({
     checkRel,
     displayKey,
+    contextRel,
     insideTestRoot: candidate.insideTestRoot,
     includeProduction: state.config.includeProduction,
     includeTests: state.config.includeTests,
@@ -269,8 +314,7 @@ function shouldSkipSubdirectory(
   state: PartitionWalkState,
   entry: { name: string; fullPath: string; relName: string },
 ): boolean {
-  if (SKIP_DIRS.has(entry.name.toLowerCase())) return true;
-  if (!state.config.includeTests && isTestOrSupportDirName(entry.name)) return true;
+  if (classifyDirectoryName(entry.name, state.config.includeTests) === 'skip') return true;
   if (state.config.ignoreMatcher.isIgnoredDir(entry.relName)) return true;
   const displayDir = state.canonicalDisplayBase ? toPosixRelativeWithin(state.canonicalDisplayBase, entry.fullPath) : null;
   return displayDir !== null && state.config.ignoreMatcher.isIgnoredDir(displayDir);
@@ -330,18 +374,20 @@ function collectPartitionedFiles(
     filePaths: {},
     seenCanonical: new Set<string>(),
     canonicalDisplayBase: config.displayBaseDir ? canonicalizeOrFallback(config.displayBaseDir) : undefined,
+    canonicalRepoRoot: config.repoRoot ? canonicalizeOrFallback(config.repoRoot) : undefined,
     config,
   };
 
   for (const entry of config.entries) {
     if (entry.isDirectory) {
-      const rootIsTestDir = isTestOrSupportDirName(basename(entry.path));
+      const rootIsTestDir = isDirectoryInsideTestRoot(entry, state);
       if (!config.includeTests && rootIsTestDir) continue;
       collectDirectory(state, { dir: entry.path, insideTestRoot: rootIsTestDir, prefix: '' });
     } else {
       collectSingleFile(state, {
         absFile: entry.path,
         relInSource: basename(entry.path),
+        rawSource: entry.rawSource,
         isSingleFile: true,
         insideTestRoot: false,
       });
@@ -481,6 +527,7 @@ function loadInputFiles(options: ReadInputsOptions, budgetMode: 'bundle' | 'per-
   const { productionFiles, testFiles, filePaths, seenCanonical } = collectPartitionedFiles({
     entries,
     displayBaseDir: options.displayBaseDir,
+    repoRoot: options.repoRoot,
     ignoreMatcher,
     allowEmpty: options.allowEmpty,
     includeProduction,
