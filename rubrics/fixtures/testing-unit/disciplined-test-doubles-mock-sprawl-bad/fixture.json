@@ -1,0 +1,8 @@
+{
+  "id": "disciplined-test-doubles-mock-sprawl-bad",
+  "description": "Unit component test mocks 10 internal modules, child components, and hooks with trivial stub shells so the test only proves mock wiring",
+  "rubric": "testing-unit",
+  "expect": {
+    "disciplined_test_doubles": "fail"
+  }
+}

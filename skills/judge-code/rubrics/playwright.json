@@ -23,7 +23,7 @@
       "instructions": "Does the suite keep tests fast and parallel-safe by reusing authentication (`storageState`) and seeding preconditions via API/fixture helpers with teardown rather than serial test chains, shared mutable state, or repetitive UI setup flows?",
       "criteria": {
         "pass": "Tests run independently in parallel with isolated unique data created via fast API or database fixtures (`test.extend` with cleanup after `await use(...)`) and preloaded auth (`storageState` setup projects or role fixtures). Auth specs explicitly clearing `storageState` (`{ cookies: [], origins: [] }`) to test login or logout itself pass cleanly.",
-        "fail": "Tests depend on execution order via `test.describe.serial` or module-level mutable variables (`let createdId`) passed from test A to test B; OR post-auth feature specs repeatedly click through full UI login forms or multi-screen creation wizards in `beforeEach` just to reach the feature under test; OR tests create manual browser contexts or shared records without fixture cleanup."
+        "fail": "Tests depend on execution order via `test.describe.serial` or module-level mutable variables (`let createdId`) passed from test A to test B; OR post-auth feature specs repeatedly click through full UI login forms or invoke multi-step UI creation wizard helpers before unrelated feature tests (such as upload or edit specs) instead of seeding preconditions via API/fixture; OR tests create manual browser contexts or shared records without fixture cleanup."
       }
     },
     "playwright_web_first_and_race_free": {
@@ -41,7 +41,7 @@
       "instructions": "Do specs and drivers locate elements via accessible user-facing roles/labels and semantic container/filter scoping rather than brittle CSS/XPath chains, positional `.nth()`/`.first()` crutches, or test-ID overuse?",
       "criteria": {
         "pass": "Locators prioritize `getByRole`, `getByLabel`, `getByPlaceholder`, and `getByText` scoped through semantic containers (`row.getByRole('button', ...)`, `.filter({ hasText })`, `dialog.getByRole(...)`). Intentional `.first()`/`.last()` assertions verifying sort order and `getByTestId` on genuinely non-semantic widgets (charts, canvases, layout shells) pass cleanly. Files that do not construct DOM locators also pass.",
-        "fail": "Locators rely on CSS class/descendant chains (`.row-actions > div button`), XPath, `:nth-child`, positional `.nth(2)`/`.first()` crutches to target a specific domain record instead of scoping by row/filter, or `getByTestId` on standard buttons, links, inputs, or headings that have accessible roles and names."
+        "fail": "Locators rely on CSS class/descendant chains (`.row-actions > div button`), CSS attribute or ID selector crutches (`page.locator('[aria-expanded=\"true\"]')`, `page.locator('[id=\"...\"]')`, `page.locator('#field-id')`, `page.locator('label input[type=\"file\"]')`), XPath, `:nth-child`, positional `.nth(2)`/`.first()` crutches to target a specific domain record instead of scoping by row/filter, or `getByTestId` on standard buttons, links, inputs, or headings that have accessible roles and names."
       }
     },
     "playwright_honest_app_boundaries": {
@@ -56,10 +56,10 @@
     "playwright_suite_and_config_diagnostics": {
       "type": "choice",
       "scope": "module",
-      "instructions": "Do Playwright configuration (`playwright.config.*`) and suite files enforce CI safety (`forbidOnly`, `baseURL`, failure traces) without masking flakes through excessive unconditional retries, bloated timeouts, hardcoded URLs, or unreasoned skips?",
+      "instructions": "Do Playwright configuration (`playwright.config.*`) and suite files enforce CI safety (`forbidOnly`, `baseURL`, failure traces) without masking flakes through excessive unconditional retries, bloated timeouts, hardcoded URLs, contradictory serial-worker settings, or unreasoned skips?",
       "criteria": {
-        "pass": "`playwright.config.*` sets `forbidOnly: !!process.env.CI`, bounds retries to CI (for example `retries: process.env.CI ? 1 : 0` or `2 : 0`), captures traces/artifacts on failure or retry (`trace: 'retain-on-failure'` or `'on-first-retry'`), centralizes `use.baseURL`, and keeps test timeouts proportional (normal `webServer.timeout` is fine). Specs navigate with relative paths against `baseURL` without committed `test.only` or unreasoned `test.skip()` rot; explicit conditional skips (`test.skip(cond, 'clear reason')`) pass.",
-        "fail": "Config omits `forbidOnly`, sets excessive unconditional retries (`retries: 3+` locally and in CI), sets huge test timeouts (`180_000+`) to hide hangs, disables failure traces (`trace: 'off'`), hardcodes absolute localhost or host URLs (such as `localhost:5173/...`) across specs instead of `baseURL`, or contains committed `test.only` or unreasoned `test.skip()` rot."
+        "pass": "`playwright.config.*` sets `forbidOnly: !!process.env.CI`, bounds retries to CI (for example `retries: process.env.CI ? 1 : 0` or `2 : 0`), captures traces/artifacts on failure or retry (`trace: 'retain-on-failure'` or `'on-first-retry'`), centralizes `use.baseURL`, allows parallel execution without contradictory serial-worker crutches, and keeps test timeouts proportional (normal `webServer.timeout` is fine). Specs navigate with relative paths against `baseURL` without committed `test.only` or unreasoned `test.skip()` rot; explicit conditional skips (`test.skip(cond, 'clear reason')`) pass.",
+        "fail": "Config omits `forbidOnly`, sets excessive unconditional retries (`retries: 3+` locally and in CI), sets huge test timeouts (`180_000+`) to hide hangs, disables failure traces (`trace: 'off'`), uses contradictory or serial-execution crutches such as `fullyParallel: true` combined with `workers: 1` (or unconditional `workers: 1` serializing the whole suite without explicit single-resource justification), hardcodes absolute localhost or host URLs (such as `localhost:5173/...`) across specs instead of `baseURL`, or contains committed `test.only` or unreasoned `test.skip()` rot."
       }
     }
   }

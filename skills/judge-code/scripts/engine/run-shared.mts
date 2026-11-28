@@ -134,7 +134,17 @@ export function narrowAndDiffRubric(candidateRubric: ResolvedRubric, activeCheck
   skippedNotApplicable: string[];
   activeQuestionIds: string[];
 } {
-  const effectiveRubric = narrowResolvedRubric(candidateRubric, activeCheckIds);
+  const configRubric = candidateRubric.playwrightConfigRubric;
+  const usesConfigCheck = configRubric !== undefined
+    && Object.keys(configRubric.questions).some((id) => activeCheckIds.has(id));
+  const effectiveSource = usesConfigCheck
+    ? mergeResolvedRubrics([candidateRubric, configRubric])
+    : candidateRubric;
+  const narrowed = narrowResolvedRubric(effectiveSource, activeCheckIds);
+  const effectiveRubric: ResolvedRubric = {
+    ...narrowed,
+    skippedModuleChecks: narrowed.skippedModuleChecks.filter((id) => !activeCheckIds.has(id)),
+  };
   const skippedNotApplicable = Object.keys(candidateRubric.questions).filter((id) => !activeCheckIds.has(id));
   return {
     effectiveRubric,

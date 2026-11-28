@@ -1,0 +1,8 @@
+{
+  "id": "owner-boundary-no-seams-feature-flag-good",
+  "description": "Component unit test exercises a real production feature-flag prop on the public component API to verify both enabled and disabled production states without introducing test-only seams",
+  "rubric": "testing-core",
+  "expect": {
+    "owner_boundary_no_seams": "pass"
+  }
+}

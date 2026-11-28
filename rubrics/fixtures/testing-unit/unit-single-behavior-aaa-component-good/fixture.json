@@ -1,0 +1,8 @@
+{
+  "id": "unit-single-behavior-aaa-component-good",
+  "description": "Concise UI component interaction tests verify 2-3 closely related observable states from one cohesive interaction or render without chaining unrelated workflows",
+  "rubric": "testing-unit",
+  "expect": {
+    "unit_single_behavior_aaa": "pass"
+  }
+}

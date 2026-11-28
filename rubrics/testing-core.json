@@ -34,8 +34,8 @@
       "scope": "file",
       "instructions": "Do the tests exercise real public or module boundaries without relying on test-only production seams, test-only flags, or widened visibility solely to reach private helpers?",
       "criteria": {
-        "pass": "Tests exercise real public or module boundaries so internal reorganization does not require rewriting tests, without introducing test-only production hooks, test-only flags, or widened visibility solely to reach private helpers.",
-        "fail": "Tests rely on test-only production seams, test-only flags or branches, internal implementation hooks, or visibility widened solely to invoke private helpers directly."
+        "pass": "Tests exercise real public or module boundaries so internal reorganization does not require rewriting tests, without introducing test-only production hooks, test-only flags, or widened visibility solely to reach private helpers. Passing a real production feature-flag or configuration parameter/property that is part of the component's or module's public API to exercise both enabled and disabled production states is normal boundary testing and passes cleanly.",
+        "fail": "Tests rely on test-only production seams, flags or branches added solely for tests (such as `isTestMode` or bypass-validation switches), internal implementation hooks, or visibility widened solely to invoke private helpers directly. Do NOT fail tests for passing real production feature-flag or configuration options exposed by the public API."
       }
     }
   }

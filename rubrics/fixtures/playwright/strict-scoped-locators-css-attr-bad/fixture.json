@@ -1,0 +1,8 @@
+{
+  "id": "strict-scoped-locators-css-attr-bad",
+  "description": "Playwright spec relies on CSS attribute, ID, and input-type selector crutches instead of accessible roles and labels",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_strict_scoped_locators": "fail"
+  }
+}

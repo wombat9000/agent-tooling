@@ -48,6 +48,7 @@ export interface ResolvedRubric {
   appliesTo?: Record<string, RubricApplicability>;
   groups: Record<string, string[]>;
   groupRubricIds?: Record<string, string>;
+  playwrightConfigRubric?: ResolvedRubric;
   excluded: string[];
   skippedModuleChecks: string[];
 }

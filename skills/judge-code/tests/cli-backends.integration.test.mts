@@ -31,12 +31,14 @@ test('unified file mode previews mixed prod and test roles offline and skips non
 
   const dry = runCliJson(['mixed-app', '--dry-run']);
   assert.equal(dry.result.file_count, 8);
-  assert.equal(findFileEntry(dry.result, 'mixed-app/playwright.config.ts').status, 'skipped');
+  assert.equal(findFileEntry(dry.result, 'mixed-app/playwright.config.ts').status, 'dry_run');
+  assert.equal(findFileEntry(dry.result, 'mixed-app/playwright.config.ts').file_role, 'test_support_playwright');
   assert.equal(findFileEntry(dry.result, 'mixed-app/e2e/checkout.spec.ts').file_role, 'test:playwright_auto');
   assert.equal(findFileEntry(dry.result, 'mixed-app/src/calc.test.ts').file_role, 'test:auto');
 
   const live = runCliJson(['mixed-app'], { openRouterStub: 'pass' });
   assert.equal(live.status, 0, live.stderr);
+  assert.equal(findFileEntry(live.result, 'mixed-app/playwright.config.ts').status, 'scored');
   assert.equal(findFileEntry(live.result, 'mixed-app/tests/test-helper.ts').status, 'skipped');
   assert.equal(findFileEntry(live.result, 'mixed-app/tests/mixed-split.test.ts').file_role, 'unit+integration');
 });

@@ -1,0 +1,9 @@
+{
+  "id": "isolated-fast-setup-wizard-and-serial-workers-bad",
+  "description": "Playwright config combines fullyParallel: true with workers: 1 due to shared singleton stub state, and feature specs invoke a multi-step UI creation wizard helper before unrelated upload and edit tests",
+  "rubric": "playwright",
+  "expect": {
+    "playwright_isolated_fast_setup": "fail",
+    "playwright_suite_and_config_diagnostics": "fail"
+  }
+}

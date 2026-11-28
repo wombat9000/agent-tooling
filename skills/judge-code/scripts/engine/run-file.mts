@@ -1,4 +1,10 @@
-import { previewTestFileRubric, routeTestRubrics } from '../rubrics/classifier.mts';
+import { basename } from 'node:path';
+import { isPlaywrightConfigFilename } from '../inputs/classify-path.mts';
+import {
+  previewTestFileRubric,
+  routeTestRubrics,
+  type PlaywrightDetectionContext,
+} from '../rubrics/classifier.mts';
 import { filterRubricForFiles } from '../rubrics/applicability.mts';
 import type { ResolvedRubric } from '../rubrics/types.mts';
 import {
@@ -52,27 +58,49 @@ interface FileEvalOutcome {
   retries: number;
 }
 
+function buildFileDetectionContext(item: FileWorkItem, options: JudgeRunOptions): PlaywrightDetectionContext {
+  return {
+    absPath: options.filePaths?.[item.file],
+    repoRoot: options.repoRoot,
+    bundleFiles: options.testFiles ?? options.files,
+    filePaths: options.filePaths,
+  };
+}
+
 async function resolveTestFileRouting(item: FileWorkItem, env: FileRunEnv): Promise<ResolvedFileRouting> {
   const { options, partitions, ctx } = env;
   if (!partitions.testRubric) {
     return { rubric: emptyResolvedRubric(partitions.candidateRubric), useTestPayload: true, retries: 0 };
   }
+  const detectionContext = buildFileDetectionContext(item, options);
   if (options.explicitTestSelection) {
+    if (isPlaywrightConfigFilename(basename(item.file)) && partitions.testRubric.playwrightConfigRubric) {
+      return {
+        rubric: partitions.testRubric.playwrightConfigRubric,
+        fileRole: 'test_support_playwright',
+        useTestPayload: true,
+        retries: 0,
+      };
+    }
     return {
-      rubric: filterRubricForFiles(partitions.testRubric, { [item.file]: item.content }),
+      rubric: filterRubricForFiles(partitions.testRubric, { [item.file]: item.content }, detectionContext),
       fileRole: 'test',
       useTestPayload: true,
       retries: 0,
     };
   }
   if (options.dryRun) {
-    const preview = previewTestFileRubric({ filePath: item.file, content: item.content }, partitions.testRubric);
+    const preview = previewTestFileRubric(
+      { filePath: item.file, content: item.content },
+      partitions.testRubric,
+      detectionContext,
+    );
     return { rubric: preview.rubric, fileRole: preview.fileRole, useTestPayload: true, retries: 0 };
   }
   if (!ctx.classifyTest) {
     throw new Error('Test classifier is required for automatic test-file linting');
   }
-  const classification = await ctx.classifyTest(item.file, item.content);
+  const classification = await ctx.classifyTest(item.file, item.content, detectionContext);
   return {
     rubric: routeTestRubrics(classification, partitions.testRubric),
     fileRole: classification.fileRole,
@@ -85,8 +113,17 @@ async function resolveFileRubricAndRole(item: FileWorkItem, env: FileRunEnv): Pr
   const { options, partitions } = env;
   const singleFileMap = { [item.file]: item.content };
   if (!partitions.isUnified) {
+    if (isPlaywrightConfigFilename(basename(item.file)) && options.rubric.playwrightConfigRubric) {
+      return {
+        rubric: options.rubric.playwrightConfigRubric,
+        fileRole: 'test_support_playwright',
+        useTestPayload: true,
+        retries: 0,
+      };
+    }
+    const detectionContext = buildFileDetectionContext(item, options);
     return {
-      rubric: filterRubricForFiles(options.rubric, singleFileMap),
+      rubric: filterRubricForFiles(options.rubric, singleFileMap, detectionContext),
       useTestPayload: options.rubric.target === 'test_code',
       retries: 0,
     };

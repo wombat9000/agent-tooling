@@ -565,7 +565,7 @@ export function resolveFixtureRubric(
     const ruleAppliesTo = fullResolved.appliesTo?.[checkId];
     if (ruleAppliesTo) {
       const hasMatchingFile = fixtureFileEntries.some(([filePath, content]) =>
-        matchesFileApplicability(filePath, content, ruleAppliesTo),
+        matchesFileApplicability(filePath, content, ruleAppliesTo, { bundleFiles: fixture.files }),
       );
       if (!hasMatchingFile) {
         throw new Error(

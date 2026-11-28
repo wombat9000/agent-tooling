@@ -191,6 +191,8 @@ function assembleBaseRubric(params: {
   };
 }
 
+const PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK = 'playwright_suite_and_config_diagnostics';
+
 function filterByRequestedRules(
   base: ResolvedRubric,
   rules: readonly string[] | undefined,
@@ -202,7 +204,7 @@ function filterByRequestedRules(
     if (!(id in base.questions)) {
       throw new Error(`Unknown check ID in --rule: ${id}. Run \`judge-code list\` to see available checks.`);
     }
-    if (mode === 'file' && base.scopes[id] !== 'file') {
+    if (mode === 'file' && base.scopes[id] !== 'file' && id !== PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK) {
       throw new Error(`Rule "${id}" is module-scoped and cannot run in file mode; use \`judge-code module <path>\`.`);
     }
   }
@@ -232,6 +234,20 @@ function selectKeptCheckIds(
   return { keepIds, excluded, skippedModuleChecks };
 }
 
+function buildFileModePlaywrightConfigRubric(
+  base: ResolvedRubric,
+  options: Pick<ResolveRubricsOptions, 'mode' | 'rules' | 'exclude'>,
+): ResolvedRubric | undefined {
+  if (options.mode !== 'file') return undefined;
+  if (!(PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK in base.questions)) return undefined;
+  const requestedRules = options.rules ?? [];
+  if (requestedRules.length > 0 && !requestedRules.includes(PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK)) {
+    return undefined;
+  }
+  if ((options.exclude ?? []).includes(PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK)) return undefined;
+  return narrowResolvedRubric(base, new Set([PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK]));
+}
+
 export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const { parsedSources, resolvedTarget } = loadAndValidateSources(options);
   const base = assembleBaseRubric({
@@ -241,8 +257,9 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
     hasConventions: options.hasConventions,
   });
   const { keepIds, excluded, skippedModuleChecks } = selectKeptCheckIds(base, options);
+  const playwrightConfigRubric = buildFileModePlaywrightConfigRubric(base, options);
 
-  if (keepIds.size === 0) {
+  if (keepIds.size === 0 && !playwrightConfigRubric) {
     if (options.mode === 'file' && skippedModuleChecks.length > 0) {
       throw new Error(
         `No file-scoped checks remain (skipped module-scoped checks: ${skippedModuleChecks.join(', ')}). `
@@ -259,7 +276,13 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   if (options.hasConventions && CONVENTIONS_CHECK_ID in narrowed.questions) {
     activeRubricIds.push('repo-conventions');
   }
-  return { ...narrowed, rubric: activeRubricIds.join('+'), excluded, skippedModuleChecks };
+  return {
+    ...narrowed,
+    rubric: activeRubricIds.join('+'),
+    ...(playwrightConfigRubric ? { playwrightConfigRubric } : {}),
+    excluded,
+    skippedModuleChecks,
+  };
 }
 
 function appendUnique(target: string[], values: readonly string[]): void {
@@ -302,7 +325,9 @@ function mergeSingleRubricInto(
 
 /** Merge two or more resolved rubrics (for unified production + test file/module runs). */
 export function mergeResolvedRubrics(rubrics: readonly ResolvedRubric[]): ResolvedRubric {
-  const nonEmpty = rubrics.filter((r) => Object.keys(r.questions).length > 0);
+  const nonEmpty = rubrics.filter(
+    (r) => Object.keys(r.questions).length > 0 || r.playwrightConfigRubric !== undefined,
+  );
   if (nonEmpty.length === 1) return nonEmpty[0];
 
   const acc = {
@@ -317,6 +342,7 @@ export function mergeResolvedRubrics(rubrics: readonly ResolvedRubric[]): Resolv
     skippedModuleChecks: [] as string[],
   };
   for (const r of rubrics) mergeSingleRubricInto(r, acc);
+  const playwrightConfigRubric = rubrics.find((r) => r.playwrightConfigRubric !== undefined)?.playwrightConfigRubric;
 
   return {
     rubric: acc.activeRubricIds.join('+'),
@@ -327,6 +353,7 @@ export function mergeResolvedRubrics(rubrics: readonly ResolvedRubric[]): Resolv
     ...(Object.keys(acc.appliesTo).length > 0 ? { appliesTo: acc.appliesTo } : {}),
     groups: acc.groups,
     ...(Object.keys(acc.groupRubricIds).length > 0 ? { groupRubricIds: acc.groupRubricIds } : {}),
+    ...(playwrightConfigRubric ? { playwrightConfigRubric } : {}),
     excluded: acc.excluded,
     skippedModuleChecks: acc.skippedModuleChecks,
   };
@@ -483,6 +510,6 @@ export function resolveUnifiedRubrics(options: ResolveUnifiedRubricsOptions): Un
     ...(production ? { production } : {}),
     ...(test ? { test } : {}),
     explicitTestSelection: Boolean(test) && (requestedRubrics.length > 0 || requestedRules.length > 0),
-    combinedCriteria: buildCombinedCriteria([production, test]),
+    combinedCriteria: buildCombinedCriteria([production, test, test?.playwrightConfigRubric]),
   };
 }

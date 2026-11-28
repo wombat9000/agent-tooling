@@ -1,7 +1,14 @@
-import { basename } from 'node:path';
-import { isPlaywrightConfigFilename } from '../inputs/classify-path.mts';
-import { hasRuntimeImport, narrowResolvedRubric } from './applicability.mts';
+import { narrowResolvedRubric } from './applicability.mts';
+import {
+  PLAYWRIGHT_PACKAGES,
+  detectPlaywrightSignals,
+  hasAncestorPlaywrightConfig,
+  type PlaywrightDetectionContext,
+  type PlaywrightSignals,
+} from './playwright-detect.mts';
 import { nonempty, object, type ResolvedRubric } from './types.mts';
+
+export { PLAYWRIGHT_PACKAGES, detectPlaywrightSignals, type PlaywrightDetectionContext, type PlaywrightSignals };
 
 export type TestKind = 'unit' | 'integration' | 'e2e_browser' | 'test_support' | 'other';
 
@@ -15,7 +22,6 @@ export const TEST_KINDS: readonly TestKind[] = [
 
 export const SECONDARY_ROLE_THRESHOLD = 0.2;
 export const CLASSIFIER_OPENROUTER_MODEL = 'typesafe/jev-1.14';
-export const PLAYWRIGHT_PACKAGES = ['@playwright/test', 'playwright'] as const;
 
 export const PLAYWRIGHT_SUPPORT_CHECKS = new Set<string>([
   'playwright_web_first_and_race_free',
@@ -66,11 +72,6 @@ export interface TestFileInput {
   content: string;
 }
 
-export interface PlaywrightSignals {
-  isPlaywright: boolean;
-  isPlaywrightConfig: boolean;
-}
-
 export interface TestKindClassification {
   primary: TestKind;
   activeKinds: TestKind[];
@@ -101,6 +102,7 @@ export interface CliClassifyCall {
 }
 
 export interface ClassifyTestFileOptions extends TestFileInput {
+  detectionContext?: PlaywrightDetectionContext;
   invokeOpenRouter?: (body: string) => Promise<{ raw: unknown; retries: number }>;
   invokeCli?: (call: CliClassifyCall) => Promise<{ raw: unknown; returnedModel: string }>;
 }
@@ -163,17 +165,6 @@ function oneHotProbabilities(selected: TestKind): Record<TestKind, number> {
   return Object.fromEntries(
     TEST_KINDS.map((kind) => [kind, kind === selected ? 1 : 0]),
   ) as Record<TestKind, number>;
-}
-
-/** Stage 0 deterministic Playwright detection (runtime imports or playwright.config.* filename). */
-export function detectPlaywrightSignals(file: TestFileInput): PlaywrightSignals {
-  const isPlaywrightConfig = isPlaywrightConfigFilename(basename(file.filePath));
-  const hasImport = /\.(?:tsx?|[cm]?[jt]sx?)$/i.test(file.filePath)
-    && hasRuntimeImport(file.content, PLAYWRIGHT_PACKAGES);
-  return {
-    isPlaywright: isPlaywrightConfig || hasImport,
-    isPlaywrightConfig,
-  };
 }
 
 /**
@@ -329,6 +320,9 @@ export function routeTestRubrics(
 ): ResolvedRubric {
   const keep = new Set<string>();
   collectRoutedCheckIds(classification, testRubric, keep);
+  if (keep.size === 0 && classification.isPlaywrightConfig && testRubric.playwrightConfigRubric) {
+    return testRubric.playwrightConfigRubric;
+  }
   return narrowResolvedRubric(testRubric, keep);
 }
 
@@ -351,8 +345,9 @@ export function routeTestBundleRubrics(
 export function previewTestFileRubric(
   file: TestFileInput,
   testRubric: ResolvedRubric,
+  detectionContext?: PlaywrightDetectionContext,
 ): { rubric: ResolvedRubric; fileRole: string } {
-  const signals = detectPlaywrightSignals(file);
+  const signals = detectPlaywrightSignals(file, detectionContext);
   if (signals.isPlaywrightConfig) {
     return {
       rubric: routeTestRubrics(
@@ -385,10 +380,18 @@ export function previewTestFileRubric(
 export function previewTestBundleRubric(
   testFiles: Record<string, string>,
   testRubric: ResolvedRubric,
+  detectionContext?: PlaywrightDetectionContext,
 ): ResolvedRubric {
   const keep = new Set<string>();
+  const bundleContext: PlaywrightDetectionContext = {
+    ...detectionContext,
+    bundleFiles: detectionContext?.bundleFiles ?? testFiles,
+  };
   for (const [filePath, content] of Object.entries(testFiles)) {
-    const preview = previewTestFileRubric({ filePath, content }, testRubric);
+    const preview = previewTestFileRubric({ filePath, content }, testRubric, {
+      ...bundleContext,
+      absPath: detectionContext?.filePaths?.[filePath],
+    });
     for (const id of Object.keys(preview.rubric.questions)) {
       keep.add(id);
     }
@@ -399,6 +402,21 @@ export function previewTestBundleRubric(
   return narrowResolvedRubric(testRubric, keep);
 }
 
+function finalizeSignalsAfterStage1(
+  file: TestFileInput,
+  activeKinds: readonly TestKind[],
+  signals: PlaywrightSignals,
+  detectionContext?: PlaywrightDetectionContext,
+): PlaywrightSignals {
+  if (signals.isPlaywright || !activeKinds.includes('e2e_browser')) {
+    return signals;
+  }
+  if (hasAncestorPlaywrightConfig(file.filePath, detectionContext)) {
+    return { ...signals, isPlaywright: true };
+  }
+  return signals;
+}
+
 /**
  * Run Stage 0 + Stage 1 `test_kind` classification for a single test file.
  * `playwright.config.*` short-circuits deterministically in Stage 0 with zero API/CLI calls.
@@ -407,7 +425,7 @@ export async function classifyTestFile(
   options: ClassifyTestFileOptions,
 ): Promise<TestKindClassification> {
   const file: TestFileInput = { filePath: options.filePath, content: options.content };
-  const signals = detectPlaywrightSignals(file);
+  const signals = detectPlaywrightSignals(file, options.detectionContext);
   if (signals.isPlaywrightConfig) {
     return createClassification({
       primary: 'test_support',
@@ -422,11 +440,12 @@ export async function classifyTestFile(
     const request = buildOpenRouterClassifyRequest(file);
     const { raw, retries } = await options.invokeOpenRouter(`${JSON.stringify(request, null, 2)}\n`);
     const parsed = parseOpenRouterTestKind(raw);
+    const activeKinds = extractActiveKinds(parsed.primary, parsed.probabilities);
     return createClassification({
       primary: parsed.primary,
-      activeKinds: extractActiveKinds(parsed.primary, parsed.probabilities),
+      activeKinds,
       probabilities: parsed.probabilities,
-      signals,
+      signals: finalizeSignalsAfterStage1(file, activeKinds, signals, options.detectionContext),
       returnedModel: parsed.returnedModel,
       retries,
     });
@@ -434,11 +453,12 @@ export async function classifyTestFile(
   if (options.invokeCli) {
     const invoked = await options.invokeCli(buildCliClassifyCall(file));
     const parsed = parseCliTestKind(invoked.raw);
+    const activeKinds = [parsed.primary];
     return createClassification({
       primary: parsed.primary,
-      activeKinds: [parsed.primary],
+      activeKinds,
       probabilities: parsed.probabilities,
-      signals,
+      signals: finalizeSignalsAfterStage1(file, activeKinds, signals, options.detectionContext),
       returnedModel: invoked.returnedModel,
       retries: 0,
     });
