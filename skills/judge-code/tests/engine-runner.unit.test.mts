@@ -206,7 +206,7 @@ test('runDecisionJudge routes Playwright support helpers to Playwright helper ch
   );
 });
 
-test('runDecisionJudge skips non-Playwright support files and playwright.config in file mode with zero Stage 2 calls', async (t) => {
+test('runDecisionJudge skips non-Playwright support files and scores playwright.config in file mode with zero Stage 1 calls', async (t) => {
   withTempOpenRouterKey(t);
   const { transport, stage1Calls, stage2Calls } = createStage1And2MockFetch();
   const unified = resolveUnifiedRubrics({ mode: 'file', hasRequirements: false, hasConventions: false });
@@ -228,8 +228,18 @@ test('runDecisionJudge skips non-Playwright support files and playwright.config 
   );
 
   assert.deepEqual(stage1Calls.map((req) => req.file), ['tests/helper.ts']);
-  assert.deepEqual(stage2Calls, []);
+  assert.deepEqual(stage2Calls, [
+    {
+      model: 'typesafe/jev-1.14',
+      isTest: true,
+      file: 'playwright.config.ts',
+      questions: ['playwright_suite_and_config_diagnostics'],
+    },
+  ]);
   assert.equal(findFileEntry(result, 'tests/helper.ts').status, 'skipped');
   assert.equal(findFileEntry(result, 'tests/helper.ts').skip_reason, 'not_applicable');
-  assert.equal(findFileEntry(result, 'playwright.config.ts').status, 'skipped');
+  assert.equal(findFileEntry(result, 'playwright.config.ts').status, 'scored');
+  assert.equal(findFileEntry(result, 'playwright.config.ts').file_role, 'test_support_playwright');
+  assert.equal('playwright_suite_and_config_diagnostics' in (result.quality?.checks ?? {}), true);
+  assert.equal(result.skipped_module_checks?.includes('playwright_suite_and_config_diagnostics'), false);
 });

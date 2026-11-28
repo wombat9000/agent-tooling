@@ -1,9 +1,11 @@
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { isPlaywrightConfigFilename } from '../inputs/classify-path.mts';
 import {
   classifyTestFile,
   previewTestBundleRubric,
   previewTestFileRubric,
+  type PlaywrightDetectionContext,
 } from '../rubrics/classifier.mts';
 import { filterRubricForFiles } from '../rubrics/applicability.mts';
 import {
@@ -273,9 +275,13 @@ export function readAnswers(
   return { model, checks };
 }
 
-function rubricMatchesAnyFiles(rubric: ResolvedRubric | undefined, files: Record<string, string>): boolean {
+function rubricMatchesAnyFiles(
+  rubric: ResolvedRubric | undefined,
+  files: Record<string, string>,
+  context?: PlaywrightDetectionContext,
+): boolean {
   if (!rubric || Object.keys(files).length === 0) return false;
-  return Object.keys(filterRubricForFiles(rubric, files).questions).length > 0;
+  return Object.keys(filterRubricForFiles(rubric, files, context).questions).length > 0;
 }
 
 function hasApplicableTestFiles(params: {
@@ -283,19 +289,25 @@ function hasApplicableTestFiles(params: {
   testFiles: Record<string, string>;
   explicitTestSelection: boolean;
   perFile: boolean;
+  filePaths?: Record<string, string>;
+  repoRoot?: string;
 }): boolean {
-  const { testRubric, testFiles, explicitTestSelection, perFile } = params;
+  const { testRubric, testFiles, explicitTestSelection, perFile, filePaths, repoRoot } = params;
   if (!testRubric || Object.keys(testFiles).length === 0) return false;
+  const bundleContext: PlaywrightDetectionContext = { bundleFiles: testFiles, filePaths, repoRoot };
   if (perFile) {
-    return Object.entries(testFiles).some(([filePath, content]) => (
-      explicitTestSelection
-        ? Object.keys(filterRubricForFiles(testRubric, { [filePath]: content }).questions).length > 0
-        : Object.keys(previewTestFileRubric({ filePath, content }, testRubric).rubric.questions).length > 0
-    ));
+    return Object.entries(testFiles).some(([filePath, content]) => {
+      const fileCtx: PlaywrightDetectionContext = { ...bundleContext, absPath: filePaths?.[filePath] };
+      if (explicitTestSelection) {
+        if (isPlaywrightConfigFilename(basename(filePath)) && testRubric.playwrightConfigRubric) return true;
+        return Object.keys(filterRubricForFiles(testRubric, { [filePath]: content }, fileCtx).questions).length > 0;
+      }
+      return Object.keys(previewTestFileRubric({ filePath, content }, testRubric, fileCtx).rubric.questions).length > 0;
+    });
   }
   return explicitTestSelection
-    ? Object.keys(filterRubricForFiles(testRubric, testFiles).questions).length > 0
-    : Object.keys(previewTestBundleRubric(testFiles, testRubric).questions).length > 0;
+    ? Object.keys(filterRubricForFiles(testRubric, testFiles, bundleContext).questions).length > 0
+    : Object.keys(previewTestBundleRubric(testFiles, testRubric, bundleContext).questions).length > 0;
 }
 
 function hasAnyApplicableRequest(options: JudgeRunOptions): boolean {
@@ -306,27 +318,44 @@ function hasAnyApplicableRequest(options: JudgeRunOptions): boolean {
 
   if (options.mode === 'file') {
     const prodMatch = activeProdRubric !== undefined && Object.entries(options.files ?? {}).some(
-      ([file, content]) => rubricMatchesAnyFiles(activeProdRubric, { [file]: content }),
+      ([file, content]) => rubricMatchesAnyFiles(activeProdRubric, { [file]: content }, {
+        absPath: options.filePaths?.[file],
+        bundleFiles: options.files,
+        filePaths: options.filePaths,
+        repoRoot: options.repoRoot,
+      }),
     );
     return prodMatch || (isUnified && hasApplicableTestFiles({
       testRubric,
       testFiles: options.testFiles ?? {},
       explicitTestSelection,
       perFile: true,
+      filePaths: options.filePaths,
+      repoRoot: options.repoRoot,
     }));
   }
 
   const bundles = options.modules && options.modules.length > 0
-    ? options.modules.map((mod) => ({ files: mod.files, testFiles: mod.testFiles ?? {} }))
-    : [{ files: options.files ?? {}, testFiles: options.testFiles ?? {} }];
+    ? options.modules.map((mod) => ({
+      files: mod.files,
+      testFiles: mod.testFiles ?? {},
+      filePaths: mod.filePaths,
+    }))
+    : [{ files: options.files ?? {}, testFiles: options.testFiles ?? {}, filePaths: options.filePaths }];
 
   return bundles.some((bundle) => (
-    rubricMatchesAnyFiles(activeProdRubric, bundle.files)
+    rubricMatchesAnyFiles(activeProdRubric, bundle.files, {
+      bundleFiles: bundle.files,
+      filePaths: bundle.filePaths,
+      repoRoot: options.repoRoot,
+    })
     || (isUnified && hasApplicableTestFiles({
       testRubric,
       testFiles: bundle.testFiles,
       explicitTestSelection,
       perFile: false,
+      filePaths: bundle.filePaths,
+      repoRoot: options.repoRoot,
     }))
   ));
 }
@@ -345,16 +374,20 @@ export async function runDecisionJudge(
   }
 
   const { candidateRubric } = resolvePartitionRubrics(options);
+  const candidateThresholds = candidateRubric.playwrightConfigRubric
+    ? { ...candidateRubric.playwrightConfigRubric.thresholds, ...candidateRubric.thresholds }
+    : candidateRubric.thresholds;
   const scoreRequest: ScoreRequestFn = async (request, body, artifactDir) => {
     const responsePath = artifactDir !== undefined ? join(artifactDir, 'response.txt') : undefined;
     const { raw, retries } = await postDecisions({ body, key, responsePath, transport, retry });
-    const judged = readAnswers(raw, request.questions, candidateRubric.thresholds);
+    const judged = readAnswers(raw, request.questions, candidateThresholds);
     return { ...judged, retries };
   };
-  const classifyTest: TestClassifierFn = (filePath, content) =>
+  const classifyTest: TestClassifierFn = (filePath, content, detectionContext) =>
     classifyTestFile({
       filePath,
       content,
+      detectionContext,
       invokeOpenRouter: (body) => postDecisions({ body, key, transport, retry }),
     });
 

@@ -91,7 +91,11 @@ export function prepareJudgeRun(
 
   const effectiveRubric = isStructure
     ? options.rubric
-    : filterRubricForFiles(options.rubric, options.files ?? {});
+    : filterRubricForFiles(options.rubric, options.files ?? {}, {
+      filePaths: options.filePaths,
+      repoRoot: options.repoRoot,
+      bundleFiles: options.files,
+    });
   const skippedNotApplicable = Object.keys(options.rubric.questions).filter(
     (id) => !(id in effectiveRubric.questions),
   );
@@ -120,6 +124,7 @@ export function prepareJudgeRun(
 }
 
 async function resolveModuleTestRubric(
+  mod: ModuleInput,
   testFiles: Record<string, string>,
   hasProdConventions: boolean,
   env: ModuleRunEnv,
@@ -128,19 +133,27 @@ async function resolveModuleTestRubric(
   if (Object.keys(testFiles).length === 0 || !partitions.testRubric) {
     return { rubric: emptyResolvedRubric(partitions.candidateRubric), retries: 0 };
   }
+  const bundleContext = {
+    bundleFiles: testFiles,
+    filePaths: mod.filePaths ?? options.filePaths,
+    repoRoot: options.repoRoot,
+  };
   let rubric: ResolvedRubric;
   let retries = 0;
   if (options.explicitTestSelection) {
-    rubric = filterRubricForFiles(partitions.testRubric, testFiles);
+    rubric = filterRubricForFiles(partitions.testRubric, testFiles, bundleContext);
   } else if (options.dryRun) {
-    rubric = previewTestBundleRubric(testFiles, partitions.testRubric);
+    rubric = previewTestBundleRubric(testFiles, partitions.testRubric, bundleContext);
   } else {
     if (!ctx.classifyTest) throw new Error('Test classifier is required for automatic test-file module linting');
     const testEntries = Object.entries(testFiles).sort(([a], [b]) => a.localeCompare(b));
     const classifications = await runWithConcurrency(
       testEntries,
       concurrency,
-      ([filePath, content]) => ctx.classifyTest!(filePath, content),
+      ([filePath, content]) => ctx.classifyTest!(filePath, content, {
+        ...bundleContext,
+        absPath: bundleContext.filePaths?.[filePath],
+      }),
     );
     retries = classifications.reduce((sum, item) => sum + item.retries, 0);
     rubric = routeTestBundleRubrics(classifications, partitions.testRubric);
@@ -236,7 +249,7 @@ async function evaluateModuleBundle(
 
   let testResolution: { rubric: ResolvedRubric; retries: number };
   try {
-    testResolution = await resolveModuleTestRubric(testFiles, CONVENTIONS_CHECK_ID in activeProdRubric.questions, env);
+    testResolution = await resolveModuleTestRubric(mod, testFiles, CONVENTIONS_CHECK_ID in activeProdRubric.questions, env);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Test classification failed';
     return { entry: makeNonScoredEntry(baseFields, 'error', modStart, { error: message }), questionIds: [], retries: 0 };
@@ -353,7 +366,14 @@ export async function runSingleTargetJudge(
   const out = createPrivateOutDir(options.out);
   const env: ModuleRunEnv = { options, partitions, ctx, concurrency: options.concurrency ?? ctx.defaultConcurrency };
   const outcome = await evaluateModuleBundle(
-    { name: options.target ?? 'module', files: prodFiles, testFiles, requirements: options.requirements, conventions: options.conventions },
+    {
+      name: options.target ?? 'module',
+      files: prodFiles,
+      testFiles,
+      filePaths: options.filePaths,
+      requirements: options.requirements,
+      conventions: options.conventions,
+    },
     env,
     { absDir: out },
   );

@@ -4,12 +4,14 @@ import { basename, dirname, join, resolve } from 'node:path';
 import {
   SKIP_DIRS,
   isHiddenNonRoutingEntry,
+  isPlaywrightConfigFilename,
   isProductionSource,
   isSkippedDirPath,
   isTestOrSupportDirName,
   isTestOrSupportPath,
   isTestSource,
 } from './classify-path.mts';
+import { containsSensitiveCredential } from './credentials.mts';
 import {
   canonicalizeOrFallback,
   isPathInsideDir,
@@ -17,20 +19,15 @@ import {
   toPosixRelativeWithin,
 } from './fs-read.mts';
 import { compileIgnoreMatcher, type IgnoreMatcher } from './ignore.mts';
+import { detectPlaywrightSignals, findAncestorPlaywrightConfig } from '../rubrics/playwright-detect.mts';
 
 export const MAX_INPUT_BYTES = 128 * 1024;
-
-const SENSITIVE_CONTENT = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /\b(?:sk-or-v1-|sk-(?:proj|svcacct)-|gh[pousr]_|github_pat_|xox[baprs]-)[a-z0-9_-]{16,}/i,
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
-  /(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)['"]?\s*[:=]\s*['"][^\s'"]{8,}['"]/i,
-];
 
 export interface ReadInputsOptions {
   source?: string;
   sources?: string[];
   displayBaseDir?: string;
+  repoRoot?: string;
   out?: string;
   ignore?: string[];
   requirements?: string;
@@ -44,6 +41,7 @@ export interface ReadInputsOptions {
 export interface LoadedInputs {
   files: Record<string, string>;
   testFiles?: Record<string, string>;
+  filePaths?: Record<string, string>;
   requirements?: string;
   conventions?: string;
   out?: string;
@@ -53,6 +51,7 @@ export interface DocReadContext {
   allowCredentials?: boolean;
   key?: string;
   maxBytes?: number;
+  isTestFile?: boolean;
   consumeBudget: (bytes: number, label: string) => void;
 }
 
@@ -74,6 +73,7 @@ interface PartitionCollectorConfig {
 interface PartitionWalkState {
   productionFiles: Record<string, string>;
   testFiles: Record<string, string>;
+  filePaths: Record<string, string>;
   seenCanonical: Set<string>;
   canonicalDisplayBase?: string;
   config: PartitionCollectorConfig;
@@ -109,7 +109,7 @@ function decodeAndScanUtf8Text(data: Buffer, label: string, ctx: DocReadContext)
   if (ctx.key && text.includes(ctx.key)) {
     throw new Error(`OPENROUTER_API_KEY appears in ${label}. Remove the key before judging.`);
   }
-  if (!ctx.allowCredentials && SENSITIVE_CONTENT.some((pattern) => pattern.test(text))) {
+  if (!ctx.allowCredentials && containsSensitiveCredential(text, { isTestFile: ctx.isTestFile })) {
     throw new Error(
       `Possible credential in ${label}. Inspect the file and re-run with --allow-credentials if it is a false positive.`,
     );
@@ -260,6 +260,7 @@ function collectSingleFile(
     ? 'the selected source file'
     : `source file ${displayKey}`;
   const text = state.config.readFile(canonical, label, partition);
+  state.filePaths[displayKey] = canonical;
   if (partition === 'test') state.testFiles[displayKey] = text;
   else state.productionFiles[displayKey] = text;
 }
@@ -317,10 +318,16 @@ function assertNonEmptyCollection(
 
 function collectPartitionedFiles(
   config: PartitionCollectorConfig,
-): { productionFiles: Record<string, string>; testFiles: Record<string, string> } {
+): {
+  productionFiles: Record<string, string>;
+  testFiles: Record<string, string>;
+  filePaths: Record<string, string>;
+  seenCanonical: Set<string>;
+} {
   const state: PartitionWalkState = {
     productionFiles: {},
     testFiles: {},
+    filePaths: {},
     seenCanonical: new Set<string>(),
     canonicalDisplayBase: config.displayBaseDir ? canonicalizeOrFallback(config.displayBaseDir) : undefined,
     config,
@@ -342,21 +349,36 @@ function collectPartitionedFiles(
   }
 
   assertNonEmptyCollection(state.productionFiles, state.testFiles, config);
-  return { productionFiles: state.productionFiles, testFiles: state.testFiles };
+  return {
+    productionFiles: state.productionFiles,
+    testFiles: state.testFiles,
+    filePaths: state.filePaths,
+    seenCanonical: state.seenCanonical,
+  };
+}
+
+interface SharedBudgetHandle {
+  ctx: DocReadContext;
+  remainingBytes: () => number;
 }
 
 function createSharedBudgetContext(
   remainingStart: number,
   options: Pick<ReadInputsOptions, 'allowCredentials'>,
   key: string | undefined,
-): DocReadContext {
+  isTestFile = false,
+): SharedBudgetHandle {
   let remaining = remainingStart;
   return {
-    allowCredentials: options.allowCredentials,
-    key,
-    consumeBudget(bytes) {
-      if (bytes > remaining) throw new Error('Selected inputs exceed 128 KiB');
-      remaining -= bytes;
+    remainingBytes: () => remaining,
+    ctx: {
+      allowCredentials: options.allowCredentials,
+      key,
+      isTestFile,
+      consumeBudget(bytes) {
+        if (bytes > remaining) throw new Error('Selected inputs exceed 128 KiB');
+        remaining -= bytes;
+      },
     },
   };
 }
@@ -367,10 +389,11 @@ function createPerFileBudgetReader(params: {
   docsBytes: number;
 }): PartitionCollectorConfig['readFile'] {
   const perFileBudget = MAX_INPUT_BYTES - params.docsBytes;
-  return (path, label) => readUtf8File(path, label, {
+  return (path, label, partition) => readUtf8File(path, label, {
     allowCredentials: params.options.allowCredentials,
     key: params.key,
     maxBytes: perFileBudget,
+    isTestFile: partition === 'test',
     consumeBudget(bytes, fileLabel) {
       if (bytes > perFileBudget) {
         const docNote = params.docsBytes > 0 ? ` + ${params.docsBytes} bytes documents` : '';
@@ -378,6 +401,62 @@ function createPerFileBudgetReader(params: {
       }
     },
   });
+}
+
+function attachAncestorPlaywrightConfig(params: {
+  testFiles: Record<string, string>;
+  filePaths: Record<string, string>;
+  seenCanonical: Set<string>;
+  testBudget: SharedBudgetHandle;
+  displayBaseDir?: string;
+  repoRoot?: string;
+  ignoreMatcher: IgnoreMatcher;
+}): void {
+  const testEntries = Object.entries(params.testFiles);
+  if (testEntries.length === 0) return;
+  if (testEntries.some(([filePath]) => isPlaywrightConfigFilename(basename(filePath)))) return;
+
+  const hasPlaywrightFile = testEntries.some(([filePath, content]) => (
+    detectPlaywrightSignals(
+      { filePath, content },
+      {
+        absPath: params.filePaths[filePath],
+        bundleFiles: params.testFiles,
+        filePaths: params.filePaths,
+        repoRoot: params.repoRoot,
+      },
+    ).isPlaywright
+  ));
+  if (!hasPlaywrightFile) return;
+
+  const searchedDirs = new Set<string>();
+  let foundConfig: string | null = null;
+  for (const [filePath] of testEntries) {
+    const absPath = params.filePaths[filePath];
+    if (!absPath) continue;
+    const dir = dirname(absPath);
+    if (searchedDirs.has(dir)) continue;
+    searchedDirs.add(dir);
+    foundConfig = findAncestorPlaywrightConfig(dir, { stopDir: params.repoRoot, maxLevels: 3 });
+    if (foundConfig) break;
+  }
+  if (!foundConfig || params.seenCanonical.has(foundConfig)) return;
+
+  const canonicalDisplayBase = params.displayBaseDir ? canonicalizeOrFallback(params.displayBaseDir) : undefined;
+  const displayKey = displayKeyForFile(canonicalDisplayBase, foundConfig, basename(foundConfig));
+  if (params.ignoreMatcher.isIgnoredFile(displayKey) || params.ignoreMatcher.isIgnoredFile(basename(foundConfig))) {
+    return;
+  }
+
+  const remaining = params.testBudget.remainingBytes();
+  const read = readRegularFileBuffer({ path: foundConfig, maxBytes: remaining });
+  if (!read || read.size > remaining) return;
+
+  const text = decodeAndScanUtf8Text(read.buffer, `source file ${displayKey}`, params.testBudget.ctx);
+  params.testBudget.ctx.consumeBudget(read.size, `source file ${displayKey}`);
+  params.seenCanonical.add(foundConfig);
+  params.testFiles[displayKey] = text;
+  params.filePaths[displayKey] = foundConfig;
 }
 
 function loadInputFiles(options: ReadInputsOptions, budgetMode: 'bundle' | 'per-file'): LoadedInputs {
@@ -390,15 +469,16 @@ function loadInputFiles(options: ReadInputsOptions, budgetMode: 'bundle' | 'per-
   const { requirements, conventions, docsBytes } = loadOptionalDocs({ options, key, overflowMessage });
 
   let readFile: PartitionCollectorConfig['readFile'];
+  let testBudget: SharedBudgetHandle | undefined;
   if (budgetMode === 'per-file') {
     readFile = createPerFileBudgetReader({ options, key, docsBytes });
   } else {
-    const prodCtx = createSharedBudgetContext(MAX_INPUT_BYTES - docsBytes, options, key);
-    const testCtx = createSharedBudgetContext(MAX_INPUT_BYTES - docsBytes, options, key);
-    readFile = (path, label, partition) => readUtf8File(path, label, partition === 'test' ? testCtx : prodCtx);
+    const prodBudget = createSharedBudgetContext(MAX_INPUT_BYTES - docsBytes, options, key, false);
+    testBudget = createSharedBudgetContext(MAX_INPUT_BYTES - docsBytes, options, key, true);
+    readFile = (path, label, partition) => readUtf8File(path, label, partition === 'test' ? testBudget!.ctx : prodBudget.ctx);
   }
 
-  const { productionFiles, testFiles } = collectPartitionedFiles({
+  const { productionFiles, testFiles, filePaths, seenCanonical } = collectPartitionedFiles({
     entries,
     displayBaseDir: options.displayBaseDir,
     ignoreMatcher,
@@ -408,6 +488,18 @@ function loadInputFiles(options: ReadInputsOptions, budgetMode: 'bundle' | 'per-
     readFile,
   });
 
+  if (budgetMode === 'bundle' && includeTests && testBudget) {
+    attachAncestorPlaywrightConfig({
+      testFiles,
+      filePaths,
+      seenCanonical,
+      testBudget,
+      displayBaseDir: options.displayBaseDir,
+      repoRoot: options.repoRoot,
+      ignoreMatcher,
+    });
+  }
+
   if (key && [...Object.keys(productionFiles), ...Object.keys(testFiles)].some((path) => path.includes(key))) {
     throw new Error('OPENROUTER_API_KEY appears in a selected source path');
   }
@@ -415,6 +507,7 @@ function loadInputFiles(options: ReadInputsOptions, budgetMode: 'bundle' | 'per-
   return {
     files: productionFiles,
     ...(includeTests ? { testFiles } : {}),
+    filePaths,
     requirements,
     conventions,
     out,

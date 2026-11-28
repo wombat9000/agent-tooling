@@ -17,6 +17,7 @@ import { formatRubricList, formatRuleExplanations } from './format-summary.mts';
 
 interface ResolvedTargetContext {
   cwd: string;
+  repoRoot: string;
   command: ParsedRunCommand;
   unified: UnifiedResolvedRubrics;
   conventionsPath?: string;
@@ -67,7 +68,7 @@ function buildMultiModuleRunOptions(
   includeProduction: boolean,
   includeTests: boolean,
 ): JudgeRunOptions {
-  const { command, cwd, unified, conventionsPath } = ctx;
+  const { command, cwd, repoRoot, unified, conventionsPath } = ctx;
   const resolvedOut = command.out !== undefined ? resolve(command.out) : undefined;
   const loadedModules: ModuleInput[] = command.positionals.map((rawPath) => {
     const abs = resolve(cwd, rawPath);
@@ -76,6 +77,7 @@ function buildMultiModuleRunOptions(
     }
     const loaded = readInputs({
       source: abs,
+      repoRoot,
       ignore: command.ignore,
       requirements: command.requirements,
       conventions: conventionsPath,
@@ -87,6 +89,7 @@ function buildMultiModuleRunOptions(
       name: displayTargetPath(abs, cwd),
       files: loaded.files,
       ...(includeTests ? { testFiles: loaded.testFiles ?? {} } : {}),
+      filePaths: loaded.filePaths,
       requirements: loaded.requirements,
       conventions: loaded.conventions,
     };
@@ -95,6 +98,7 @@ function buildMultiModuleRunOptions(
   return {
     mode: 'code',
     modules: loadedModules,
+    repoRoot,
     ignore: command.ignore,
     rubric: unified.production ?? unified.test!,
     testRubric: unified.test,
@@ -107,7 +111,7 @@ function buildMultiModuleRunOptions(
 }
 
 function buildModuleRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
-  const { command, cwd, unified, conventionsPath } = ctx;
+  const { command, cwd, repoRoot, unified, conventionsPath } = ctx;
   if (command.positionals.length === 0) {
     throw new Error(`Specify one or more paths for \`judge-code module <path...>\`\n\n${USAGE}`);
   }
@@ -126,6 +130,7 @@ function buildModuleRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
   const inputs = readInputs({
     sources: singleTargetPaths,
     displayBaseDir: singleTargetPaths.length > 1 ? cwd : undefined,
+    repoRoot,
     out: command.out,
     ignore: command.ignore,
     requirements: command.requirements,
@@ -140,6 +145,8 @@ function buildModuleRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
     target: targetLabel,
     files: inputs.files,
     ...(includeTests ? { testFiles: inputs.testFiles ?? {} } : {}),
+    filePaths: inputs.filePaths,
+    repoRoot,
     ignore: command.ignore,
     requirements: inputs.requirements,
     conventions: inputs.conventions,
@@ -154,7 +161,7 @@ function buildModuleRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
 }
 
 function buildFileRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
-  const { command, cwd, unified, conventionsPath, changedFiles } = ctx;
+  const { command, cwd, repoRoot, unified, conventionsPath, changedFiles } = ctx;
   if (!command.changed && command.positionals.length === 0) {
     throw new Error(USAGE);
   }
@@ -164,6 +171,7 @@ function buildFileRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
   const inputs = readPerFileInputs({
     sources,
     displayBaseDir: cwd,
+    repoRoot,
     out: command.out,
     ignore: command.ignore,
     requirements: command.requirements,
@@ -178,6 +186,8 @@ function buildFileRunOptions(ctx: ResolvedTargetContext): JudgeRunOptions {
     mode: 'file',
     files: inputs.files,
     ...(includeTests ? { testFiles: inputs.testFiles ?? {} } : {}),
+    filePaths: inputs.filePaths,
+    repoRoot,
     ignore: command.ignore,
     requirements: inputs.requirements,
     conventions: inputs.conventions,
@@ -246,6 +256,7 @@ export async function runCli(rawArgs: string[], cwd: string = process.cwd()): Pr
 
   const runOptions = RUN_OPTION_BUILDERS[command.mode]({
     cwd,
+    repoRoot,
     command,
     unified,
     conventionsPath: conventionsInfo.path,

@@ -290,3 +290,88 @@ test('credential guard blocks heuristic secrets unless --allow-credentials is pa
   assert.match(leaked.stderr, /OPENROUTER_API_KEY appears/);
   assert.equal(leaked.stderr.includes('fixture-api-key'), false);
 });
+
+test('synthetic test placeholders pass without --allow-credentials while live-looking test secrets still block', (t) => {
+  const { project, runCli } = createCliTestWorkspace(t);
+  const testDir = join(project, 'auth-tests');
+  mkdirSync(testDir, { recursive: true });
+  writeFileSync(
+    join(testDir, 'emulator.test.ts'),
+    [
+      "const cfg = { apiKey: 'local-emulator-api-key', clientSecret: 'dev-only-session-secret-change-me' };",
+      "const e2e = { accessToken: 'e2e-api-key', password: 'test-password-001' };",
+      'export { cfg, e2e };',
+      '',
+    ].join('\n'),
+  );
+
+  const clean = runCli(['auth-tests', '--dry-run']);
+  assert.equal(clean.status, 0, clean.stderr);
+
+  writeFileSync(join(testDir, 'leaked.test.ts'), "export const token = 'AIzaSyD-1234567890abcdef1234567890abcde';\n");
+  const blocked = runCli(['auth-tests', '--dry-run']);
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stderr, /Possible credential.*--allow-credentials/);
+});
+
+test('Playwright custom-fixture specs, file-mode playwright.config.ts linting, and module ancestor config auto-attachment work end-to-end', (t) => {
+  const { project, root, runCliJson } = createCliTestWorkspace(t);
+  const appDir = join(project, 'apps/portal');
+  mkdirSync(join(appDir, 'e2e/specs'), { recursive: true });
+  mkdirSync(join(appDir, 'src'), { recursive: true });
+  writeFileSync(join(appDir, 'package.json'), '{"name":"portal"}\n');
+  writeFileSync(
+    join(appDir, 'playwright.config.ts'),
+    "import { defineConfig } from '@playwright/test';\nexport default defineConfig({ forbidOnly: !!process.env.CI, use: { baseURL: 'http://127.0.0.1:4173', trace: 'on-first-retry' } });\n",
+  );
+  writeFileSync(
+    join(appDir, 'e2e/fixtures.ts'),
+    "import { test as base, expect } from '@playwright/test';\nexport const test = base.extend({});\nexport { expect };\n",
+  );
+  writeFileSync(
+    join(appDir, 'e2e/specs/intake.spec.ts'),
+    "import { test, expect } from '../fixtures';\ntest('loads intake', async ({ page }) => { await page.goto('/intake'); await expect(page.getByRole('heading')).toBeVisible(); });\n",
+  );
+  writeFileSync(
+    join(appDir, 'src/math.test.ts'),
+    "import { describe, it, expect } from 'vitest';\ndescribe('math', () => { it('adds', () => expect(1 + 1).toBe(2)); });\n",
+  );
+
+  // 1. File-mode playwright.config.ts is linted (not skipped) with playwright_suite_and_config_diagnostics
+  const configOut = join(root, 'pw-config-file');
+  const configDry = runCliJson(['apps/portal/playwright.config.ts', '--out', configOut, '--dry-run']);
+  assert.equal(configDry.status, 0, configDry.stderr);
+  const configEntry = findFileEntry(configDry.result, 'apps/portal/playwright.config.ts');
+  assert.equal(configEntry.status, 'dry_run');
+  assert.equal(configEntry.file_role, 'test_support_playwright');
+  const configReq = readSavedRequest(join(configOut, configEntry.result_dir!, 'request.json'));
+  assert.deepEqual(Object.keys(configReq.questions), ['playwright_suite_and_config_diagnostics']);
+
+  // 2. Explicit --rubric playwright on a spec importing ../fixtures keeps playwright-v1 checks
+  const explicitDry = runCliJson(['apps/portal/e2e/specs/intake.spec.ts', '--rubric', 'playwright', '--dry-run']);
+  assert.equal(explicitDry.status, 0, explicitDry.stderr);
+  assert.equal(findFileEntry(explicitDry.result, 'apps/portal/e2e/specs/intake.spec.ts').status, 'dry_run');
+  assert.equal('playwright_web_first_and_race_free' in Object.fromEntries(
+    Object.values(explicitDry.result.rubric_groups).flat().map((id) => [id, true]),
+  ), true);
+
+  // 3. Auto file-mode dry-run classifies ../fixtures spec as test:playwright_auto
+  const autoFileDry = runCliJson(['apps/portal/e2e/specs/intake.spec.ts', '--dry-run']);
+  assert.equal(autoFileDry.status, 0, autoFileDry.stderr);
+  assert.equal(findFileEntry(autoFileDry.result, 'apps/portal/e2e/specs/intake.spec.ts').file_role, 'test:playwright_auto');
+
+  // 4. Module mode on apps/portal/e2e auto-attaches ancestor apps/portal/playwright.config.ts
+  const modOut = join(root, 'pw-mod-e2e');
+  const modDry = runCliJson(['module', 'apps/portal/e2e', '--out', modOut, '--dry-run']);
+  assert.equal(modDry.status, 0, modDry.stderr);
+  const modReq = readSavedRequest(join(modOut, 'request.json'));
+  assert.equal('playwright.config.ts' in (modReq.state.test_files ?? {}), true);
+  assert.equal('playwright_suite_and_config_diagnostics' in modReq.questions, true);
+
+  // 5. Module mode on non-Playwright unit dir apps/portal/src does NOT attach playwright.config.ts
+  const unitOut = join(root, 'pw-mod-unit');
+  const unitDry = runCliJson(['module', 'apps/portal/src', '--out', unitOut, '--dry-run']);
+  assert.equal(unitDry.status, 0, unitDry.stderr);
+  const unitReq = readSavedRequest(join(unitOut, 'request.json'));
+  assert.equal(Object.keys(unitReq.state.test_files ?? {}).some((f) => f.includes('playwright.config')), false);
+});

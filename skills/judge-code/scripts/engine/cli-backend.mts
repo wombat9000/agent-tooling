@@ -305,9 +305,13 @@ export function defaultCliModel(backend: CliBackend, _mode: JudgeMode = 'code'):
 export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend): Promise<JudgeResult> {
   const adapter = CLI_BACKEND_ADAPTERS[backend];
   const model = options.model ?? adapter.defaultModel;
-  const mergedThresholds = options.testRubric
-    ? mergeResolvedRubrics([options.rubric, options.testRubric]).thresholds
-    : options.rubric.thresholds;
+  const mergedRubrics = [
+    options.rubric,
+    ...(options.testRubric ? [options.testRubric] : []),
+    ...(options.testRubric?.playwrightConfigRubric ? [options.testRubric.playwrightConfigRubric] : []),
+    ...(options.rubric.playwrightConfigRubric ? [options.rubric.playwrightConfigRubric] : []),
+  ];
+  const mergedThresholds = mergeResolvedRubrics(mergedRubrics).thresholds;
 
   const scoreRequest = async (request: CodeRequest, _body: string, artifactDir?: string) => {
     const questionIds = Object.keys(request.questions);
@@ -323,10 +327,11 @@ export async function runCliJudge(options: JudgeRunOptions, backend: CliBackend)
     return { model: invoked.returnedModel, checks: adaptCliChecks(invoked.rawChecks, questionIds, mergedThresholds) };
   };
 
-  const classifyTest: TestClassifierFn = (filePath, content) =>
+  const classifyTest: TestClassifierFn = (filePath, content, detectionContext) =>
     classifyTestFile({
       filePath,
       content,
+      detectionContext,
       invokeCli: async (call) => {
         const invoked = await adapter.invoke({
           payload: call.payload,

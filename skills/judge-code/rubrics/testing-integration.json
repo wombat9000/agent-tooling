@@ -32,10 +32,10 @@
     "real_internal_wiring": {
       "type": "choice",
       "scope": "file",
-      "instructions": "Do persistence, API/HTTP, and service integration tests exercise real internal application wiring rather than mocking or spying on internal services or repositories inside a full-stack test context?",
+      "instructions": "Do persistence, API/HTTP, and service integration tests exercise real internal application wiring rather than mocking or spying on core internal domain services or repositories inside a full-stack test context?",
       "criteria": {
-        "pass": "Persistence, API/HTTP, and service integration tests exercise real internal application wiring across real internal services, handlers, and repositories rather than replacing internal components with mocks or spies inside a full-stack test context. Faking or stubbing only external third-party boundaries (such as email gateways, payment providers, or external identity providers) is acceptable.",
-        "fail": "Full-stack integration or API/HTTP tests mock or spy on internal application services, domain collaborators, or internal repositories instead of exercising real internal wiring."
+        "pass": "Persistence, API/HTTP, and service integration tests exercise real internal application wiring across real internal services, handlers, and repositories rather than replacing core internal components with mocks or spies inside a full-stack test context. Faking or stubbing external third-party boundaries (such as email gateways, payment providers, external identity providers, or upstream external APIs) is acceptable. In-process BFF or HTTP route-handler tests that exercise the real route handler, request validation, response mapping, and upstream HTTP client against a local/fake upstream server while stubbing only ambient cross-cutting guards (such as authentication/session lookup or feature-flag clients) pass cleanly.",
+        "fail": "Full-stack integration or API/HTTP tests mock or spy on core internal application services, domain business logic, or internal repositories under test instead of exercising real internal wiring. Do NOT fail in-process BFF or route-handler tests solely for stubbing ambient cross-cutting auth/session or feature-flag guards while running the real handler, validation, mapping, and upstream client."
       }
     }
   }

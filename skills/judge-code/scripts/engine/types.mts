@@ -1,5 +1,5 @@
 import type { StructureManifest } from '../inputs/structure.mts';
-import type { TestKindClassification } from '../rubrics/classifier.mts';
+import type { PlaywrightDetectionContext, TestKindClassification } from '../rubrics/classifier.mts';
 import {
   PASS_THRESHOLD,
   type ChoiceQuestion,
@@ -63,6 +63,7 @@ export interface ModuleInput {
   name: string;
   files: Record<string, string>;
   testFiles?: Record<string, string>;
+  filePaths?: Record<string, string>;
   requirements?: string;
   conventions?: string;
 }
@@ -127,6 +128,8 @@ export interface JudgeRunOptions {
   target?: string;
   files?: Record<string, string>;
   testFiles?: Record<string, string>;
+  filePaths?: Record<string, string>;
+  repoRoot?: string;
   productionContext?: Record<string, string>;
   modules?: ModuleInput[];
   structure?: StructureManifest;
@@ -158,6 +161,7 @@ export type ScoreRequestFn = (
 export type TestClassifierFn = (
   filePath: string,
   content: string,
+  detectionContext?: PlaywrightDetectionContext,
 ) => Promise<TestKindClassification>;
 
 export interface JudgeRunnerContext {

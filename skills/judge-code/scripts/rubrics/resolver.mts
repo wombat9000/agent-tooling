@@ -232,6 +232,19 @@ function selectKeptCheckIds(
   return { keepIds, excluded, skippedModuleChecks };
 }
 
+const PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK = 'playwright_suite_and_config_diagnostics';
+
+function buildFileModePlaywrightConfigRubric(
+  base: ResolvedRubric,
+  options: Pick<ResolveRubricsOptions, 'mode' | 'rules' | 'exclude'>,
+): ResolvedRubric | undefined {
+  if (options.mode !== 'file') return undefined;
+  if (!(PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK in base.questions)) return undefined;
+  if ((options.rules?.length ?? 0) > 0) return undefined;
+  if ((options.exclude ?? []).includes(PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK)) return undefined;
+  return narrowResolvedRubric(base, new Set([PLAYWRIGHT_CONFIG_DIAGNOSTIC_CHECK]));
+}
+
 export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   const { parsedSources, resolvedTarget } = loadAndValidateSources(options);
   const base = assembleBaseRubric({
@@ -253,13 +266,20 @@ export function resolveRubrics(options: ResolveRubricsOptions): ResolvedRubric {
   }
 
   const narrowed = narrowResolvedRubric(base, keepIds);
+  const playwrightConfigRubric = buildFileModePlaywrightConfigRubric(base, options);
   const activeRubricIds = parsedSources
     .filter((parsed) => Object.keys(parsed.questions).some((id) => id in narrowed.questions))
     .map((parsed) => parsed.id);
   if (options.hasConventions && CONVENTIONS_CHECK_ID in narrowed.questions) {
     activeRubricIds.push('repo-conventions');
   }
-  return { ...narrowed, rubric: activeRubricIds.join('+'), excluded, skippedModuleChecks };
+  return {
+    ...narrowed,
+    rubric: activeRubricIds.join('+'),
+    ...(playwrightConfigRubric ? { playwrightConfigRubric } : {}),
+    excluded,
+    skippedModuleChecks,
+  };
 }
 
 function appendUnique(target: string[], values: readonly string[]): void {
@@ -317,6 +337,7 @@ export function mergeResolvedRubrics(rubrics: readonly ResolvedRubric[]): Resolv
     skippedModuleChecks: [] as string[],
   };
   for (const r of rubrics) mergeSingleRubricInto(r, acc);
+  const playwrightConfigRubric = rubrics.find((r) => r.playwrightConfigRubric !== undefined)?.playwrightConfigRubric;
 
   return {
     rubric: acc.activeRubricIds.join('+'),
@@ -327,6 +348,7 @@ export function mergeResolvedRubrics(rubrics: readonly ResolvedRubric[]): Resolv
     ...(Object.keys(acc.appliesTo).length > 0 ? { appliesTo: acc.appliesTo } : {}),
     groups: acc.groups,
     ...(Object.keys(acc.groupRubricIds).length > 0 ? { groupRubricIds: acc.groupRubricIds } : {}),
+    ...(playwrightConfigRubric ? { playwrightConfigRubric } : {}),
     excluded: acc.excluded,
     skippedModuleChecks: acc.skippedModuleChecks,
   };
@@ -483,6 +505,6 @@ export function resolveUnifiedRubrics(options: ResolveUnifiedRubricsOptions): Un
     ...(production ? { production } : {}),
     ...(test ? { test } : {}),
     explicitTestSelection: Boolean(test) && (requestedRubrics.length > 0 || requestedRules.length > 0),
-    combinedCriteria: buildCombinedCriteria([production, test]),
+    combinedCriteria: buildCombinedCriteria([production, test, test?.playwrightConfigRubric]),
   };
 }

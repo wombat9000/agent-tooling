@@ -1,5 +1,9 @@
-import { basename } from 'node:path';
-import { isPlaywrightConfigFilename } from '../inputs/classify-path.mts';
+import { hasRuntimeImport } from './import-scan.mts';
+import {
+  PLAYWRIGHT_PACKAGES,
+  detectPlaywrightSignals,
+  type PlaywrightDetectionContext,
+} from './playwright-detect.mts';
 import {
   nonempty,
   object,
@@ -10,11 +14,11 @@ import {
   type RubricTarget,
 } from './types.mts';
 
+export { hasRuntimeImport };
+
 const VALID_APPLIES_TO_KEYS = new Set(['extensions', 'runtime_imports']);
 const EXTENSION_RE = /^\.[a-z0-9]+$/i;
 const PACKAGE_SPECIFIER_RE = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+(?:\/[a-z0-9._-]+)*$/i;
-const IMPORT_CLAUSE_SYNTAX_RE = /^(?:type\s+)?(?:[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]*\}))?|\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}]*\})$/;
-const EXPORT_CLAUSE_SYNTAX_RE = /^(?:type\s+)?(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^}]*\})$/;
 
 function parseExtensionsList(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -81,125 +85,15 @@ export function formatApplicability(appliesTo: RubricApplicability): string {
   return parts.join(' | ');
 }
 
-function scanBlockComment(source: string, start: number): { text: string; nextIndex: number } {
-  let i = start + 2;
-  let newlines = '';
-  while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
-    if (source[i] === '\n') newlines += '\n';
-    i += 1;
-  }
-  return { text: `${newlines} `, nextIndex: i < source.length ? i + 2 : i };
-}
-
-function scanQuotedString(source: string, start: number): { text: string; nextIndex: number } {
-  const quote = source[start];
-  let out = quote;
-  let i = start + 1;
-  while (i < source.length && source[i] !== quote && source[i] !== '\n') {
-    if (source[i] === '\\' && i + 1 < source.length) {
-      out += source[i] + source[i + 1];
-      i += 2;
-      continue;
-    }
-    out += source[i];
-    i += 1;
-  }
-  if (i < source.length) {
-    out += source[i];
-    i += 1;
-  }
-  return { text: out, nextIndex: i };
-}
-
-function scanTemplateLiteral(source: string, start: number): { text: string; nextIndex: number } {
-  let newlines = '';
-  let i = start + 1;
-  while (i < source.length && source[i] !== '`') {
-    if (source[i] === '\\' && i + 1 < source.length) {
-      i += 2;
-      continue;
-    }
-    if (source[i] === '\n') newlines += '\n';
-    i += 1;
-  }
-  return { text: `\`\`${newlines}`, nextIndex: i < source.length ? i + 1 : i };
-}
-
-function stripCommentsAndTemplates(source: string): string {
-  let out = '';
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    const next = i + 1 < source.length ? source[i + 1] : '';
-    if (ch === '/' && next === '/') {
-      i += 2;
-      while (i < source.length && source[i] !== '\n') i += 1;
-    } else if (ch === '/' && next === '*') {
-      const token = scanBlockComment(source, i);
-      out += token.text;
-      i = token.nextIndex;
-    } else if (ch === '\'' || ch === '"') {
-      const token = scanQuotedString(source, i);
-      out += token.text;
-      i = token.nextIndex;
-    } else if (ch === '`') {
-      const token = scanTemplateLiteral(source, i);
-      out += token.text;
-      i = token.nextIndex;
-    } else {
-      out += ch;
-      i += 1;
-    }
-  }
-  return out;
-}
-
-function matchesImportPackage(specifier: string, packages: readonly string[]): boolean {
-  return packages.some((pkg) => specifier === pkg || specifier.startsWith(`${pkg}/`));
-}
-
-function isRuntimeNamedList(braceBlock: string): boolean {
-  const inner = braceBlock.slice(1, -1).trim();
-  if (!inner) return false;
-  const items = inner.split(',').map((part) => part.trim()).filter(Boolean);
-  return items.some((item) => !/^type\s+/.test(item));
-}
-
-function isRuntimeClause(rawClause: string, syntaxRe: RegExp): boolean {
-  const clause = rawClause.trim();
-  if (!syntaxRe.test(clause)) return false;
-  if (/^type\s+(?:[*{$A-Za-z_])/.test(clause)) return false;
-  if (clause.startsWith('{') && clause.endsWith('}')) {
-    return isRuntimeNamedList(clause);
-  }
-  return true;
-}
-
-/** Return true if a TS/JS source file contains a runtime (non-type-only) import/re-export from any target package. */
-export function hasRuntimeImport(content: string, packages: readonly string[]): boolean {
-  if (packages.length === 0) return false;
-  const clean = stripCommentsAndTemplates(content);
-
-  for (const match of clean.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)) {
-    if (matchesImportPackage(match[1], packages)) return true;
-  }
-  for (const match of clean.matchAll(/^\s*import\s+([^;'"]+?)\s+from\s+['"]([^'"]+)['"]/gm)) {
-    if (matchesImportPackage(match[2], packages) && isRuntimeClause(match[1], IMPORT_CLAUSE_SYNTAX_RE)) {
-      return true;
-    }
-  }
-  for (const match of clean.matchAll(/^\s*export\s+([^;'"]+?)\s+from\s+['"]([^'"]+)['"]/gm)) {
-    if (matchesImportPackage(match[2], packages) && isRuntimeClause(match[1], EXPORT_CLAUSE_SYNTAX_RE)) {
-      return true;
-    }
-  }
-  return false;
+function isPlaywrightApplicability(runtimeImports: readonly string[]): boolean {
+  return runtimeImports.some((pkg) => (PLAYWRIGHT_PACKAGES as readonly string[]).includes(pkg));
 }
 
 export function matchesFileApplicability(
   filePath: string,
   content: string,
   appliesTo: RubricApplicability | undefined,
+  context?: PlaywrightDetectionContext,
 ): boolean {
   if (!appliesTo) return true;
   const lower = filePath.toLowerCase();
@@ -207,9 +101,8 @@ export function matchesFileApplicability(
     return true;
   }
   if (appliesTo.runtime_imports?.length) {
-    const isPlaywrightRule = appliesTo.runtime_imports.some((pkg) => pkg === '@playwright/test' || pkg === 'playwright');
-    if (isPlaywrightConfigFilename(basename(filePath)) && isPlaywrightRule) {
-      return true;
+    if (isPlaywrightApplicability(appliesTo.runtime_imports)) {
+      return detectPlaywrightSignals({ filePath, content }, context).isPlaywright;
     }
     if (/\.(?:tsx?|[cm]ts)$/.test(lower)) {
       return hasRuntimeImport(content, appliesTo.runtime_imports);
@@ -266,11 +159,16 @@ export function narrowResolvedRubric(rubric: ResolvedRubric, keepCheckIds: Reado
 export function filterRubricForFiles(
   rubric: ResolvedRubric,
   files: Record<string, string>,
+  context?: PlaywrightDetectionContext,
 ): ResolvedRubric {
   if (!rubric.appliesTo || Object.keys(rubric.appliesTo).length === 0) {
     return rubric;
   }
   const entries = Object.entries(files);
+  const fileContext: PlaywrightDetectionContext = {
+    ...context,
+    bundleFiles: context?.bundleFiles ?? files,
+  };
   const applicabilityCache = new Map<RubricApplicability, boolean>();
   const keep = new Set<string>();
 
@@ -282,7 +180,12 @@ export function filterRubricForFiles(
     }
     let matched = applicabilityCache.get(rule);
     if (matched === undefined) {
-      matched = entries.some(([filePath, content]) => matchesFileApplicability(filePath, content, rule));
+      matched = entries.some(([filePath, content]) => (
+        matchesFileApplicability(filePath, content, rule, {
+          ...fileContext,
+          absPath: context?.filePaths?.[filePath] ?? (entries.length === 1 ? context?.absPath : undefined),
+        })
+      ));
       applicabilityCache.set(rule, matched);
     }
     if (matched) keep.add(id);
