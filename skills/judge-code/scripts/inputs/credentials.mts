@@ -9,7 +9,7 @@ const GENERIC_CREDENTIAL_ASSIGNMENT_RE =
   /(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)['"]?\s*[:=]\s*['"]([^\s'"]{8,})['"]/gi;
 
 export const TEST_PLACEHOLDER_PREFIX_RE =
-  /^(?:e2e-|local-emulator-|dev-only-|test-|playwright-|fake-|mock-|stub-|dummy-|example-)/i;
+  /^(?:e2e|local[-_]emulator|dev[-_]only|test|playwright|fake|mock|stub|dummy|example)[-_]/i;
 
 /**
  * Detect likely embedded credentials in source or document text.

@@ -333,8 +333,16 @@ test('Playwright custom-fixture specs, file-mode playwright.config.ts linting, a
     "import { test, expect } from '../fixtures';\ntest('loads intake', async ({ page }) => { await page.goto('/intake'); await expect(page.getByRole('heading')).toBeVisible(); });\n",
   );
   writeFileSync(
+    join(appDir, 'e2e/fake-main-api.ts'),
+    "import { createServer } from 'node:http';\nexport const startStub = () => createServer();\n",
+  );
+  writeFileSync(
     join(appDir, 'src/math.test.ts'),
     "import { describe, it, expect } from 'vitest';\ndescribe('math', () => { it('adds', () => expect(1 + 1).toBe(2)); });\n",
+  );
+  writeFileSync(
+    join(appDir, 'src/Button.spec.tsx'),
+    "describe('Button', () => { it('renders with Vitest globals', () => { expect(1).toBe(1); }); });\n",
   );
 
   // 1. File-mode playwright.config.ts is linted (not skipped) with playwright_suite_and_config_diagnostics
@@ -347,6 +355,30 @@ test('Playwright custom-fixture specs, file-mode playwright.config.ts linting, a
   const configReq = readSavedRequest(join(configOut, configEntry.result_dir!, 'request.json'));
   assert.deepEqual(Object.keys(configReq.questions), ['playwright_suite_and_config_diagnostics']);
 
+  // 1b. Explicit --rule playwright_suite_and_config_diagnostics works on playwright.config.ts and skips non-config specs
+  const ruleConfigOut = join(root, 'pw-config-rule');
+  const ruleConfigDry = runCliJson([
+    'apps/portal/playwright.config.ts',
+    '--rule', 'playwright_suite_and_config_diagnostics',
+    '--out', ruleConfigOut,
+    '--dry-run',
+  ]);
+  assert.equal(ruleConfigDry.status, 0, ruleConfigDry.stderr);
+  const ruleConfigEntry = findFileEntry(ruleConfigDry.result, 'apps/portal/playwright.config.ts');
+  assert.equal(ruleConfigEntry.status, 'dry_run');
+  assert.equal(ruleConfigEntry.file_role, 'test_support_playwright');
+  const ruleConfigReq = readSavedRequest(join(ruleConfigOut, ruleConfigEntry.result_dir!, 'request.json'));
+  assert.deepEqual(Object.keys(ruleConfigReq.questions), ['playwright_suite_and_config_diagnostics']);
+
+  const ruleSpecDry = runCliJson([
+    'apps/portal/e2e/specs/intake.spec.ts',
+    '--rule', 'playwright_suite_and_config_diagnostics',
+    '--dry-run',
+  ]);
+  assert.equal(ruleSpecDry.status, 0, ruleSpecDry.stderr);
+  assert.equal(findFileEntry(ruleSpecDry.result, 'apps/portal/e2e/specs/intake.spec.ts').status, 'skipped');
+  assert.equal(findFileEntry(ruleSpecDry.result, 'apps/portal/e2e/specs/intake.spec.ts').skip_reason, 'not_applicable');
+
   // 2. Explicit --rubric playwright on a spec importing ../fixtures keeps playwright-v1 checks
   const explicitDry = runCliJson(['apps/portal/e2e/specs/intake.spec.ts', '--rubric', 'playwright', '--dry-run']);
   assert.equal(explicitDry.status, 0, explicitDry.stderr);
@@ -355,10 +387,17 @@ test('Playwright custom-fixture specs, file-mode playwright.config.ts linting, a
     Object.values(explicitDry.result.rubric_groups).flat().map((id) => [id, true]),
   ), true);
 
-  // 3. Auto file-mode dry-run classifies ../fixtures spec as test:playwright_auto
-  const autoFileDry = runCliJson(['apps/portal/e2e/specs/intake.spec.ts', '--dry-run']);
+  // 3. Auto file-mode dry-run classifies ../fixtures spec as test:playwright_auto while plain e2e Node stub and Vitest-globals spec stay test:auto
+  const autoFileDry = runCliJson([
+    'apps/portal/e2e/specs/intake.spec.ts',
+    'apps/portal/e2e/fake-main-api.ts',
+    'apps/portal/src/Button.spec.tsx',
+    '--dry-run',
+  ]);
   assert.equal(autoFileDry.status, 0, autoFileDry.stderr);
   assert.equal(findFileEntry(autoFileDry.result, 'apps/portal/e2e/specs/intake.spec.ts').file_role, 'test:playwright_auto');
+  assert.equal(findFileEntry(autoFileDry.result, 'apps/portal/e2e/fake-main-api.ts').file_role, 'test:auto');
+  assert.equal(findFileEntry(autoFileDry.result, 'apps/portal/src/Button.spec.tsx').file_role, 'test:auto');
 
   // 4. Module mode on apps/portal/e2e auto-attaches ancestor apps/portal/playwright.config.ts
   const modOut = join(root, 'pw-mod-e2e');
@@ -368,7 +407,7 @@ test('Playwright custom-fixture specs, file-mode playwright.config.ts linting, a
   assert.equal('playwright.config.ts' in (modReq.state.test_files ?? {}), true);
   assert.equal('playwright_suite_and_config_diagnostics' in modReq.questions, true);
 
-  // 5. Module mode on non-Playwright unit dir apps/portal/src does NOT attach playwright.config.ts
+  // 5. Module mode on apps/portal/src (including Vitest-globals Button.spec.tsx) does NOT attach playwright.config.ts
   const unitOut = join(root, 'pw-mod-unit');
   const unitDry = runCliJson(['module', 'apps/portal/src', '--out', unitOut, '--dry-run']);
   assert.equal(unitDry.status, 0, unitDry.stderr);

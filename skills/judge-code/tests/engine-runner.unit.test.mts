@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runDecisionJudge } from '../scripts/engine/openrouter.mts';
-import { resolveUnifiedRubrics } from '../scripts/rubrics/resolver.mts';
+import { resolveRubrics, resolveUnifiedRubrics } from '../scripts/rubrics/resolver.mts';
 import type { ResolvedRubric } from '../scripts/rubrics/types.mts';
 import { findFileEntry, withTempOpenRouterKey } from './helpers/cli-harness.mts';
 
@@ -242,4 +242,57 @@ test('runDecisionJudge skips non-Playwright support files and scores playwright.
   assert.equal(findFileEntry(result, 'playwright.config.ts').file_role, 'test_support_playwright');
   assert.equal('playwright_suite_and_config_diagnostics' in (result.quality?.checks ?? {}), true);
   assert.equal(result.skipped_module_checks?.includes('playwright_suite_and_config_diagnostics'), false);
+});
+
+test('runDecisionJudge skips plain Node helpers under e2e/ when Stage 1 classifies test_support and supports non-unified --rule playwright_suite_and_config_diagnostics', async (t) => {
+  withTempOpenRouterKey(t);
+  const { transport, stage1Calls, stage2Calls } = createStage1And2MockFetch();
+  const unified = resolveUnifiedRubrics({ mode: 'file', hasRequirements: false, hasConventions: false });
+
+  const stubResult = await runDecisionJudge(
+    {
+      mode: 'file',
+      files: {},
+      testFiles: {
+        'e2e/fake-main-api-helper.mjs': "import { createServer } from 'node:http';\nexport const s = createServer();\n",
+        'playwright.config.ts': "import { defineConfig } from '@playwright/test';\nexport default defineConfig({});\n",
+      },
+      rubric: unified.production!,
+      testRubric: unified.test,
+      explicitTestSelection: false,
+      model: 'typesafe/jev-1.14',
+    },
+    transport,
+  );
+
+  assert.deepEqual(stage1Calls.map((req) => req.file), ['e2e/fake-main-api-helper.mjs']);
+  assert.equal(findFileEntry(stubResult, 'e2e/fake-main-api-helper.mjs').status, 'skipped');
+  assert.equal(findFileEntry(stubResult, 'e2e/fake-main-api-helper.mjs').file_role, 'test_support');
+  assert.deepEqual(stage2Calls.map((req) => req.file), ['playwright.config.ts']);
+
+  // Non-unified single-target file run with --rule playwright_suite_and_config_diagnostics
+  const configOnlyRubric = resolveRubrics({
+    mode: 'file',
+    target: 'test_code',
+    rules: ['playwright_suite_and_config_diagnostics'],
+    hasRequirements: false,
+    hasConventions: false,
+  });
+  const nonUnifiedResult = await runDecisionJudge(
+    {
+      mode: 'file',
+      files: {
+        'playwright.config.ts': "import { defineConfig } from '@playwright/test';\nexport default defineConfig({});\n",
+        'e2e/checkout.spec.ts': "import { test } from '@playwright/test';\ntest('x', async () => {});\n",
+      },
+      rubric: configOnlyRubric,
+      model: 'typesafe/jev-1.14',
+    },
+    transport,
+  );
+
+  assert.equal(findFileEntry(nonUnifiedResult, 'playwright.config.ts').status, 'scored');
+  assert.equal(findFileEntry(nonUnifiedResult, 'playwright.config.ts').file_role, 'test_support_playwright');
+  assert.equal(findFileEntry(nonUnifiedResult, 'e2e/checkout.spec.ts').status, 'skipped');
+  assert.equal(findFileEntry(nonUnifiedResult, 'e2e/checkout.spec.ts').skip_reason, 'not_applicable');
 });

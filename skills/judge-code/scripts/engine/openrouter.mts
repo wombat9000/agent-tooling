@@ -318,12 +318,15 @@ function hasAnyApplicableRequest(options: JudgeRunOptions): boolean {
 
   if (options.mode === 'file') {
     const prodMatch = activeProdRubric !== undefined && Object.entries(options.files ?? {}).some(
-      ([file, content]) => rubricMatchesAnyFiles(activeProdRubric, { [file]: content }, {
-        absPath: options.filePaths?.[file],
-        bundleFiles: options.files,
-        filePaths: options.filePaths,
-        repoRoot: options.repoRoot,
-      }),
+      ([file, content]) => (
+        (isPlaywrightConfigFilename(basename(file)) && Boolean(activeProdRubric.playwrightConfigRubric))
+        || rubricMatchesAnyFiles(activeProdRubric, { [file]: content }, {
+          absPath: options.filePaths?.[file],
+          bundleFiles: options.files,
+          filePaths: options.filePaths,
+          repoRoot: options.repoRoot,
+        })
+      ),
     );
     return prodMatch || (isUnified && hasApplicableTestFiles({
       testRubric,

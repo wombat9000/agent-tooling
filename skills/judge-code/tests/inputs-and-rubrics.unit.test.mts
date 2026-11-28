@@ -193,11 +193,12 @@ test('detectPlaywrightSignals resolves 1-2 hop transitive fixture imports in bun
   assert.equal('playwright_strict_scoped_locators' in filtered.questions, true);
 });
 
-test('ancestor playwright.config.* activates Playwright on e2e/spec files and Stage 1 e2e_browser files while respecting package.json boundaries', async (t) => {
+test('Stage 0 avoids false positives on e2e Node helpers and Vitest-globals specs while Stage 1 e2e_browser + ancestor playwright.config.* upgrades to e2e_playwright', async (t) => {
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'pw-ancestor-')));
   t.after(() => rmSync(tmp, { recursive: true, force: true }));
   mkdirSync(join(tmp, 'apps/web/e2e/flows'), { recursive: true });
   mkdirSync(join(tmp, 'apps/web/src'), { recursive: true });
+  mkdirSync(join(tmp, 'apps/web/tests'), { recursive: true });
   mkdirSync(join(tmp, 'apps/other/e2e'), { recursive: true });
 
   writeFileSync(join(tmp, 'apps/web/package.json'), '{"name":"web"}\n');
@@ -205,38 +206,68 @@ test('ancestor playwright.config.* activates Playwright on e2e/spec files and St
   writeFileSync(join(tmp, 'apps/other/package.json'), '{"name":"other"}\n');
   writeFileSync(join(tmp, 'playwright.config.ts'), 'export default {};\n');
 
-  const flowSpec = join(tmp, 'apps/web/e2e/flows/case.spec.ts');
-  const vitestSpec = join(tmp, 'apps/web/src/card.spec.ts');
+  const nodeStub = join(tmp, 'apps/web/e2e/fake-main-api.mjs');
+  const vitestGlobalsSpec = join(tmp, 'apps/web/src/Button.spec.tsx');
+  const pathAliasedSpec = join(tmp, 'apps/web/e2e/flows/case.spec.ts');
   const genericE2eTest = join(tmp, 'apps/web/tests/checkout.test.ts');
   const otherAppSpec = join(tmp, 'apps/other/e2e/smoke.spec.ts');
-  mkdirSync(join(tmp, 'apps/web/tests'), { recursive: true });
-  writeFileSync(flowSpec, "test('case flow', async ({ page }) => { await page.goto('/'); });\n");
-  writeFileSync(vitestSpec, "import { describe, it, expect } from 'vitest';\ndescribe('card', () => { it('ok', () => expect(1).toBe(1)); });\n");
+  const stubCode = "import { createServer } from 'node:http';\nexport const server = createServer();\n";
+  const globalsSpecCode = "describe('Button', () => { it('renders label', () => { expect(true).toBe(true); }); });\n";
+  const aliasedSpecCode = "import { test, expect } from '@app/e2e-fixtures';\ntest('case flow', async ({ page }) => { await page.goto('/'); });\n";
+  writeFileSync(nodeStub, stubCode);
+  writeFileSync(vitestGlobalsSpec, globalsSpecCode);
+  writeFileSync(pathAliasedSpec, aliasedSpecCode);
   writeFileSync(genericE2eTest, "test('checkout', async ({ page }) => { await page.goto('/checkout'); });\n");
-  writeFileSync(otherAppSpec, "test('other', async () => {});\n");
+  writeFileSync(otherAppSpec, "test('other', async ({ page }) => { await page.goto('/'); });\n");
 
   assert.equal(findAncestorPlaywrightConfig(join(tmp, 'apps/web/e2e/flows'), { stopDir: tmp }), join(tmp, 'apps/web/playwright.config.ts'));
   // apps/other has package.json without playwright.config.ts -> must NOT leak up to root playwright.config.ts
   assert.equal(findAncestorPlaywrightConfig(join(tmp, 'apps/other/e2e'), { stopDir: tmp }), null);
 
-  assert.equal(
-    detectPlaywrightSignals({ filePath: 'apps/web/e2e/flows/case.spec.ts', content: "test('x', async () => {});\n" }, { absPath: flowSpec, repoRoot: tmp }).isPlaywright,
-    true,
+  // Stage 0 must NOT false-positive on plain Node helpers under e2e/ or Vitest/Jest-globals *.spec.* files
+  assert.deepEqual(
+    detectPlaywrightSignals({ filePath: 'apps/web/e2e/fake-main-api.mjs', content: stubCode }, { absPath: nodeStub, repoRoot: tmp }),
+    { isPlaywright: false, isPlaywrightConfig: false },
   );
-  assert.equal(
-    detectPlaywrightSignals({ filePath: 'apps/web/src/card.spec.ts', content: "import { describe, it } from 'vitest';\n" }, { absPath: vitestSpec, repoRoot: tmp }).isPlaywright,
-    false,
+  assert.deepEqual(
+    detectPlaywrightSignals({ filePath: 'apps/web/src/Button.spec.tsx', content: globalsSpecCode }, { absPath: vitestGlobalsSpec, repoRoot: tmp }),
+    { isPlaywright: false, isPlaywrightConfig: false },
   );
 
-  // Stage 1 e2e_browser + ancestor playwright.config.* upgrades non-.spec / non-e2e file to isPlaywright: true
-  const classified = await classifyTestFile({
-    filePath: 'apps/web/tests/checkout.test.ts',
-    content: "test('checkout', async ({ page }) => { await page.goto('/checkout'); });\n",
-    detectionContext: { absPath: genericE2eTest, repoRoot: tmp },
+  // Stage 1 test_support on a plain Node stub under e2e/ remains non-Playwright (so it skips cleanly)
+  const classifiedStub = await classifyTestFile({
+    filePath: 'apps/web/e2e/fake-main-api.mjs',
+    content: stubCode,
+    detectionContext: { absPath: nodeStub, repoRoot: tmp },
+    invokeCli: async () => ({ raw: { test_kind: 'test_support', reason: 'HTTP stub server' }, returnedModel: 'stub' }),
+  });
+  assert.equal(classifiedStub.isPlaywright, false);
+  assert.equal(classifiedStub.fileRole, 'test_support');
+
+  // Stage 1 e2e_browser + ancestor playwright.config.* upgrades path-aliased/ambient browser specs to e2e_playwright
+  for (const [relPath, absPath, content] of [
+    ['apps/web/e2e/flows/case.spec.ts', pathAliasedSpec, aliasedSpecCode],
+    ['apps/web/tests/checkout.test.ts', genericE2eTest, "test('checkout', async ({ page }) => { await page.goto('/checkout'); });\n"],
+  ] as const) {
+    const classified = await classifyTestFile({
+      filePath: relPath,
+      content,
+      detectionContext: { absPath, repoRoot: tmp },
+      invokeCli: async () => ({ raw: { test_kind: 'e2e_browser', reason: 'browser journey' }, returnedModel: 'stub' }),
+    });
+    assert.equal(classified.isPlaywright, true, `Expected e2e_playwright upgrade for ${relPath}`);
+    assert.equal(classified.fileRole, 'e2e_playwright');
+  }
+
+  // Respects package.json boundary even after Stage 1 e2e_browser
+  const classifiedOther = await classifyTestFile({
+    filePath: 'apps/other/e2e/smoke.spec.ts',
+    content: "test('other', async ({ page }) => { await page.goto('/'); });\n",
+    detectionContext: { absPath: otherAppSpec, repoRoot: tmp },
     invokeCli: async () => ({ raw: { test_kind: 'e2e_browser', reason: 'browser journey' }, returnedModel: 'stub' }),
   });
-  assert.equal(classified.isPlaywright, true);
-  assert.equal(classified.fileRole, 'e2e_playwright');
+  assert.equal(classifiedOther.isPlaywright, false);
+  assert.equal(classifiedOther.fileRole, 'e2e_browser');
 });
 
 test('containsSensitiveCredential allows obvious synthetic test placeholders in tests while blocking real secrets everywhere', () => {
@@ -251,6 +282,10 @@ test('containsSensitiveCredential allows obvious synthetic test placeholders in 
     "const stub = { accessToken: 'stub-token-9999' };",
     "const dummy = { password: 'dummy-password' };",
     "const example = { api_key: 'example-api-key-value' };",
+    "const underscoreKey = { apiKey: 'test_api_key' };",
+    "const underscorePass = { password: 'fake_password_123' };",
+    "const underscoreEmu = { api_key: 'local_emulator_api_key' };",
+    "const underscoreDev = { client_secret: 'dev_only_session_secret' };",
   ];
 
   for (const snippet of benignTestPlaceholders) {

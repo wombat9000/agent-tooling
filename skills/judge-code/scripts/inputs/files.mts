@@ -416,7 +416,7 @@ function attachAncestorPlaywrightConfig(params: {
   if (testEntries.length === 0) return;
   if (testEntries.some(([filePath]) => isPlaywrightConfigFilename(basename(filePath)))) return;
 
-  const hasPlaywrightFile = testEntries.some(([filePath, content]) => (
+  const playwrightEntries = testEntries.filter(([filePath, content]) => (
     detectPlaywrightSignals(
       { filePath, content },
       {
@@ -427,11 +427,11 @@ function attachAncestorPlaywrightConfig(params: {
       },
     ).isPlaywright
   ));
-  if (!hasPlaywrightFile) return;
+  if (playwrightEntries.length === 0) return;
 
   const searchedDirs = new Set<string>();
   let foundConfig: string | null = null;
-  for (const [filePath] of testEntries) {
+  for (const [filePath] of playwrightEntries) {
     const absPath = params.filePaths[filePath];
     if (!absPath) continue;
     const dir = dirname(absPath);

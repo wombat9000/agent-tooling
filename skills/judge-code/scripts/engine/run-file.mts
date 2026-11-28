@@ -113,6 +113,14 @@ async function resolveFileRubricAndRole(item: FileWorkItem, env: FileRunEnv): Pr
   const { options, partitions } = env;
   const singleFileMap = { [item.file]: item.content };
   if (!partitions.isUnified) {
+    if (isPlaywrightConfigFilename(basename(item.file)) && options.rubric.playwrightConfigRubric) {
+      return {
+        rubric: options.rubric.playwrightConfigRubric,
+        fileRole: 'test_support_playwright',
+        useTestPayload: true,
+        retries: 0,
+      };
+    }
     const detectionContext = buildFileDetectionContext(item, options);
     return {
       rubric: filterRubricForFiles(options.rubric, singleFileMap, detectionContext),

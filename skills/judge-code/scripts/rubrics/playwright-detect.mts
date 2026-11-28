@@ -12,16 +12,6 @@ import { extractRelativeRuntimeImports, hasRuntimeImport } from './import-scan.m
 export const PLAYWRIGHT_PACKAGES = ['@playwright/test', 'playwright'] as const;
 
 const JS_TS_EXT_RE = /\.(?:tsx?|[cm]?[jt]sx?)$/i;
-const PLAYWRIGHT_SPEC_OR_E2E_PATH_RE = /(?:^|\/)e2e\/|\.spec\.[cm]?[jt]sx?$/i;
-const NON_PLAYWRIGHT_TEST_RUNNERS = [
-  'vitest',
-  '@jest/globals',
-  'jest',
-  'cypress',
-  'mocha',
-  'ava',
-  'node:test',
-] as const;
 const PLAYWRIGHT_CONFIG_FILENAMES = [
   'playwright.config.ts',
   'playwright.config.mts',
@@ -252,9 +242,9 @@ export function hasAncestorPlaywrightConfig(
 
 /**
  * Stage 0 deterministic Playwright detection:
- * 1. `playwright.config.*` filename or direct runtime import of `@playwright/test` / `playwright`
- * 2. Transitive 1–2 hop local fixture import resolving to `@playwright/test` / `playwright`
- * 3. Ancestor `playwright.config.*` combined with a `.spec.*` or `e2e/` path signal
+ * 1. `playwright.config.*` filename
+ * 2. Direct runtime import of `@playwright/test` / `playwright`
+ * 3. Transitive 1–2 hop local fixture import resolving to `@playwright/test` / `playwright`
  */
 export function detectPlaywrightSignals(
   file: PlaywrightFileInput,
@@ -271,14 +261,6 @@ export function detectPlaywrightSignals(
     return { isPlaywright: true, isPlaywrightConfig: false };
   }
   if (hasTransitivePlaywrightImport(file, context)) {
-    return { isPlaywright: true, isPlaywrightConfig: false };
-  }
-  const normalizedPath = toPosixPath(file.filePath);
-  if (
-    PLAYWRIGHT_SPEC_OR_E2E_PATH_RE.test(normalizedPath)
-    && !hasRuntimeImport(file.content, NON_PLAYWRIGHT_TEST_RUNNERS)
-    && hasAncestorPlaywrightConfig(file.filePath, context)
-  ) {
     return { isPlaywright: true, isPlaywrightConfig: false };
   }
   return { isPlaywright: false, isPlaywrightConfig: false };
